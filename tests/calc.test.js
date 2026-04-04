@@ -383,7 +383,6 @@ describe('calculateProject', () => {
         print_time_minutes: 120, plastic_grams: 50,
         items_per_plate: 1, risk_multiplier: 1,
         pre_processing_minutes: 0, post_processing_minutes: 2,
-        material_waste_grams: 1, included: true,
         printer_purchase_price: 812.43, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
         material_price_per_kg: 17.38,
       },
@@ -392,7 +391,6 @@ describe('calculateProject', () => {
         print_time_minutes: 60, plastic_grams: 20,
         items_per_plate: 1, risk_multiplier: 1,
         pre_processing_minutes: 0, post_processing_minutes: 2,
-        material_waste_grams: 0, included: true,
         printer_purchase_price: 812.43, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
         material_price_per_kg: 17.38,
       },
@@ -427,40 +425,6 @@ describe('calculateProject', () => {
     expect(result.actualMargin).not.toBeNull();
     expect(result.actualIndicator).toBeTruthy();
     expect(result.suggestedIndicator).toBeTruthy();
-  });
-
-  test('excluded plates not counted in totals', () => {
-    const plates = [
-      {
-        id: 1, name: 'Included',
-        print_time_minutes: 120, plastic_grams: 50,
-        items_per_plate: 1, risk_multiplier: 1,
-        pre_processing_minutes: 0, post_processing_minutes: 2,
-        material_waste_grams: 0, included: true,
-        printer_purchase_price: 812.43, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
-        material_price_per_kg: 17.38,
-      },
-      {
-        id: 2, name: 'Excluded',
-        print_time_minutes: 500, plastic_grams: 200,
-        items_per_plate: 1, risk_multiplier: 1,
-        pre_processing_minutes: 0, post_processing_minutes: 2,
-        material_waste_grams: 0, included: false,
-        printer_purchase_price: 812.43, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
-        material_price_per_kg: 17.38,
-      },
-    ];
-
-    const resultBoth = calc.calculateProject({ plates, extras: [], settings: defaultSettings, itemsPerSet: 1 });
-    const resultIncOnly = calc.calculateProject({
-      plates: [plates[0]],
-      extras: [],
-      settings: defaultSettings,
-      itemsPerSet: 1,
-    });
-
-    // Per-item costs should be the same (excluded plate doesn't count)
-    expect(resultBoth.perItemCosts.totalPerItem).toBeCloseTo(resultIncOnly.perItemCosts.totalPerItem, 4);
   });
 
   test('empty project returns zeros', () => {

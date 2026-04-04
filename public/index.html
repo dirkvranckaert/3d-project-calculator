@@ -129,32 +129,15 @@
             <label>Material</label>
             <select id="plate-material"></select>
           </div>
-          <div class="form-group">
-            <label>Include in Totals</label>
-            <label class="toggle"><input type="checkbox" id="plate-included" checked><span class="toggle-slider"></span></label>
+          <div class="form-group" style="grid-column: 1 / -1">
+            <label>Notes</label>
+            <textarea id="plate-notes" rows="2" placeholder="Optional notes about this plate..."></textarea>
           </div>
         </div>
       </div>
       <div class="modal-footer">
         <button class="btn" data-close="plate-modal">Cancel</button>
         <button class="btn btn-primary" id="btn-save-plate">Save Plate</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Extra Costs Modal (per project) -->
-  <div class="modal-overlay" id="extras-modal">
-    <div class="modal">
-      <div class="modal-header">
-        <h2>Project Extra Costs</h2>
-        <button class="btn btn-icon modal-close" data-close="extras-modal">&times;</button>
-      </div>
-      <div class="modal-body" id="extras-modal-body">
-        <!-- Filled by JS -->
-      </div>
-      <div class="modal-footer">
-        <button class="btn" data-close="extras-modal">Cancel</button>
-        <button class="btn btn-primary" id="btn-save-extras">Save</button>
       </div>
     </div>
   </div>

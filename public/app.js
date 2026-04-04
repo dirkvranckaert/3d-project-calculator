@@ -11,8 +11,8 @@ let settings = {};
 let editingProjectId = null;
 let editingPlateId = null;
 let editingPlateProjectId = null;
-let extrasProjectId = null;
 let openProjects = new Set();
+let searchQuery = '';
 
 /* ================================================================== */
 /*  API helpers                                                        */
@@ -40,15 +40,21 @@ function fmt(n, decimals = 2) {
   const sym = settings.currency_symbol || '\u20ac';
   return `${sym}${Number(n || 0).toFixed(decimals)}`;
 }
-
-function fmtPct(n) {
-  return `${Number(n || 0).toFixed(2)}%`;
-}
-
+function fmtPct(n) { return `${Number(n || 0).toFixed(2)}%`; }
 function fmtTime(minutes) {
   const h = Math.floor(minutes / 60);
   const m = Math.round(minutes % 60);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+function fmtGrams(g) { return `${Number(g || 0).toFixed(2)}g`; }
+function fmtWeight(g) {
+  if (g >= 1000) return `${(g / 1000).toFixed(g % 1000 === 0 ? 0 : 1)}kg`;
+  return `${g}g`;
+}
+function fmtFileSize(bytes) {
+  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${bytes} B`;
 }
 
 /* ================================================================== */
@@ -72,11 +78,8 @@ document.addEventListener('click', e => {
   const overlay = e.target.closest('.modal-overlay');
   if (overlay && e.target === overlay) closeModal(overlay.id);
 });
-
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') {
-    document.querySelectorAll('.modal-overlay.open').forEach(m => closeModal(m.id));
-  }
+  if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.open').forEach(m => closeModal(m.id));
 });
 
 /* ================================================================== */
@@ -84,11 +87,8 @@ document.addEventListener('keydown', e => {
 /* ================================================================== */
 async function loadAll() {
   [projects, printers, materials, extraCostItems, settings] = await Promise.all([
-    GET('/api/projects'),
-    GET('/api/printers'),
-    GET('/api/materials'),
-    GET('/api/extra-costs'),
-    GET('/api/settings'),
+    GET('/api/projects'), GET('/api/printers'), GET('/api/materials'),
+    GET('/api/extra-costs'), GET('/api/settings'),
   ]);
   applyTheme(settings.theme || 'system');
   renderProjects();
@@ -104,6 +104,17 @@ async function reloadProjects() {
 /* ================================================================== */
 function renderProjects() {
   const el = document.getElementById('projects-list');
+
+  // Filter by search
+  let filtered = projects;
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    filtered = projects.filter(p =>
+      (p.name || '').toLowerCase().includes(q) ||
+      (p.customer_name || '').toLowerCase().includes(q)
+    );
+  }
+
   if (!projects || projects.length === 0) {
     el.innerHTML = `<div class="empty-state">
       <h2>No projects yet</h2>
@@ -113,7 +124,24 @@ function renderProjects() {
     return;
   }
 
-  el.innerHTML = projects.map(p => renderProjectCard(p)).join('');
+  const searchBar = `<div class="search-bar">
+    <input type="text" id="search-input" placeholder="Search projects..." value="${esc(searchQuery)}" oninput="onSearch(this.value)">
+  </div>`;
+
+  if (filtered.length === 0) {
+    el.innerHTML = searchBar + `<div class="empty-state"><p>No projects match "${esc(searchQuery)}"</p></div>`;
+    return;
+  }
+
+  el.innerHTML = searchBar + filtered.map(p => renderProjectCard(p)).join('');
+}
+
+function onSearch(q) {
+  searchQuery = q;
+  renderProjects();
+  // Restore focus
+  const inp = document.getElementById('search-input');
+  if (inp) { inp.focus(); inp.selectionStart = inp.selectionEnd = q.length; }
 }
 
 function renderProjectCard(p) {
@@ -122,7 +150,6 @@ function renderProjectCard(p) {
   const indicator = p.actual_sales_price ? c?.actualIndicator : c?.suggestedIndicator;
   const displayPrice = p.actual_sales_price || pricing.suggestedPrice || 0;
   const isOpen = openProjects.has(p.id);
-  const sym = settings.currency_symbol || '\u20ac';
 
   return `
   <div class="project-card ${isOpen ? 'open' : ''}" data-id="${p.id}">
@@ -141,11 +168,11 @@ function renderProjectCard(p) {
       ${renderPlatesSection(p)}
       ${renderCostSection(p)}
       ${renderExtrasSection(p)}
+      ${renderFilesSection(p)}
       ${renderPricingSection(p)}
       <div class="project-actions">
         <button class="btn btn-sm" onclick="openProjectModal(${p.id})">Edit Project</button>
         <button class="btn btn-sm" onclick="openPlateModal(${p.id})">+ Add Plate</button>
-        <button class="btn btn-sm" onclick="openExtrasModal(${p.id})">Edit Extra Costs</button>
         <button class="btn btn-sm btn-danger" onclick="deleteProject(${p.id})">Delete Project</button>
       </div>
     </div>
@@ -156,14 +183,12 @@ function renderPlatesSection(p) {
   if (!p.plates || p.plates.length === 0) {
     return `<div class="plates-section"><p style="color:var(--text-muted)">No plates yet. Add a plate to start calculating.</p></div>`;
   }
-  const sym = settings.currency_symbol || '\u20ac';
   const rows = p.plates.map((pl, i) => {
     const pb = p.calculation?.plateBreakdowns?.[i];
-    const cls = pl.included ? '' : 'excluded';
-    return `<tr class="${cls}">
-      <td>${esc(pl.name || `Plate ${i + 1}`)}</td>
+    return `<tr>
+      <td>${esc(pl.name || `Plate ${i + 1}`)}${pl.notes ? `<div style="font-size:11px;color:var(--text-muted);white-space:normal;max-width:200px">${esc(pl.notes)}</div>` : ''}</td>
       <td class="num">${fmtTime(pl.print_time_minutes)}</td>
-      <td class="num">${Number(pl.plastic_grams).toFixed(1)}g</td>
+      <td class="num">${fmtGrams(pl.plastic_grams)}</td>
       <td class="num">${pl.items_per_plate}</td>
       <td class="num">${pl.risk_multiplier}</td>
       <td>${esc(pl.printer_name || '-')}</td>
@@ -187,9 +212,7 @@ function renderPlatesSection(p) {
   });
 
   return `<div class="plates-section">
-    <div class="plates-section-header">
-      <h3>Print Plates</h3>
-    </div>
+    <div class="plates-section-header"><h3>Print Plates</h3></div>
     <div class="plates-table-wrap">
       <table class="plates-table">
         <thead><tr>
@@ -209,7 +232,6 @@ function renderCostSection(p) {
   if (!c || !p.plates?.length) return '';
   const pi = c.perItemCosts;
   const pr = c.profits;
-  const itemLabel = p.items_per_set > 1 ? `/set of ${p.items_per_set}` : '/item';
 
   return `<div class="cost-section">
     <div class="cost-grid">
@@ -238,19 +260,54 @@ function renderCostSection(p) {
 }
 
 function renderExtrasSection(p) {
-  if (!p.extras || p.extras.length === 0) return '';
+  const allItems = extraCostItems || [];
+  // Build map of project extras
+  const pExtras = {};
+  (p.extras || []).forEach(e => { pExtras[e.extra_cost_id] = e.quantity; });
+
+  const rows = allItems.map(eci => {
+    const qty = pExtras[eci.id] || 0;
+    return `<div class="extras-inline-row">
+      <span class="extras-inline-name">${esc(eci.name)}</span>
+      <span class="extras-inline-price">${fmt(eci.price_excl_vat)}</span>
+      <input type="number" min="0" value="${qty}" class="extras-inline-qty"
+        onchange="updateExtraQty(${p.id}, ${eci.id}, parseInt(this.value)||0)">
+      ${qty > 0 ? `<button class="btn-icon" title="Remove" onclick="updateExtraQty(${p.id}, ${eci.id}, 0)">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>` : ''}
+    </div>`;
+  });
+
+  const total = (p.extras || []).reduce((s, e) => s + e.price_excl_vat * e.quantity, 0);
+
   return `<div class="extras-section">
     <div class="extras-section-header">
       <h3>Extra Costs</h3>
+      <span style="color:var(--text-muted);font-size:12px">Total: ${fmt(total)}</span>
     </div>
-    <div class="extras-list">
-      ${p.extras.map(e => `
-        <span class="extras-chip">
-          <span class="qty">${e.quantity}x</span>
-          ${esc(e.name)}
-          <span style="color:var(--text-muted)">${fmt(e.price_excl_vat)}</span>
-        </span>`).join('')}
+    <div class="extras-inline-list">${rows.join('')}</div>
+  </div>`;
+}
+
+function renderFilesSection(p) {
+  const files = p.files || [];
+  return `<div class="extras-section">
+    <div class="extras-section-header">
+      <h3>Files</h3>
+      <label class="btn btn-sm" style="cursor:pointer">
+        Upload
+        <input type="file" accept=".3mf,.stl,.gcode" style="display:none" onchange="uploadFile(${p.id}, this)">
+      </label>
     </div>
+    ${files.length === 0 ? '<p style="color:var(--text-muted);font-size:12px">No files uploaded yet.</p>' :
+      `<div class="extras-inline-list">${files.map(f => `
+        <div class="extras-inline-row">
+          <a href="/api/files/${f.id}/download" class="extras-inline-name" style="color:var(--primary)">${esc(f.filename)}</a>
+          <span style="color:var(--text-muted);font-size:12px">${fmtFileSize(f.size_bytes)}</span>
+          <button class="btn-icon" title="Delete" onclick="deleteFile(${f.id}, ${p.id})">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>`).join('')}</div>`}
   </div>`;
 }
 
@@ -260,10 +317,21 @@ function renderPricingSection(p) {
   const pr = c.pricing;
   const itemLabel = p.items_per_set > 1 ? `set of ${p.items_per_set}` : 'item';
 
+  // Calculate minimum price for green margin
+  const greenPct = settings.margin_green_pct || 30;
+  const costExclVat = pr.productionCost;
+  // margin = (excl_vat - cost) / incl_vat * 100 >= greenPct
+  // (incl_vat / 1.21 - cost) / incl_vat >= greenPct / 100
+  // 1/1.21 - cost/incl_vat >= greenPct/100
+  // cost/incl_vat <= 1/1.21 - greenPct/100
+  // incl_vat >= cost / (1/1.21 - greenPct/100)
+  const vatMult = 1 + (settings.vat_rate || 21) / 100;
+  const denominator = (1 / vatMult) - (greenPct / 100);
+  const minPriceForGreen = denominator > 0 ? costExclVat / denominator : 0;
+
   let actualHtml = '';
   if (c.actualMargin) {
-    actualHtml = `
-      <div class="sub">Profit: ${fmt(c.actualMargin.profitAmount)} <span class="margin-badge ${c.actualIndicator}">${fmtPct(c.actualMargin.marginPct)}</span></div>`;
+    actualHtml = `<div class="sub">Profit: ${fmt(c.actualMargin.profitAmount)} <span class="margin-badge ${c.actualIndicator}">${fmtPct(c.actualMargin.marginPct)}</span></div>`;
   }
 
   return `<div class="pricing-section">
@@ -272,6 +340,7 @@ function renderPricingSection(p) {
         <h4>Production Cost (${itemLabel})</h4>
         <div class="big-price">${fmt(pr.productionCost)}</div>
         <div class="sub">excl. VAT, no margins</div>
+        ${minPriceForGreen > 0 ? `<div class="sub" style="margin-top:4px">Min. price for ${greenPct}% margin: <strong>${fmt(minPriceForGreen)}</strong></div>` : ''}
       </div>
       <div class="pricing-block">
         <h4>Total excl. VAT</h4>
@@ -325,7 +394,6 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
     items_per_set: parseInt(document.getElementById('proj-items-per-set').value) || 1,
   };
   if (!data.name) return;
-
   if (editingProjectId) {
     const existing = projects.find(x => x.id === editingProjectId);
     data.actual_sales_price = existing?.actual_sales_price || null;
@@ -348,13 +416,47 @@ async function deleteProject(id) {
 async function updateActualPrice(projectId, value) {
   const p = projects.find(x => x.id === projectId);
   if (!p) return;
-  const price = parseFloat(value) || null;
   await PUT(`/api/projects/${projectId}`, {
-    name: p.name,
-    customer_name: p.customer_name,
+    name: p.name, customer_name: p.customer_name,
     items_per_set: p.items_per_set,
-    actual_sales_price: price,
+    actual_sales_price: parseFloat(value) || null,
   });
+  await reloadProjects();
+}
+
+/* ================================================================== */
+/*  Inline Extra Costs                                                 */
+/* ================================================================== */
+async function updateExtraQty(projectId, extraCostId, quantity) {
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return;
+  // Build full extras array from current state, updating the changed one
+  const currentExtras = {};
+  (p.extras || []).forEach(e => { currentExtras[e.extra_cost_id] = e.quantity; });
+  currentExtras[extraCostId] = quantity;
+  const items = Object.entries(currentExtras).map(([id, qty]) => ({ extra_cost_id: parseInt(id), quantity: qty }));
+  await PUT(`/api/projects/${projectId}/extras`, items);
+  await reloadProjects();
+}
+
+/* ================================================================== */
+/*  File uploads                                                       */
+/* ================================================================== */
+async function uploadFile(projectId, input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  const res = await fetch(`/api/projects/${projectId}/files`, {
+    method: 'POST',
+    headers: { 'X-Filename': file.name },
+    body: await file.arrayBuffer(),
+  });
+  if (res.status === 401) { window.location.replace('/login'); return; }
+  input.value = '';
+  await reloadProjects();
+}
+
+async function deleteFile(fileId, projectId) {
+  await DEL(`/api/files/${fileId}`);
   await reloadProjects();
 }
 
@@ -369,15 +471,14 @@ function openPlateModal(projectId, plateId = null) {
 
   document.getElementById('plate-modal-title').textContent = plate ? 'Edit Plate' : 'Add Plate';
 
-  // Populate printer select
+  // Populate selects
   const printerSel = document.getElementById('plate-printer');
   printerSel.innerHTML = '<option value="">-- Select --</option>' +
     printers.map(pr => `<option value="${pr.id}">${esc(pr.name)}</option>`).join('');
 
-  // Populate material select
   const matSel = document.getElementById('plate-material');
   matSel.innerHTML = '<option value="">-- Select --</option>' +
-    materials.map(m => `<option value="${m.id}">${esc(m.name)}${m.color ? ` (${esc(m.color)})` : ''}</option>`).join('');
+    materials.map(m => `<option value="${m.id}">${esc(m.name)}${m.color ? ` (${esc(m.color)})` : ''} - ${fmtWeight(m.roll_weight_g)}</option>`).join('');
 
   if (plate) {
     document.getElementById('plate-name').value = plate.name || '';
@@ -389,11 +490,10 @@ function openPlateModal(projectId, plateId = null) {
     document.getElementById('plate-waste').value = plate.material_waste_grams;
     document.getElementById('plate-pre').value = plate.pre_processing_minutes;
     document.getElementById('plate-post').value = plate.post_processing_minutes;
+    document.getElementById('plate-notes').value = plate.notes || '';
     printerSel.value = plate.printer_id || '';
     matSel.value = plate.material_id || '';
-    document.getElementById('plate-included').checked = !!plate.included;
   } else {
-    // Use defaults from last plate or sensible defaults
     const last = p?.plates?.[p.plates.length - 1];
     document.getElementById('plate-name').value = '';
     document.getElementById('plate-hours').value = 0;
@@ -404,9 +504,9 @@ function openPlateModal(projectId, plateId = null) {
     document.getElementById('plate-waste').value = last?.material_waste_grams || 0;
     document.getElementById('plate-pre').value = last?.pre_processing_minutes || 0;
     document.getElementById('plate-post').value = last?.post_processing_minutes ?? 2;
+    document.getElementById('plate-notes').value = '';
     printerSel.value = last?.printer_id || '';
     matSel.value = last?.material_id || '';
-    document.getElementById('plate-included').checked = true;
   }
 
   openModal('plate-modal');
@@ -427,9 +527,8 @@ document.getElementById('btn-save-plate').addEventListener('click', async () => 
     post_processing_minutes: parseFloat(document.getElementById('plate-post').value) || 0,
     printer_id: parseInt(document.getElementById('plate-printer').value) || null,
     material_id: parseInt(document.getElementById('plate-material').value) || null,
-    included: document.getElementById('plate-included').checked ? 1 : 0,
+    notes: document.getElementById('plate-notes').value.trim() || null,
   };
-
   if (editingPlateId) {
     await PUT(`/api/projects/${editingPlateProjectId}/plates/${editingPlateId}`, data);
   } else {
@@ -444,38 +543,6 @@ async function deletePlate(projectId, plateId) {
   await DEL(`/api/projects/${projectId}/plates/${plateId}`);
   await reloadProjects();
 }
-
-/* ================================================================== */
-/*  Extra Costs per project                                            */
-/* ================================================================== */
-function openExtrasModal(projectId) {
-  extrasProjectId = projectId;
-  const p = projects.find(x => x.id === projectId);
-  const body = document.getElementById('extras-modal-body');
-
-  body.innerHTML = extraCostItems.map(eci => {
-    const existing = p?.extras?.find(e => e.extra_cost_id === eci.id);
-    const qty = existing ? existing.quantity : 0;
-    return `<div class="extras-modal-item">
-      <span class="name">${esc(eci.name)}</span>
-      <span class="price">${fmt(eci.price_excl_vat)}</span>
-      <input type="number" min="0" value="${qty}" data-ecid="${eci.id}">
-    </div>`;
-  }).join('');
-
-  openModal('extras-modal');
-}
-
-document.getElementById('btn-save-extras').addEventListener('click', async () => {
-  const items = [];
-  document.querySelectorAll('#extras-modal-body input[data-ecid]').forEach(inp => {
-    const qty = parseInt(inp.value) || 0;
-    items.push({ extra_cost_id: parseInt(inp.dataset.ecid), quantity: qty });
-  });
-  await PUT(`/api/projects/${extrasProjectId}/extras`, items);
-  closeModal('extras-modal');
-  await reloadProjects();
-});
 
 /* ================================================================== */
 /*  Settings                                                           */
@@ -516,12 +583,9 @@ function renderGeneralSettings() {
     <div class="settings-row"><label>VAT Rate (%)</label>
       <input type="number" value="${settings.vat_rate || 21}" step="0.1" onchange="saveSetting('vat_rate', this.value)"></div>
     <div class="settings-row"><label>Price Rounding</label>
-      <input type="number" value="${settings.price_rounding || 0.99}" step="0.01" min="0" max="0.99"
-        onchange="saveSetting('price_rounding', this.value)"></div>
+      <input type="number" value="${settings.price_rounding || 0.99}" step="0.01" min="0" max="0.99" onchange="saveSetting('price_rounding', this.value)"></div>
     <div class="settings-row"><label>Currency Symbol</label>
-      <input type="text" value="${settings.currency_symbol || '\u20ac'}" style="width:60px"
-        onchange="saveSetting('currency_symbol', this.value)"></div>
-  `;
+      <input type="text" value="${settings.currency_symbol || '\u20ac'}" style="width:60px" onchange="saveSetting('currency_symbol', this.value)"></div>`;
 }
 
 function renderMarginsSettings() {
@@ -538,24 +602,19 @@ function renderMarginsSettings() {
     <div class="settings-row"><label>Green Margin Threshold (%)</label>
       <input type="number" value="${settings.margin_green_pct || 30}" step="1" onchange="saveSetting('margin_green_pct', this.value)"></div>
     <div class="settings-row"><label>Orange Margin Threshold (%)</label>
-      <input type="number" value="${settings.margin_orange_pct || 5}" step="1" onchange="saveSetting('margin_orange_pct', this.value)"></div>
-  `;
+      <input type="number" value="${settings.margin_orange_pct || 5}" step="1" onchange="saveSetting('margin_orange_pct', this.value)"></div>`;
 }
 
 function renderThemeSettings() {
   const current = settings.theme || 'system';
-  return `
-    <div class="settings-row"><label>Theme</label>
-      <select onchange="saveTheme(this.value)">
-        <option value="system" ${current === 'system' ? 'selected' : ''}>System</option>
-        <option value="light" ${current === 'light' ? 'selected' : ''}>Light</option>
-        <option value="dark" ${current === 'dark' ? 'selected' : ''}>Dark</option>
-      </select>
-    </div>
-  `;
+  return `<div class="settings-row"><label>Theme</label>
+    <select onchange="saveTheme(this.value)">
+      <option value="system" ${current === 'system' ? 'selected' : ''}>System</option>
+      <option value="light" ${current === 'light' ? 'selected' : ''}>Light</option>
+      <option value="dark" ${current === 'dark' ? 'selected' : ''}>Dark</option>
+    </select></div>`;
 }
 
-/* ---- Printers settings ---- */
 function renderPrintersSettings() {
   let html = printers.map(p => `
     <div class="settings-list-item">
@@ -569,8 +628,7 @@ function renderPrintersSettings() {
         <button class="btn btn-sm btn-danger" onclick="deletePrinterItem(${p.id})">Del</button>
       </div>
     </div>`).join('');
-  html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editPrinter(null)">+ Add Printer</button></div>`;
-  html += `<div id="printer-edit-area"></div>`;
+  html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editPrinter(null)">+ Add Printer</button></div><div id="printer-edit-area"></div>`;
   return html;
 }
 
@@ -585,14 +643,10 @@ window.editPrinter = function(id) {
 
   document.getElementById('printer-edit-area').innerHTML = `
     <div class="settings-edit-form">
-      <div class="form-row">
-        <div><label>Name</label><input type="text" id="pe-name" value="${esc(p?.name || '')}"></div>
-        <div><label>Purchase Price</label><input type="number" id="pe-price" step="0.01" value="${p?.purchase_price || 0}"></div>
-      </div>
-      <div class="form-row">
-        <div><label>Expected Prints</label><input type="number" id="pe-prints" value="${p?.expected_prints || 5000}"></div>
-        <div><label>Payback Months</label><input type="number" id="pe-months" value="${p?.earn_back_months || 24}"></div>
-      </div>
+      <div class="form-row"><div><label>Name</label><input type="text" id="pe-name" value="${esc(p?.name || '')}"></div>
+        <div><label>Purchase Price</label><input type="number" id="pe-price" step="0.01" value="${p?.purchase_price || 0}"></div></div>
+      <div class="form-row"><div><label>Expected Prints</label><input type="number" id="pe-prints" value="${p?.expected_prints || 5000}"></div>
+        <div><label>Payback Months</label><input type="number" id="pe-months" value="${p?.earn_back_months || 24}"></div></div>
       <label style="margin-top:8px">Electricity Profiles</label>
       <div id="pe-elec">${elecRows}</div>
       <button class="btn btn-sm" style="margin-top:4px" onclick="addElecRow()">+ Profile</button>
@@ -606,9 +660,7 @@ window.editPrinter = function(id) {
 window.addElecRow = function() {
   const div = document.createElement('div');
   div.className = 'elec-profile-row';
-  div.innerHTML = `<input type="text" value="PLA" placeholder="Material type">
-    <input type="number" value="0.11" step="0.01" placeholder="kWh/h">
-    <button class="btn-icon" onclick="this.parentElement.remove()" title="Remove">&times;</button>`;
+  div.innerHTML = `<input type="text" value="PLA" placeholder="Material type"><input type="number" value="0.11" step="0.01" placeholder="kWh/h"><button class="btn-icon" onclick="this.parentElement.remove()" title="Remove">&times;</button>`;
   document.getElementById('pe-elec').appendChild(div);
 };
 
@@ -618,13 +670,10 @@ window.savePrinter = async function(id) {
     const inputs = row.querySelectorAll('input');
     electricity.push({ material_type: inputs[0].value, kwh_per_hour: parseFloat(inputs[1].value) || 0 });
   });
-  const data = {
-    name: document.getElementById('pe-name').value.trim(),
+  const data = { name: document.getElementById('pe-name').value.trim(),
     purchase_price: parseFloat(document.getElementById('pe-price').value) || 0,
     expected_prints: parseInt(document.getElementById('pe-prints').value) || 5000,
-    earn_back_months: parseInt(document.getElementById('pe-months').value) || 24,
-    electricity,
-  };
+    earn_back_months: parseInt(document.getElementById('pe-months').value) || 24, electricity };
   if (!data.name) return;
   if (id) await PUT(`/api/printers/${id}`, data);
   else await POST('/api/printers', data);
@@ -640,21 +689,19 @@ window.deletePrinterItem = async function(id) {
   renderSettingsTab('printers');
 };
 
-/* ---- Materials settings ---- */
 function renderMaterialsSettings() {
   let html = materials.map(m => `
     <div class="settings-list-item">
       <div>
         <div class="name">${esc(m.name)}${m.color ? ` <span style="color:var(--text-muted)">(${esc(m.color)})</span>` : ''}</div>
-        <div class="meta">${m.material_type} | ${fmt(m.price_per_kg)}/kg | ${m.roll_weight_g}g roll</div>
+        <div class="meta">${m.material_type} | ${fmt(m.price_per_kg)}/kg | ${fmtWeight(m.roll_weight_g)} roll</div>
       </div>
       <div style="display:flex;gap:4px">
         <button class="btn btn-sm" onclick="editMaterial(${m.id})">Edit</button>
         <button class="btn btn-sm btn-danger" onclick="deleteMaterialItem(${m.id})">Del</button>
       </div>
     </div>`).join('');
-  html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editMaterial(null)">+ Add Material</button></div>`;
-  html += `<div id="material-edit-area"></div>`;
+  html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editMaterial(null)">+ Add Material</button></div><div id="material-edit-area"></div>`;
   return html;
 }
 
@@ -662,17 +709,11 @@ window.editMaterial = function(id) {
   const m = id ? materials.find(x => x.id === id) : null;
   document.getElementById('material-edit-area').innerHTML = `
     <div class="settings-edit-form">
-      <div class="form-row">
-        <div><label>Name</label><input type="text" id="me-name" value="${esc(m?.name || '')}"></div>
-        <div><label>Material Type</label><input type="text" id="me-type" value="${esc(m?.material_type || 'PLA')}"></div>
-      </div>
-      <div class="form-row">
-        <div><label>Color (empty = generic)</label><input type="text" id="me-color" value="${esc(m?.color || '')}"></div>
-        <div><label>Price/kg (excl. VAT)</label><input type="number" id="me-price" step="0.01" value="${m?.price_per_kg || 0}"></div>
-      </div>
-      <div class="form-row">
-        <div><label>Roll Weight (g)</label><input type="number" id="me-weight" value="${m?.roll_weight_g || 1000}"></div>
-      </div>
+      <div class="form-row"><div><label>Name</label><input type="text" id="me-name" value="${esc(m?.name || '')}"></div>
+        <div><label>Material Type</label><input type="text" id="me-type" value="${esc(m?.material_type || 'PLA')}"></div></div>
+      <div class="form-row"><div><label>Color (empty = generic)</label><input type="text" id="me-color" value="${esc(m?.color || '')}"></div>
+        <div><label>Price/kg (excl. VAT)</label><input type="number" id="me-price" step="0.01" value="${m?.price_per_kg || 0}"></div></div>
+      <div class="form-row"><div><label>Roll Weight (g)</label><input type="number" id="me-weight" value="${m?.roll_weight_g || 1000}"></div></div>
       <div style="margin-top:12px;display:flex;gap:8px">
         <button class="btn btn-sm btn-primary" onclick="saveMaterial(${id || 'null'})">Save</button>
         <button class="btn btn-sm" onclick="document.getElementById('material-edit-area').innerHTML=''">Cancel</button>
@@ -681,13 +722,11 @@ window.editMaterial = function(id) {
 };
 
 window.saveMaterial = async function(id) {
-  const data = {
-    name: document.getElementById('me-name').value.trim(),
+  const data = { name: document.getElementById('me-name').value.trim(),
     material_type: document.getElementById('me-type').value.trim() || 'PLA',
     color: document.getElementById('me-color').value.trim() || null,
     price_per_kg: parseFloat(document.getElementById('me-price').value) || 0,
-    roll_weight_g: parseInt(document.getElementById('me-weight').value) || 1000,
-  };
+    roll_weight_g: parseInt(document.getElementById('me-weight').value) || 1000 };
   if (!data.name) return;
   if (id) await PUT(`/api/materials/${id}`, data);
   else await POST('/api/materials', data);
@@ -703,7 +742,6 @@ window.deleteMaterialItem = async function(id) {
   renderSettingsTab('materials');
 };
 
-/* ---- Extra Costs settings ---- */
 function renderExtrasSettings() {
   let html = extraCostItems.map(e => `
     <div class="settings-list-item">
@@ -716,8 +754,7 @@ function renderExtrasSettings() {
         <button class="btn btn-sm btn-danger" onclick="deleteExtraCostItem(${e.id})">Del</button>
       </div>
     </div>`).join('');
-  html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editExtraCost(null)">+ Add Extra Cost</button></div>`;
-  html += `<div id="extra-edit-area"></div>`;
+  html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editExtraCost(null)">+ Add Extra Cost</button></div><div id="extra-edit-area"></div>`;
   return html;
 }
 
@@ -725,15 +762,11 @@ window.editExtraCost = function(id) {
   const e = id ? extraCostItems.find(x => x.id === id) : null;
   document.getElementById('extra-edit-area').innerHTML = `
     <div class="settings-edit-form">
-      <div class="form-row">
-        <div><label>Name</label><input type="text" id="ee-name" value="${esc(e?.name || '')}"></div>
-        <div><label>Price excl. VAT</label><input type="number" id="ee-price" step="0.01" value="${e?.price_excl_vat || 0}"></div>
-      </div>
-      <div class="form-row">
-        <div><label>Default Included</label>
+      <div class="form-row"><div><label>Name</label><input type="text" id="ee-name" value="${esc(e?.name || '')}"></div>
+        <div><label>Price excl. VAT</label><input type="number" id="ee-price" step="0.01" value="${e?.price_excl_vat || 0}"></div></div>
+      <div class="form-row"><div><label>Default Included</label>
           <label class="toggle"><input type="checkbox" id="ee-default" ${e?.default_included ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
-        <div><label>Default Quantity</label><input type="number" id="ee-qty" min="1" value="${e?.default_quantity || 1}"></div>
-      </div>
+        <div><label>Default Quantity</label><input type="number" id="ee-qty" min="1" value="${e?.default_quantity || 1}"></div></div>
       <div style="margin-top:12px;display:flex;gap:8px">
         <button class="btn btn-sm btn-primary" onclick="saveExtraCost(${id || 'null'})">Save</button>
         <button class="btn btn-sm" onclick="document.getElementById('extra-edit-area').innerHTML=''">Cancel</button>
@@ -742,12 +775,10 @@ window.editExtraCost = function(id) {
 };
 
 window.saveExtraCost = async function(id) {
-  const data = {
-    name: document.getElementById('ee-name').value.trim(),
+  const data = { name: document.getElementById('ee-name').value.trim(),
     price_excl_vat: parseFloat(document.getElementById('ee-price').value) || 0,
     default_included: document.getElementById('ee-default').checked,
-    default_quantity: parseInt(document.getElementById('ee-qty').value) || 1,
-  };
+    default_quantity: parseInt(document.getElementById('ee-qty').value) || 1 };
   if (!data.name) return;
   if (id) await PUT(`/api/extra-costs/${id}`, data);
   else await POST('/api/extra-costs', data);

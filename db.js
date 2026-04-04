@@ -3,7 +3,7 @@
 const path = require('path');
 const Database = require('better-sqlite3');
 
-const DB_PATH = path.join(__dirname, 'data', 'calculator.db');
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data', 'calculator.db');
 
 let _db;
 
@@ -97,7 +97,7 @@ function bootstrap(db) {
       printer_id              INTEGER REFERENCES printers(id) ON DELETE SET NULL,
       material_id             INTEGER REFERENCES materials(id) ON DELETE SET NULL,
       material_waste_grams    REAL NOT NULL DEFAULT 0,
-      included                INTEGER NOT NULL DEFAULT 1,
+      notes                   TEXT,
       sort_order              INTEGER NOT NULL DEFAULT 0
     );
 
@@ -108,6 +108,17 @@ function bootstrap(db) {
       extra_cost_id   INTEGER NOT NULL REFERENCES extra_cost_items(id) ON DELETE CASCADE,
       quantity        INTEGER NOT NULL DEFAULT 1,
       UNIQUE(project_id, extra_cost_id)
+    );
+
+    /* ---- Project file attachments ---- */
+    CREATE TABLE IF NOT EXISTS project_files (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      plate_id    INTEGER REFERENCES project_plates(id) ON DELETE CASCADE,
+      filename    TEXT NOT NULL,
+      filepath    TEXT NOT NULL,
+      size_bytes  INTEGER NOT NULL DEFAULT 0,
+      uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
 

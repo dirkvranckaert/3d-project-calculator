@@ -176,6 +176,24 @@ body {
   padding: 20px 16px;
 }
 
+/* Search bar */
+.search-bar { margin-bottom: 16px; }
+.search-bar input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.search-bar input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(15,118,110,.15);
+}
+
 .empty-state {
   text-align: center;
   padding: 60px 20px;
@@ -302,7 +320,6 @@ body {
 .plates-table tr:last-child td { border-bottom: none; }
 .plates-table tr:hover td { background: var(--surface-hover); }
 .plates-table .num { text-align: right; font-variant-numeric: tabular-nums; }
-.plates-table .excluded { opacity: 0.4; }
 .plate-actions {
   display: flex;
   gap: 4px;
@@ -432,17 +449,18 @@ body {
   flex-wrap: wrap;
   gap: 8px;
 }
-.extras-chip {
-  display: inline-flex;
+/* Inline extra costs */
+.extras-inline-list { display: flex; flex-direction: column; gap: 2px; }
+.extras-inline-row {
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  font-size: 12px;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
 }
-.extras-chip .qty { font-weight: 700; }
+.extras-inline-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.extras-inline-price { color: var(--text-muted); width: 70px; text-align: right; flex-shrink: 0; }
+.extras-inline-qty { width: 60px; text-align: center; padding: 4px 6px; font-size: 13px; flex-shrink: 0; }
 
 /* ================================================================== */
 /*  Project actions bar                                                */

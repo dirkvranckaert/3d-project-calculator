@@ -4,14 +4,15 @@ const request = require('supertest');
 const path = require('path');
 const fs = require('fs');
 
-// Use test database
+// Use test database (separate from production)
+const testDbPath = path.join(__dirname, '..', 'data', 'test-calculator.db');
 process.env.NODE_ENV = 'test';
 process.env.ADMIN_USER = 'testadmin';
 process.env.ADMIN_PASS = 'testpass';
+process.env.DB_PATH = testDbPath;
 
 // Ensure test data directory exists
-const dataDir = path.join(__dirname, '..', 'data');
-const testDbPath = path.join(dataDir, 'calculator.db');
+const dataDir = path.dirname(testDbPath);
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
 // Clean up test DB before each run
@@ -258,7 +259,6 @@ describe('Projects API', () => {
         printer_id: printerId,
         material_id: materialId,
         material_waste_grams: 1,
-        included: true,
       });
     expect(res.status).toBe(201);
     expect(res.body.plates).toHaveLength(1);
@@ -296,7 +296,6 @@ describe('Projects API', () => {
         printer_id: printers.body[0].id,
         material_id: materials.body[0].id,
         material_waste_grams: 2,
-        included: true,
       });
     expect(res.status).toBe(200);
     const plate = res.body.plates.find(p => p.id === plateId);
@@ -376,7 +375,6 @@ describe('Calculate API', () => {
           pre_processing_minutes: 0,
           post_processing_minutes: 2,
           material_waste_grams: 1,
-          included: true,
           printer_purchase_price: 812.43,
           printer_earn_back_months: 24,
           printer_kwh_per_hour: 0.11,

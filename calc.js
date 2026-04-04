@@ -48,8 +48,11 @@ function calculatePlateCosts(plate, printer, material, settings) {
   const effectivePrintTimeHours = printTimeHours * risk;
   const effectivePlasticGrams = (plate.plastic_grams || 0) * risk;
 
-  // 1. Material cost = (effective_plastic + waste) * price_per_gram
-  const totalPlasticGrams = effectivePlasticGrams + (plate.material_waste_grams || 0);
+  // 1. Material cost = (effective_plastic + waste_per_item * items) * price_per_gram
+  //    Waste is per-item (each item on the plate wastes material independently)
+  const items = plate.items_per_plate || 1;
+  const totalWasteGrams = (plate.material_waste_grams || 0) * items;
+  const totalPlasticGrams = effectivePlasticGrams + totalWasteGrams;
   const materialCost = totalPlasticGrams * ((material.price_per_kg || 0) / 1000);
 
   // 2. Processing cost = (pre + post minutes) / 60 * hourly_rate
@@ -297,7 +300,7 @@ function calculateProject(opts) {
     margin_orange_pct: Number(settings.margin_orange_pct) || 5,
   };
 
-  // Calculate per-plate breakdowns (all plates, included or not)
+  // Calculate per-plate breakdowns
   const plateBreakdowns = plates.map(plate => {
     const printer = {
       purchase_price: plate.printer_purchase_price || 0,
@@ -312,15 +315,11 @@ function calculateProject(opts) {
       ...costs,
       plateId: plate.id,
       plateName: plate.name || '',
-      included: plate.included !== undefined ? plate.included : true,
     };
   });
 
-  // Only include flagged plates in totals
-  const includedPlates = plateBreakdowns.filter(p => p.included);
-
-  // Per-item costs (from included plates only)
-  const perItemCosts = calculatePerItemCosts(includedPlates);
+  // Per-item costs
+  const perItemCosts = calculatePerItemCosts(plateBreakdowns);
 
   // Profit margins
   const profits = applyProfitMargins(perItemCosts, s);

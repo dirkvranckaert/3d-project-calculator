@@ -2,10 +2,14 @@
 
 require('dotenv').config();
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const { getDb, getSetting, setSetting, getAllSettings } = require('./db');
 const calc = require('./calc');
+
+const UPLOADS_DIR = path.join(__dirname, 'data', 'uploads');
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const app = express();
 app.use(express.json());
@@ -228,12 +232,25 @@ function enrichProject(db, project) {
   `).all(project.id);
 
   // Add kwh_per_hour for each plate based on printer + material type
+  // Tries: exact match → base type (first word) → "PLA" fallback
   for (const plate of plates) {
     plate.printer_kwh_per_hour = 0;
-    if (plate.printer_id && plate.material_type) {
-      const elec = db.prepare(
+    if (plate.printer_id) {
+      const mt = plate.material_type || 'PLA';
+      let elec = db.prepare(
         'SELECT kwh_per_hour FROM printer_electricity WHERE printer_id = ? AND material_type = ?'
-      ).get(plate.printer_id, plate.material_type);
+      ).get(plate.printer_id, mt);
+      if (!elec) {
+        const baseType = mt.split(/\s/)[0];
+        elec = db.prepare(
+          'SELECT kwh_per_hour FROM printer_electricity WHERE printer_id = ? AND material_type = ?'
+        ).get(plate.printer_id, baseType);
+      }
+      if (!elec) {
+        elec = db.prepare(
+          'SELECT kwh_per_hour FROM printer_electricity WHERE printer_id = ? AND material_type = ?'
+        ).get(plate.printer_id, 'PLA');
+      }
       if (elec) plate.printer_kwh_per_hour = elec.kwh_per_hour;
     }
   }
@@ -247,6 +264,9 @@ function enrichProject(db, project) {
     ORDER BY eci.name
   `).all(project.id);
 
+  // Files
+  const files = db.prepare('SELECT * FROM project_files WHERE project_id = ? ORDER BY uploaded_at DESC').all(project.id);
+
   // Calculate
   const settings = getAllSettings(db);
   const calculation = calc.calculateProject({
@@ -257,7 +277,7 @@ function enrichProject(db, project) {
     actualSalesPrice: project.actual_sales_price,
   });
 
-  return { ...project, plates, extras, calculation };
+  return { ...project, plates, extras, files, calculation };
 }
 
 app.get('/api/projects', (_req, res) => {
@@ -333,19 +353,20 @@ app.post('/api/projects/:projectId/plates', (req, res) => {
     printer_id = lastPlate ? lastPlate.printer_id : null,
     material_id = lastPlate ? lastPlate.material_id : null,
     material_waste_grams = lastPlate ? lastPlate.material_waste_grams : 0,
-    included = 1,
   } = req.body;
 
   const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order),0) as m FROM project_plates WHERE project_id = ?').get(pid).m;
 
+  const notes = req.body.notes || null;
+
   const r = db.prepare(`INSERT INTO project_plates
     (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
      risk_multiplier, pre_processing_minutes, post_processing_minutes,
-     printer_id, material_id, material_waste_grams, included, sort_order)
+     printer_id, material_id, material_waste_grams, notes, sort_order)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(pid, name, print_time_minutes, plastic_grams, items_per_plate,
       risk_multiplier, pre_processing_minutes, post_processing_minutes,
-      printer_id, material_id, material_waste_grams, included ? 1 : 0, maxOrder + 1);
+      printer_id, material_id, material_waste_grams, notes, maxOrder + 1);
 
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
   const updatedProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
@@ -356,16 +377,16 @@ app.put('/api/projects/:projectId/plates/:plateId', (req, res) => {
   const db = getDb();
   const { name, print_time_minutes, plastic_grams, items_per_plate,
     risk_multiplier, pre_processing_minutes, post_processing_minutes,
-    printer_id, material_id, material_waste_grams, included, sort_order } = req.body;
+    printer_id, material_id, material_waste_grams, notes, sort_order } = req.body;
 
   db.prepare(`UPDATE project_plates SET
     name=?, print_time_minutes=?, plastic_grams=?, items_per_plate=?,
     risk_multiplier=?, pre_processing_minutes=?, post_processing_minutes=?,
-    printer_id=?, material_id=?, material_waste_grams=?, included=?, sort_order=?
+    printer_id=?, material_id=?, material_waste_grams=?, notes=?, sort_order=?
     WHERE id=? AND project_id=?`)
     .run(name, print_time_minutes, plastic_grams, items_per_plate,
       risk_multiplier, pre_processing_minutes, post_processing_minutes,
-      printer_id, material_id, material_waste_grams, included ? 1 : 0,
+      printer_id, material_id, material_waste_grams, notes || null,
       sort_order || 0, req.params.plateId, req.params.projectId);
 
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(req.params.projectId);
@@ -404,6 +425,57 @@ app.put('/api/projects/:projectId/extras', (req, res) => {
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
   if (!project) return res.status(404).json({ error: 'Not found' });
   res.json(enrichProject(db, project));
+});
+
+/* ------------------------------------------------------------------ */
+/*  File uploads                                                       */
+/* ------------------------------------------------------------------ */
+app.post('/api/projects/:projectId/files', express.raw({ type: '*/*', limit: '50mb' }), (req, res) => {
+  const db = getDb();
+  const pid = req.params.projectId;
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const filename = req.headers['x-filename'] || 'upload.3mf';
+  const plateId = req.headers['x-plate-id'] ? parseInt(req.headers['x-plate-id']) : null;
+  const ext = path.extname(filename).toLowerCase();
+  if (!['.3mf', '.stl', '.gcode'].includes(ext)) {
+    return res.status(400).json({ error: 'Only .3mf, .stl, .gcode files allowed' });
+  }
+
+  const fileId = crypto.randomBytes(8).toString('hex');
+  const storedName = `${fileId}${ext}`;
+  const filepath = path.join(UPLOADS_DIR, storedName);
+  fs.writeFileSync(filepath, req.body);
+
+  const r = db.prepare('INSERT INTO project_files (project_id, plate_id, filename, filepath, size_bytes) VALUES (?,?,?,?,?)')
+    .run(pid, plateId, filename, storedName, req.body.length);
+  res.status(201).json(db.prepare('SELECT * FROM project_files WHERE id = ?').get(r.lastInsertRowid));
+});
+
+app.get('/api/projects/:projectId/files', (req, res) => {
+  const files = getDb().prepare('SELECT * FROM project_files WHERE project_id = ? ORDER BY uploaded_at DESC').all(req.params.projectId);
+  res.json(files);
+});
+
+app.get('/api/files/:fileId/download', (req, res) => {
+  const file = getDb().prepare('SELECT * FROM project_files WHERE id = ?').get(req.params.fileId);
+  if (!file) return res.status(404).json({ error: 'File not found' });
+  const filepath = path.join(UPLOADS_DIR, file.filepath);
+  if (!fs.existsSync(filepath)) return res.status(404).json({ error: 'File missing from disk' });
+  res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+  res.sendFile(filepath);
+});
+
+app.delete('/api/files/:fileId', (req, res) => {
+  const db = getDb();
+  const file = db.prepare('SELECT * FROM project_files WHERE id = ?').get(req.params.fileId);
+  if (file) {
+    const filepath = path.join(UPLOADS_DIR, file.filepath);
+    if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
+    db.prepare('DELETE FROM project_files WHERE id = ?').run(req.params.fileId);
+  }
+  res.json({ ok: true });
 });
 
 /* ------------------------------------------------------------------ */
