@@ -142,6 +142,21 @@
     </div>
   </div>
 
+  <!-- Generic Edit Dialog (used for printers, materials, extras) -->
+  <div class="modal-overlay" id="edit-dialog">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 id="edit-dialog-title">Edit</h2>
+        <button class="btn btn-icon modal-close" data-close="edit-dialog">&times;</button>
+      </div>
+      <div class="modal-body" id="edit-dialog-body"></div>
+      <div class="modal-footer">
+        <button class="btn" data-close="edit-dialog">Cancel</button>
+        <button class="btn btn-primary" id="btn-edit-dialog-save">Save</button>
+      </div>
+    </div>
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>

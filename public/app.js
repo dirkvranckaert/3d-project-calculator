@@ -628,7 +628,7 @@ function renderPrintersSettings() {
         <button class="btn btn-sm btn-danger" onclick="deletePrinterItem(${p.id})">Del</button>
       </div>
     </div>`).join('');
-  html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editPrinter(null)">+ Add Printer</button></div><div id="printer-edit-area"></div>`;
+  html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editPrinter(null)">+ Add Printer</button></div>`;
   return html;
 }
 
@@ -636,25 +636,24 @@ window.editPrinter = function(id) {
   const p = id ? printers.find(x => x.id === id) : null;
   const elecRows = (p?.electricity || [{ material_type: 'PLA', kwh_per_hour: 0.11 }])
     .map((e, i) => `<div class="elec-profile-row">
-      <input type="text" value="${e.material_type}" placeholder="Material type" data-elec-type="${i}">
-      <input type="number" value="${e.kwh_per_hour}" step="0.01" placeholder="kWh/h" data-elec-kwh="${i}">
+      <input type="text" value="${e.material_type}" placeholder="Material type">
+      <input type="number" value="${e.kwh_per_hour}" step="0.01" placeholder="kWh/h">
       <button class="btn-icon" onclick="this.parentElement.remove()" title="Remove">&times;</button>
     </div>`).join('');
 
-  document.getElementById('printer-edit-area').innerHTML = `
-    <div class="settings-edit-form">
-      <div class="form-row"><div><label>Name</label><input type="text" id="pe-name" value="${esc(p?.name || '')}"></div>
-        <div><label>Purchase Price</label><input type="number" id="pe-price" step="0.01" value="${p?.purchase_price || 0}"></div></div>
-      <div class="form-row"><div><label>Expected Prints</label><input type="number" id="pe-prints" value="${p?.expected_prints || 5000}"></div>
-        <div><label>Payback Months</label><input type="number" id="pe-months" value="${p?.earn_back_months || 24}"></div></div>
-      <label style="margin-top:8px">Electricity Profiles</label>
-      <div id="pe-elec">${elecRows}</div>
-      <button class="btn btn-sm" style="margin-top:4px" onclick="addElecRow()">+ Profile</button>
-      <div style="margin-top:12px;display:flex;gap:8px">
-        <button class="btn btn-sm btn-primary" onclick="savePrinter(${id || 'null'})">Save</button>
-        <button class="btn btn-sm" onclick="document.getElementById('printer-edit-area').innerHTML=''">Cancel</button>
-      </div>
-    </div>`;
+  document.getElementById('edit-dialog-title').textContent = p ? 'Edit Printer' : 'Add Printer';
+  document.getElementById('edit-dialog-body').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group"><label>Name</label><input type="text" id="pe-name" value="${esc(p?.name || '')}"></div>
+      <div class="form-group"><label>Purchase Price</label><input type="number" id="pe-price" step="0.01" value="${p?.purchase_price || 0}"></div>
+      <div class="form-group"><label>Expected Prints</label><input type="number" id="pe-prints" value="${p?.expected_prints || 5000}"></div>
+      <div class="form-group"><label>Payback Months</label><input type="number" id="pe-months" value="${p?.earn_back_months || 24}"></div>
+    </div>
+    <label style="margin-top:12px">Electricity Profiles</label>
+    <div id="pe-elec">${elecRows}</div>
+    <button class="btn btn-sm" style="margin-top:4px" onclick="addElecRow()">+ Profile</button>`;
+  document.getElementById('btn-edit-dialog-save').onclick = () => savePrinter(id);
+  openModal('edit-dialog');
 };
 
 window.addElecRow = function() {
@@ -677,6 +676,7 @@ window.savePrinter = async function(id) {
   if (!data.name) return;
   if (id) await PUT(`/api/printers/${id}`, data);
   else await POST('/api/printers', data);
+  closeModal('edit-dialog');
   printers = await GET('/api/printers');
   renderSettingsTab('printers');
   await reloadProjects();
@@ -701,24 +701,23 @@ function renderMaterialsSettings() {
         <button class="btn btn-sm btn-danger" onclick="deleteMaterialItem(${m.id})">Del</button>
       </div>
     </div>`).join('');
-  html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editMaterial(null)">+ Add Material</button></div><div id="material-edit-area"></div>`;
+  html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editMaterial(null)">+ Add Material</button></div>`;
   return html;
 }
 
 window.editMaterial = function(id) {
   const m = id ? materials.find(x => x.id === id) : null;
-  document.getElementById('material-edit-area').innerHTML = `
-    <div class="settings-edit-form">
-      <div class="form-row"><div><label>Name</label><input type="text" id="me-name" value="${esc(m?.name || '')}"></div>
-        <div><label>Material Type</label><input type="text" id="me-type" value="${esc(m?.material_type || 'PLA')}"></div></div>
-      <div class="form-row"><div><label>Color (empty = generic)</label><input type="text" id="me-color" value="${esc(m?.color || '')}"></div>
-        <div><label>Price/kg (excl. VAT)</label><input type="number" id="me-price" step="0.01" value="${m?.price_per_kg || 0}"></div></div>
-      <div class="form-row"><div><label>Roll Weight (g)</label><input type="number" id="me-weight" value="${m?.roll_weight_g || 1000}"></div></div>
-      <div style="margin-top:12px;display:flex;gap:8px">
-        <button class="btn btn-sm btn-primary" onclick="saveMaterial(${id || 'null'})">Save</button>
-        <button class="btn btn-sm" onclick="document.getElementById('material-edit-area').innerHTML=''">Cancel</button>
-      </div>
+  document.getElementById('edit-dialog-title').textContent = m ? 'Edit Material' : 'Add Material';
+  document.getElementById('edit-dialog-body').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group"><label>Name</label><input type="text" id="me-name" value="${esc(m?.name || '')}"></div>
+      <div class="form-group"><label>Material Type</label><input type="text" id="me-type" value="${esc(m?.material_type || 'PLA')}"></div>
+      <div class="form-group"><label>Color (empty = generic)</label><input type="text" id="me-color" value="${esc(m?.color || '')}"></div>
+      <div class="form-group"><label>Price/kg (excl. VAT)</label><input type="number" id="me-price" step="0.01" value="${m?.price_per_kg || 0}"></div>
+      <div class="form-group"><label>Roll Weight (g)</label><input type="number" id="me-weight" value="${m?.roll_weight_g || 1000}"></div>
     </div>`;
+  document.getElementById('btn-edit-dialog-save').onclick = () => saveMaterial(id);
+  openModal('edit-dialog');
 };
 
 window.saveMaterial = async function(id) {
@@ -730,6 +729,7 @@ window.saveMaterial = async function(id) {
   if (!data.name) return;
   if (id) await PUT(`/api/materials/${id}`, data);
   else await POST('/api/materials', data);
+  closeModal('edit-dialog');
   materials = await GET('/api/materials');
   renderSettingsTab('materials');
   await reloadProjects();
@@ -754,24 +754,23 @@ function renderExtrasSettings() {
         <button class="btn btn-sm btn-danger" onclick="deleteExtraCostItem(${e.id})">Del</button>
       </div>
     </div>`).join('');
-  html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editExtraCost(null)">+ Add Extra Cost</button></div><div id="extra-edit-area"></div>`;
+  html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editExtraCost(null)">+ Add Extra Cost</button></div>`;
   return html;
 }
 
 window.editExtraCost = function(id) {
   const e = id ? extraCostItems.find(x => x.id === id) : null;
-  document.getElementById('extra-edit-area').innerHTML = `
-    <div class="settings-edit-form">
-      <div class="form-row"><div><label>Name</label><input type="text" id="ee-name" value="${esc(e?.name || '')}"></div>
-        <div><label>Price excl. VAT</label><input type="number" id="ee-price" step="0.01" value="${e?.price_excl_vat || 0}"></div></div>
-      <div class="form-row"><div><label>Default Included</label>
-          <label class="toggle"><input type="checkbox" id="ee-default" ${e?.default_included ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
-        <div><label>Default Quantity</label><input type="number" id="ee-qty" min="1" value="${e?.default_quantity || 1}"></div></div>
-      <div style="margin-top:12px;display:flex;gap:8px">
-        <button class="btn btn-sm btn-primary" onclick="saveExtraCost(${id || 'null'})">Save</button>
-        <button class="btn btn-sm" onclick="document.getElementById('extra-edit-area').innerHTML=''">Cancel</button>
-      </div>
+  document.getElementById('edit-dialog-title').textContent = e ? 'Edit Extra Cost' : 'Add Extra Cost';
+  document.getElementById('edit-dialog-body').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group"><label>Name</label><input type="text" id="ee-name" value="${esc(e?.name || '')}"></div>
+      <div class="form-group"><label>Price excl. VAT</label><input type="number" id="ee-price" step="0.01" value="${e?.price_excl_vat || 0}"></div>
+      <div class="form-group"><label>Default Included</label>
+        <label class="toggle"><input type="checkbox" id="ee-default" ${e?.default_included ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
+      <div class="form-group"><label>Default Quantity</label><input type="number" id="ee-qty" min="1" value="${e?.default_quantity || 1}"></div>
     </div>`;
+  document.getElementById('btn-edit-dialog-save').onclick = () => saveExtraCost(id);
+  openModal('edit-dialog');
 };
 
 window.saveExtraCost = async function(id) {
@@ -782,6 +781,7 @@ window.saveExtraCost = async function(id) {
   if (!data.name) return;
   if (id) await PUT(`/api/extra-costs/${id}`, data);
   else await POST('/api/extra-costs', data);
+  closeModal('edit-dialog');
   extraCostItems = await GET('/api/extra-costs');
   renderSettingsTab('extras');
 };
