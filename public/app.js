@@ -261,31 +261,69 @@ function renderCostSection(p) {
 
 function renderExtrasSection(p) {
   const allItems = extraCostItems || [];
-  // Build map of project extras
   const pExtras = {};
-  (p.extras || []).forEach(e => { pExtras[e.extra_cost_id] = e.quantity; });
+  (p.extras || []).forEach(e => { pExtras[e.extra_cost_id] = e; });
 
-  const rows = allItems.map(eci => {
-    const qty = pExtras[eci.id] || 0;
-    return `<div class="extras-inline-row">
-      <span class="extras-inline-name">${esc(eci.name)}</span>
-      <span class="extras-inline-price">${fmt(eci.price_excl_vat)}</span>
-      <input type="number" min="0" value="${qty}" class="extras-inline-qty"
-        onchange="updateExtraQty(${p.id}, ${eci.id}, parseInt(this.value)||0)">
-      ${qty > 0 ? `<button class="btn-icon" title="Remove" onclick="updateExtraQty(${p.id}, ${eci.id}, 0)">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </button>` : ''}
-    </div>`;
+  // Active items: those with qty > 0
+  const activeItems = allItems.filter(eci => pExtras[eci.id]?.quantity > 0);
+  // Available to add: those with qty === 0 or not present
+  const availableItems = allItems.filter(eci => !pExtras[eci.id] || pExtras[eci.id].quantity === 0);
+
+  const total = activeItems.reduce((s, eci) => s + eci.price_excl_vat * (pExtras[eci.id]?.quantity || 0), 0);
+
+  const rows = activeItems.map(eci => {
+    const qty = pExtras[eci.id]?.quantity || 0;
+    const lineTotal = eci.price_excl_vat * qty;
+    return `<tr>
+      <td class="ec-name">${esc(eci.name)}</td>
+      <td class="ec-price num">${fmt(eci.price_excl_vat)}</td>
+      <td class="ec-qty">
+        <input type="number" min="1" value="${qty}"
+          onchange="updateExtraQty(${p.id}, ${eci.id}, parseInt(this.value)||0)">
+      </td>
+      <td class="ec-total num">${fmt(lineTotal)}</td>
+      <td class="ec-action">
+        <button class="btn-icon" title="Remove" onclick="updateExtraQty(${p.id}, ${eci.id}, 0)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+        </button>
+      </td>
+    </tr>`;
   });
 
-  const total = (p.extras || []).reduce((s, e) => s + e.price_excl_vat * e.quantity, 0);
+  // Add-item dropdown
+  const addSelect = availableItems.length > 0 ? `
+    <div class="ec-add-row">
+      <select id="ec-add-select-${p.id}" class="ec-add-select">
+        <option value="">Add extra cost...</option>
+        ${availableItems.map(eci => `<option value="${eci.id}">${esc(eci.name)} (${fmt(eci.price_excl_vat)})</option>`).join('')}
+      </select>
+      <button class="btn btn-sm btn-primary" onclick="addExtraFromSelect(${p.id})">Add</button>
+    </div>` : '';
 
   return `<div class="extras-section">
     <div class="extras-section-header">
       <h3>Extra Costs</h3>
-      <span style="color:var(--text-muted);font-size:12px">Total: ${fmt(total)}</span>
+      <span class="ec-total-badge">Total: ${fmt(total)}</span>
     </div>
-    <div class="extras-inline-list">${rows.join('')}</div>
+    ${activeItems.length > 0 ? `
+    <div class="plates-table-wrap">
+      <table class="ec-table">
+        <thead><tr>
+          <th>Item</th>
+          <th>Unit Price</th>
+          <th>Qty</th>
+          <th>Total</th>
+          <th></th>
+        </tr></thead>
+        <tbody>${rows.join('')}</tbody>
+        <tfoot><tr>
+          <td colspan="3" style="text-align:right;font-weight:600">Total excl. VAT</td>
+          <td class="num" style="font-weight:700">${fmt(total)}</td>
+          <td></td>
+        </tr></tfoot>
+      </table>
+    </div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No extra costs added.</p>'}
+    ${addSelect}
   </div>`;
 }
 
@@ -427,6 +465,13 @@ async function updateActualPrice(projectId, value) {
 /* ================================================================== */
 /*  Inline Extra Costs                                                 */
 /* ================================================================== */
+async function addExtraFromSelect(projectId) {
+  const sel = document.getElementById(`ec-add-select-${projectId}`);
+  const ecId = parseInt(sel?.value);
+  if (!ecId) return;
+  await updateExtraQty(projectId, ecId, 1);
+}
+
 async function updateExtraQty(projectId, extraCostId, quantity) {
   const p = projects.find(x => x.id === projectId);
   if (!p) return;

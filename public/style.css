@@ -449,7 +449,57 @@ body {
   flex-wrap: wrap;
   gap: 8px;
 }
-/* Inline extra costs */
+/* Extra costs table */
+.ec-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.ec-table th {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 2px solid var(--border);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+.ec-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.ec-table tfoot td { border-bottom: none; border-top: 2px solid var(--border); padding-top: 10px; }
+.ec-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.ec-name { font-weight: 500; }
+.ec-qty input {
+  width: 60px;
+  text-align: center;
+  padding: 4px 6px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+.ec-qty input:focus { border-color: var(--primary); outline: none; box-shadow: 0 0 0 2px rgba(15,118,110,.15); }
+.ec-action { width: 36px; text-align: center; }
+.ec-total-badge { color: var(--text-muted); font-size: 13px; font-weight: 600; }
+.ec-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ec-add-select {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* Inline list (for files section) */
 .extras-inline-list { display: flex; flex-direction: column; gap: 2px; }
 .extras-inline-row {
   display: flex;
@@ -459,8 +509,6 @@ body {
   font-size: 13px;
 }
 .extras-inline-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.extras-inline-price { color: var(--text-muted); width: 70px; text-align: right; flex-shrink: 0; }
-.extras-inline-qty { width: 60px; text-align: center; padding: 4px 6px; font-size: 13px; flex-shrink: 0; }
 
 /* ================================================================== */
 /*  Project actions bar                                                */
