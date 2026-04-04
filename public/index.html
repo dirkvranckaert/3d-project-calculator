@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D Project Calculator</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Topbar -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <img src="favicon.svg" alt="" class="topbar-logo">
+      <h1 class="topbar-title">3D Project Calculator</h1>
+    </div>
+    <div class="topbar-right">
+      <button class="btn btn-primary" id="btn-new-project">+ New Project</button>
+      <button class="btn btn-icon" id="btn-settings" title="Settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+      </button>
+      <button class="btn btn-icon" id="btn-logout" title="Logout">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main content -->
+  <main class="main" id="main">
+    <div class="projects-list" id="projects-list">
+      <!-- Projects loaded by JS -->
+    </div>
+  </main>
+
+  <!-- Settings Modal -->
+  <div class="modal-overlay" id="settings-modal">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2>Settings</h2>
+        <button class="btn btn-icon modal-close" data-close="settings-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="settings-tabs">
+          <button class="tab active" data-tab="general">General</button>
+          <button class="tab" data-tab="printers">Printers</button>
+          <button class="tab" data-tab="materials">Materials</button>
+          <button class="tab" data-tab="extras">Extra Costs</button>
+          <button class="tab" data-tab="margins">Margins</button>
+          <button class="tab" data-tab="theme">Theme</button>
+        </div>
+        <div class="tab-content" id="settings-content"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- New/Edit Project Modal -->
+  <div class="modal-overlay" id="project-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="project-modal-title">New Project</h2>
+        <button class="btn btn-icon modal-close" data-close="project-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label>Project Name *</label>
+        <input type="text" id="proj-name" required>
+        <label>Customer Name</label>
+        <input type="text" id="proj-customer">
+        <label>Items per Set</label>
+        <input type="number" id="proj-items-per-set" min="1" value="1">
+      </div>
+      <div class="modal-footer">
+        <button class="btn" data-close="project-modal">Cancel</button>
+        <button class="btn btn-primary" id="btn-save-project">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Plate Modal -->
+  <div class="modal-overlay" id="plate-modal">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 id="plate-modal-title">Add Plate</h2>
+        <button class="btn btn-icon modal-close" data-close="plate-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Plate Name</label>
+            <input type="text" id="plate-name" placeholder="e.g. Part 1/3">
+          </div>
+          <div class="form-group">
+            <label>Print Time</label>
+            <div class="time-inputs">
+              <input type="number" id="plate-hours" min="0" value="0" placeholder="h">
+              <span>h</span>
+              <input type="number" id="plate-minutes" min="0" max="59" value="0" placeholder="m">
+              <span>m</span>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Plastic Usage (g)</label>
+            <input type="number" id="plate-plastic" min="0" step="0.01" value="0">
+          </div>
+          <div class="form-group">
+            <label>Items per Plate</label>
+            <input type="number" id="plate-items" min="1" value="1">
+          </div>
+          <div class="form-group">
+            <label>Risk Multiplier</label>
+            <input type="number" id="plate-risk" min="1" step="0.1" value="1">
+          </div>
+          <div class="form-group">
+            <label>Material Waste (g)</label>
+            <input type="number" id="plate-waste" min="0" step="0.1" value="0">
+          </div>
+          <div class="form-group">
+            <label>Pre-processing (min)</label>
+            <input type="number" id="plate-pre" min="0" step="0.1" value="0">
+          </div>
+          <div class="form-group">
+            <label>Post-processing (min)</label>
+            <input type="number" id="plate-post" min="0" step="0.1" value="2">
+          </div>
+          <div class="form-group">
+            <label>Printer</label>
+            <select id="plate-printer"></select>
+          </div>
+          <div class="form-group">
+            <label>Material</label>
+            <select id="plate-material"></select>
+          </div>
+          <div class="form-group">
+            <label>Include in Totals</label>
+            <label class="toggle"><input type="checkbox" id="plate-included" checked><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" data-close="plate-modal">Cancel</button>
+        <button class="btn btn-primary" id="btn-save-plate">Save Plate</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Extra Costs Modal (per project) -->
+  <div class="modal-overlay" id="extras-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Project Extra Costs</h2>
+        <button class="btn btn-icon modal-close" data-close="extras-modal">&times;</button>
+      </div>
+      <div class="modal-body" id="extras-modal-body">
+        <!-- Filled by JS -->
+      </div>
+      <div class="modal-footer">
+        <button class="btn" data-close="extras-modal">Cancel</button>
+        <button class="btn btn-primary" id="btn-save-extras">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
