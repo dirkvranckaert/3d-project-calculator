@@ -430,7 +430,7 @@ app.put('/api/projects/:projectId/extras', (req, res) => {
 /* ------------------------------------------------------------------ */
 /*  File uploads                                                       */
 /* ------------------------------------------------------------------ */
-app.post('/api/projects/:projectId/files', express.raw({ type: '*/*', limit: '50mb' }), (req, res) => {
+app.post('/api/projects/:projectId/files', express.raw({ type: 'application/octet-stream', limit: '50mb' }), (req, res) => {
   const db = getDb();
   const pid = req.params.projectId;
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
