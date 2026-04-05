@@ -922,7 +922,7 @@ input:focus, select:focus, textarea:focus {
 .editable { cursor: pointer; }
 .editable:hover { background: var(--primary-tint) !important; border-radius: 3px; }
 .inline-input {
-  width: 100%;
+  width: 70px;
   padding: 4px 6px;
   border: 2px solid var(--primary);
   border-radius: 4px;
@@ -931,8 +931,10 @@ input:focus, select:focus, textarea:focus {
   color: var(--text);
   outline: none;
   font-variant-numeric: tabular-nums;
+  text-align: right;
 }
-.inline-input-sm { width: 40px; text-align: center; }
+.inline-input-sm { width: 36px; text-align: center; }
+select.inline-input { width: auto; max-width: 160px; text-align: left; }
 .inline-time-edit {
   display: flex;
   align-items: center;
