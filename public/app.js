@@ -369,19 +369,23 @@ function renderExtrasSection(p) {
 /* ================================================================== */
 function renderFilesSection(p) {
   const files = p.files || [];
+  const fileRows = files.map(f => `
+    <div class="file-row">
+      <svg class="file-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <a href="/api/files/${f.id}/download" class="file-name">${esc(f.filename)}</a>
+      <span class="file-size">${fmtFileSize(f.size_bytes)}</span>
+      <button class="btn-icon" title="Delete" onclick="deleteFile(${f.id}, ${p.id})">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>`).join('');
+
   return `<div class="extras-section">
     <div class="extras-section-header"><h3>Files</h3>
-      <label class="btn btn-sm" style="cursor:pointer">Upload<input type="file" accept=".3mf,.stl,.gcode" style="display:none" onchange="uploadFile(${p.id}, this)"></label>
+      <label class="btn btn-sm" style="cursor:pointer">Upload<input type="file" accept=".3mf,.stl,.gcode" style="display:none" onchange="uploadFile(${p.id}, this)" multiple></label>
     </div>
-    ${files.length === 0 ? '<p style="color:var(--text-muted);font-size:12px">No files uploaded yet.</p>' :
-      `<div class="extras-inline-list">${files.map(f => `
-        <div class="extras-inline-row">
-          <a href="/api/files/${f.id}/download" class="extras-inline-name" style="color:var(--primary)">${esc(f.filename)}</a>
-          <span style="color:var(--text-muted);font-size:12px">${fmtFileSize(f.size_bytes)}</span>
-          <button class="btn-icon" title="Delete" onclick="deleteFile(${f.id}, ${p.id})">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        </div>`).join('')}</div>`}
+    <div class="file-list" id="file-list-${p.id}">
+      ${fileRows || '<p style="color:var(--text-muted);font-size:12px">No files uploaded yet.</p>'}
+    </div>
   </div>`;
 }
 
@@ -532,17 +536,58 @@ async function updateExtraQty(projectId, extraCostId, quantity) {
 /* ================================================================== */
 /*  File uploads                                                       */
 /* ================================================================== */
-async function uploadFile(projectId, input) {
-  const file = input.files?.[0];
-  if (!file) return;
-  const res = await fetch(`/api/projects/${projectId}/files`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name },
-    body: await file.arrayBuffer(),
-  });
-  if (res.status === 401) { window.location.replace('/login'); return; }
+function uploadFile(projectId, input) {
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
   input.value = '';
-  await reloadSingleProject(projectId);
+
+  for (const file of files) {
+    // Insert uploading placeholder immediately
+    const fileList = document.getElementById(`file-list-${projectId}`);
+    if (!fileList) continue;
+    // Remove "no files" message if present
+    const noFiles = fileList.querySelector('p');
+    if (noFiles) noFiles.remove();
+
+    const uploadId = 'upload-' + Math.random().toString(36).slice(2, 8);
+    const row = document.createElement('div');
+    row.className = 'file-row file-row-uploading';
+    row.id = uploadId;
+    row.innerHTML = `
+      <svg class="file-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <span class="file-name" style="color:var(--text-muted)">${esc(file.name)}</span>
+      <span class="file-size">${fmtFileSize(file.size)}</span>
+      <div class="file-progress"><div class="file-progress-bar" id="${uploadId}-bar"></div></div>
+      <span class="file-progress-pct" id="${uploadId}-pct">0%</span>`;
+    fileList.appendChild(row);
+
+    // Upload via XHR for progress tracking
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/projects/${projectId}/files`);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.setRequestHeader('X-Filename', file.name);
+
+    xhr.upload.addEventListener('progress', (e) => {
+      if (!e.lengthComputable) return;
+      const pct = Math.round((e.loaded / e.total) * 100);
+      const bar = document.getElementById(`${uploadId}-bar`);
+      const label = document.getElementById(`${uploadId}-pct`);
+      if (bar) bar.style.width = pct + '%';
+      if (label) label.textContent = pct + '%';
+    });
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status === 401) { window.location.replace('/login'); return; }
+      reloadSingleProject(projectId);
+    });
+
+    xhr.addEventListener('error', () => {
+      const el = document.getElementById(uploadId);
+      if (el) el.innerHTML = `<span style="color:var(--danger);font-size:13px">Upload failed: ${esc(file.name)}</span>`;
+    });
+
+    xhr.send(file);
+  }
 }
 
 async function deleteFile(fileId, projectId) {

@@ -546,16 +546,55 @@ body {
   color: var(--text);
 }
 
-/* Inline list (for files section) */
-.extras-inline-list { display: flex; flex-direction: column; gap: 2px; }
-.extras-inline-row {
+/* File list */
+.file-list { display: flex; flex-direction: column; gap: 4px; }
+.file-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 0;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   font-size: 13px;
 }
-.extras-inline-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-row-uploading { opacity: .7; }
+.file-icon { flex-shrink: 0; color: var(--text-muted); }
+.file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 500;
+}
+.file-name:hover { text-decoration: underline; }
+.file-size { color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
+.file-progress {
+  width: 80px;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.file-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--primary);
+  border-radius: 3px;
+  transition: width .15s ease;
+}
+.file-progress-pct {
+  font-size: 11px;
+  color: var(--text-muted);
+  width: 32px;
+  text-align: right;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ================================================================== */
 /*  Project actions bar                                                */
