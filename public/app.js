@@ -261,11 +261,12 @@ function renderDetailView(p) {
 /*  Plates table                                                       */
 /* ================================================================== */
 function renderPlatesSection(p) {
+  const importBtn = `<label class="btn btn-sm" style="cursor:pointer">Import 3MF<input type="file" accept=".3mf" style="display:none" onchange="import3mf(${p.id}, this)"></label>`;
   if (!p.plates || p.plates.length === 0) {
     return `<div class="plates-section">
       <div class="plates-section-header"><h3>Print Plates</h3>
-        <button class="btn btn-sm btn-primary" onclick="openPlateModal(${p.id})">+ Add Plate</button></div>
-      <p style="color:var(--text-muted)">No plates yet. Add a plate to start calculating.</p>
+        <div style="display:flex;gap:6px">${importBtn}<button class="btn btn-sm btn-primary" onclick="openPlateModal(${p.id})">+ Add Plate</button></div></div>
+      <p style="color:var(--text-muted)">No plates yet. Add a plate or import from a sliced 3MF.</p>
     </div>`;
   }
   const rows = p.plates.map((pl, i) => {
@@ -301,7 +302,7 @@ function renderPlatesSection(p) {
 
   return `<div class="plates-section">
     <div class="plates-section-header"><h3>Print Plates</h3>
-      <button class="btn btn-sm btn-primary" onclick="openPlateModal(${p.id})">+ Add Plate</button></div>
+      <div style="display:flex;gap:6px">${importBtn}<button class="btn btn-sm btn-primary" onclick="openPlateModal(${p.id})">+ Add Plate</button></div></div>
     <div class="plates-table-wrap"><table class="plates-table">
       <thead><tr><th>Name</th><th>Time</th><th>Plastic</th><th>#/Plate</th><th class="col-hide-mobile">Risk</th><th class="col-hide-mobile">Printer</th><th class="col-hide-mobile">Material</th><th class="col-hide-mobile">Mat. Cost</th><th class="col-hide-mobile">Process.</th><th class="col-hide-mobile">Electric.</th><th class="col-hide-mobile">Printer</th><th>Total</th><th></th></tr></thead>
       <tbody>${rows.join('')}</tbody>
@@ -744,6 +745,118 @@ function uploadFile(projectId, input) {
 async function deleteFile(fileId, projectId) {
   await DEL(`/api/files/${fileId}`);
   await reloadSingleProject(projectId);
+}
+
+/* ================================================================== */
+/*  3MF Import                                                         */
+/* ================================================================== */
+let import3mfProjectId = null;
+let import3mfData = null;
+
+async function import3mf(projectId, input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  input.value = '';
+
+  // Parse the 3MF server-side
+  const res = await fetch('/api/parse-3mf', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: await file.arrayBuffer(),
+  });
+  if (res.status === 401) { window.location.replace('/login'); return; }
+  if (!res.ok) { alert('Failed to parse 3MF file'); return; }
+  const parsed = await res.json();
+
+  if (!parsed.plates?.length) {
+    alert('No plates found in this 3MF file.');
+    return;
+  }
+
+  if (!parsed.sliced) {
+    alert('This 3MF is not sliced — no print time or filament data available. Please slice it first in BambuStudio/OrcaSlicer.');
+    return;
+  }
+
+  import3mfProjectId = projectId;
+  import3mfData = parsed;
+  show3mfPreview(parsed);
+}
+
+function show3mfPreview(parsed) {
+  const body = document.getElementById('edit-dialog-body');
+  document.getElementById('edit-dialog-title').textContent = `Import from 3MF — ${parsed.plates.length} plate${parsed.plates.length > 1 ? 's' : ''} found`;
+
+  const rows = parsed.plates.map((pl, i) => {
+    const typeInfo = pl.filamentType || 'Unknown';
+    const vendorInfo = pl.filamentVendors?.length ? pl.filamentVendors.join(', ') : '';
+    const nameDefault = pl.plateName || pl.objects.join(', ') || `Plate ${pl.index}`;
+
+    return `<div class="import-plate-row" data-plate-idx="${i}">
+      <div class="import-plate-header">
+        <label class="toggle"><input type="checkbox" checked data-import-check="${i}"><span class="toggle-slider"></span></label>
+        <strong>Plate ${pl.index}</strong>
+        <span style="color:var(--text-muted);font-size:12px">${typeInfo}${vendorInfo ? ` / ${vendorInfo}` : ''}</span>
+      </div>
+      <div class="form-grid" style="margin-top:8px">
+        <div class="form-group"><label>Name</label><input type="text" data-import-name="${i}" value="${esc(nameDefault)}"></div>
+        <div class="form-group"><label>Print Time</label><span style="font-size:14px;font-weight:600;padding:8px 0;display:block">${fmtTime(pl.printTimeMinutes)}</span></div>
+        <div class="form-group"><label>Plastic (g)</label><span style="font-size:14px;font-weight:600;padding:8px 0;display:block">${fmtGrams(pl.weightGrams)}</span></div>
+        <div class="form-group"><label>Items per Plate</label><input type="number" min="1" value="${pl.objectCount || 1}" data-import-items="${i}"></div>
+        <div class="form-group"><label>Printer</label><select data-import-printer="${i}">
+          <option value="">-- Select --</option>
+          ${printers.map(pr => `<option value="${pr.id}">${esc(pr.name)}</option>`).join('')}
+        </select></div>
+        <div class="form-group"><label>Material</label><select data-import-material="${i}">
+          <option value="">-- Select --</option>
+          ${materials.map(m => `<option value="${m.id}">${esc(m.name)}${m.color ? ` (${esc(m.color)})` : ''}</option>`).join('')}
+        </select></div>
+      </div>
+      ${pl.filaments.length > 1 ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Filaments: ${pl.filaments.map(f => `${f.color ? `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${f.color};vertical-align:middle;margin-right:2px"></span>` : ''}${f.usedGrams}g`).join(', ')}</div>` : ''}
+    </div>`;
+  });
+
+  body.innerHTML = `<div class="import-plates-list">${rows.join('')}</div>`;
+
+  // Try to auto-select printer/material based on filament type
+  for (let i = 0; i < parsed.plates.length; i++) {
+    const pl = parsed.plates[i];
+    // Auto-select material: match by type
+    if (pl.filamentType && pl.filamentType !== 'Mixed') {
+      const matSel = body.querySelector(`[data-import-material="${i}"]`);
+      const match = materials.find(m =>
+        m.material_type.toLowerCase().includes(pl.filamentType.toLowerCase()) ||
+        pl.filamentType.toLowerCase().includes(m.material_type.split(/\s/)[0].toLowerCase())
+      );
+      if (match) matSel.value = match.id;
+    }
+  }
+
+  document.getElementById('btn-edit-dialog-save').onclick = () => confirm3mfImport();
+  openModal('edit-dialog');
+}
+
+async function confirm3mfImport() {
+  const platesToImport = [];
+  for (let i = 0; i < import3mfData.plates.length; i++) {
+    const check = document.querySelector(`[data-import-check="${i}"]`);
+    if (!check?.checked) continue;
+    const pl = import3mfData.plates[i];
+    platesToImport.push({
+      name: document.querySelector(`[data-import-name="${i}"]`)?.value || `Plate ${pl.index}`,
+      print_time_minutes: Math.round(pl.printTimeMinutes),
+      plastic_grams: pl.weightGrams,
+      items_per_plate: parseInt(document.querySelector(`[data-import-items="${i}"]`)?.value) || 1,
+      printer_id: parseInt(document.querySelector(`[data-import-printer="${i}"]`)?.value) || null,
+      material_id: parseInt(document.querySelector(`[data-import-material="${i}"]`)?.value) || null,
+    });
+  }
+
+  if (!platesToImport.length) { alert('No plates selected'); return; }
+
+  await POST(`/api/projects/${import3mfProjectId}/import-3mf`, { plates: platesToImport });
+  closeModal('edit-dialog');
+  await reloadSingleProject(import3mfProjectId);
 }
 
 /* ================================================================== */

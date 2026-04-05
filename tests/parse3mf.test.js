@@ -4,14 +4,15 @@ const path = require('path');
 const fs = require('fs');
 const { parse3mf } = require('../parse3mf');
 
-const SLICED_3MF = '/Users/dirkvranckaert/Downloads/0_henriegga_multicolor.gcode.3mf';
-const UNSLICED_3MF = '/Users/dirkvranckaert/Library/CloudStorage/GoogleDrive-dirk@app3.be/My Drive/Projects/3DPrinting/Subscriptions/LehaDesign Club/Henriegga The Chocolate Egg-Laying Chicken/0_henriegga_multicolor.3mf';
+const FIXTURES = path.join(__dirname, 'fixtures');
+const SLICED_3MF = path.join(FIXTURES, 'sliced_multiplate.3mf');
+const UNSLICED_3MF = path.join(FIXTURES, 'unsliced_multiplate.3mf');
 
 const hasSliced = fs.existsSync(SLICED_3MF);
 const hasUnsliced = fs.existsSync(UNSLICED_3MF);
 
 describe('parse3mf', () => {
-  (hasSliced ? describe : describe.skip)('sliced 3MF (henriegga gcode)', () => {
+  (hasSliced ? describe : describe.skip)('sliced 3MF (4-plate multicolor)', () => {
     let result;
     beforeAll(() => { result = parse3mf(SLICED_3MF); });
 
@@ -24,10 +25,9 @@ describe('parse3mf', () => {
     });
 
     test('plate 1: correct print time (~463 min)', () => {
-      const p = result.plates[0];
-      expect(p.index).toBe(1);
-      expect(p.printTimeMinutes).toBeCloseTo(462.6, 0);
-      expect(p.printTimeSeconds).toBe(27757);
+      expect(result.plates[0].index).toBe(1);
+      expect(result.plates[0].printTimeMinutes).toBeCloseTo(462.6, 0);
+      expect(result.plates[0].printTimeSeconds).toBe(27757);
     });
 
     test('plate 1: correct weight (238.36g)', () => {
@@ -38,7 +38,7 @@ describe('parse3mf', () => {
       expect(result.plates[0].objects).toContain('Body_mc.stl');
     });
 
-    test('plate 1: has filament data', () => {
+    test('plate 1: has filament data with type and grams', () => {
       const filaments = result.plates[0].filaments;
       expect(filaments.length).toBeGreaterThanOrEqual(2);
       expect(filaments[0].type).toBe('PLA');
@@ -46,32 +46,46 @@ describe('parse3mf', () => {
     });
 
     test('plate 2: correct time and weight', () => {
-      const p = result.plates[1];
-      expect(p.printTimeSeconds).toBe(16774);
-      expect(p.weightGrams).toBeCloseTo(80.64, 1);
+      expect(result.plates[1].printTimeSeconds).toBe(16774);
+      expect(result.plates[1].weightGrams).toBeCloseTo(80.64, 1);
     });
 
-    test('plate 3: has 3 objects', () => {
+    test('plate 3: has 3 objects and objectCount=3', () => {
       expect(result.plates[2].objects).toHaveLength(3);
+      expect(result.plates[2].objectCount).toBe(3);
     });
 
     test('plate 3: small plate (~49 min, 23.15g)', () => {
-      const p = result.plates[2];
-      expect(p.printTimeMinutes).toBeCloseTo(48.87, 0);
-      expect(p.weightGrams).toBeCloseTo(23.15, 1);
+      expect(result.plates[2].printTimeMinutes).toBeCloseTo(48.87, 0);
+      expect(result.plates[2].weightGrams).toBeCloseTo(23.15, 1);
     });
 
-    test('all plates have filament type PLA', () => {
+    test('all plates detect PLA as filament type (not mixed)', () => {
       for (const plate of result.plates) {
-        for (const f of plate.filaments) {
-          expect(f.type).toBe('PLA');
-        }
+        expect(plate.filamentType).toBe('PLA');
+        expect(plate.filamentTypes).toEqual(['PLA']);
       }
+    });
+
+    test('filament profiles extracted with vendor info', () => {
+      expect(result.filamentProfiles.length).toBeGreaterThanOrEqual(2);
+      const bambu = result.filamentProfiles.find(f => f.vendor === 'Bambu Lab');
+      expect(bambu).toBeDefined();
+      expect(bambu.type).toBe('PLA');
+      expect(bambu.cost).toBeGreaterThan(0);
+    });
+
+    test('plates have filament vendor info', () => {
+      expect(result.plates[0].filamentVendors).toContain('Bambu Lab');
     });
 
     test('total weight across all plates', () => {
       const total = result.plates.reduce((s, p) => s + p.weightGrams, 0);
       expect(total).toBeCloseTo(238.36 + 80.64 + 23.15 + 67.90, 1);
+    });
+
+    test('plate 2 has plate name from model_settings', () => {
+      expect(result.plates[1].plateName).toBe('CHOOSE ONE');
     });
 
     test('works with Buffer input', () => {
@@ -82,7 +96,7 @@ describe('parse3mf', () => {
     });
   });
 
-  (hasUnsliced ? describe : describe.skip)('unsliced 3MF (henriegga project)', () => {
+  (hasUnsliced ? describe : describe.skip)('unsliced 3MF (4-plate project)', () => {
     let result;
     beforeAll(() => { result = parse3mf(UNSLICED_3MF); });
 
@@ -104,6 +118,10 @@ describe('parse3mf', () => {
     test('has object names from plate JSONs', () => {
       expect(result.plates[0].objects).toContain('Body_mc.stl');
       expect(result.plates[1].objects).toContain('head_open_eyes');
+    });
+
+    test('filament profiles extracted from project_settings', () => {
+      expect(result.filamentProfiles.length).toBeGreaterThanOrEqual(2);
     });
   });
 });

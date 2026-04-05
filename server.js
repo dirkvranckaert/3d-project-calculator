@@ -7,6 +7,7 @@ const path = require('path');
 const express = require('express');
 const { getDb, getSetting, setSetting, getAllSettings } = require('./db');
 const calc = require('./calc');
+const { parse3mf } = require('./parse3mf');
 
 const UPLOADS_DIR = path.join(__dirname, 'data', 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -542,6 +543,52 @@ app.delete('/api/files/:fileId', (req, res) => {
     db.prepare('DELETE FROM project_files WHERE id = ?').run(req.params.fileId);
   }
   res.json({ ok: true });
+});
+
+/* ------------------------------------------------------------------ */
+/*  3MF parsing & import                                               */
+/* ------------------------------------------------------------------ */
+
+// Parse a 3MF and return extracted plate data (no persistence)
+app.post('/api/parse-3mf', express.raw({ type: 'application/octet-stream', limit: '100mb' }), (req, res) => {
+  try {
+    const result = parse3mf(req.body);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: 'Failed to parse 3MF: ' + err.message });
+  }
+});
+
+// Import plates from parsed 3MF data into a project
+app.post('/api/projects/:projectId/import-3mf', (req, res) => {
+  const db = getDb();
+  const pid = req.params.projectId;
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const { plates = [] } = req.body;
+  // plates is an array of: { name, print_time_minutes, plastic_grams, items_per_plate, printer_id, material_id }
+
+  const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order),0) as m FROM project_plates WHERE project_id = ?').get(pid).m;
+  const ins = db.prepare(`INSERT INTO project_plates
+    (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
+     risk_multiplier, pre_processing_minutes, post_processing_minutes,
+     printer_id, material_id, material_waste_grams, notes, enabled, sort_order)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+
+  for (let i = 0; i < plates.length; i++) {
+    const pl = plates[i];
+    ins.run(pid, pl.name || `Plate ${maxOrder + i + 1}`,
+      pl.print_time_minutes || 0, pl.plastic_grams || 0,
+      pl.items_per_plate || 1, pl.risk_multiplier || 1,
+      pl.pre_processing_minutes || 0, pl.post_processing_minutes || 2,
+      pl.printer_id || null, pl.material_id || null,
+      pl.material_waste_grams || 0, pl.notes || null, 1, maxOrder + i + 1);
+  }
+
+  db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
+  const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  res.status(201).json(enrichProject(db, updated));
 });
 
 /* ------------------------------------------------------------------ */

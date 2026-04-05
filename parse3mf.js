@@ -4,30 +4,40 @@
  * Parse a BambuLab/OrcaSlicer 3MF file and extract plate data.
  *
  * 3MF files are ZIP archives. Sliced 3MFs contain:
- *   Metadata/slice_info.config — XML with per-plate print time, weight, filaments
- *   Metadata/plate_N.json     — per-plate metadata (object names, bbox)
+ *   Metadata/slice_info.config      — XML with per-plate print time, weight, filaments
+ *   Metadata/plate_N.json           — per-plate metadata (object names, bbox)
+ *   Metadata/project_settings.config — JSON with filament vendors, costs, types
+ *   Metadata/model_settings.config  — XML with plate names
  *
  * Un-sliced 3MFs have limited data (no print time or weight).
  */
 
 const fs = require('fs');
 const path = require('path');
-
-// Use Node's built-in zlib + manual ZIP parsing to avoid dependencies,
-// or we can use the unzip approach via child_process for simplicity.
 const { execSync } = require('child_process');
+
+/**
+ * Extract a file from a ZIP archive. Returns string or null.
+ */
+function extractFile(zipPath, innerPath) {
+  try {
+    return execSync(
+      `unzip -p "${zipPath}" "${innerPath}" 2>/dev/null`,
+      { encoding: 'utf-8', timeout: 10000 }
+    );
+  } catch { return null; }
+}
 
 /**
  * Parse a 3MF file buffer or path.
  * @param {string|Buffer} input — file path or Buffer
- * @returns {object} { plates: [...], sliced: boolean, raw: string }
+ * @returns {object}
  */
 function parse3mf(input) {
   let filePath;
   let tempFile = null;
 
   if (Buffer.isBuffer(input)) {
-    // Write to temp file for unzip
     tempFile = path.join(require('os').tmpdir(), `parse3mf_${Date.now()}.3mf`);
     fs.writeFileSync(tempFile, input);
     filePath = tempFile;
@@ -36,54 +46,105 @@ function parse3mf(input) {
   }
 
   try {
-    const result = { plates: [], sliced: false, printer_model: null, filaments: [] };
+    const result = { plates: [], sliced: false, filamentProfiles: [] };
 
-    // Try to extract slice_info.config (only present in sliced 3MFs)
-    let sliceInfoXml = '';
-    try {
-      sliceInfoXml = execSync(
-        `unzip -p "${filePath}" "Metadata/slice_info.config" 2>/dev/null`,
-        { encoding: 'utf-8', timeout: 10000 }
-      );
-    } catch { /* not sliced */ }
+    // --- Extract project_settings.config (JSON) for filament vendor/cost/type ---
+    const projSettingsRaw = extractFile(filePath, 'Metadata/project_settings.config');
+    let projSettings = null;
+    if (projSettingsRaw) {
+      try { projSettings = JSON.parse(projSettingsRaw); } catch { /* not JSON */ }
+    }
 
+    if (projSettings) {
+      const vendors = projSettings.filament_vendor || [];
+      const types = projSettings.filament_type || [];
+      const costs = projSettings.filament_cost || [];
+      const colors = projSettings.filament_colour || [];
+      const densities = projSettings.filament_density || [];
+      const count = Math.max(vendors.length, types.length);
+      for (let i = 0; i < count; i++) {
+        result.filamentProfiles.push({
+          index: i + 1,
+          vendor: vendors[i] || null,
+          type: types[i] || null,
+          cost: parseFloat(costs[i]) || 0,
+          color: colors[i] || null,
+          density: parseFloat(densities[i]) || 0,
+        });
+      }
+    }
+
+    // --- Extract model_settings.config for plate names ---
+    const plateNames = {};
+    const modelSettingsXml = extractFile(filePath, 'Metadata/model_settings.config');
+    if (modelSettingsXml) {
+      const plateBlocks = modelSettingsXml.split('<plate>').slice(1);
+      for (const block of plateBlocks) {
+        let id = null, name = null;
+        const metaRegex = /<metadata key="([^"]+)" value="([^"]*)"/g;
+        let m;
+        while ((m = metaRegex.exec(block)) !== null) {
+          if (m[1] === 'plater_id') id = parseInt(m[2]);
+          if (m[1] === 'plater_name') name = m[2] || null;
+        }
+        if (id && name) plateNames[id] = name;
+      }
+    }
+
+    // --- Extract slice_info.config (only present in sliced 3MFs) ---
+    const sliceInfoXml = extractFile(filePath, 'Metadata/slice_info.config');
     if (sliceInfoXml && sliceInfoXml.includes('<plate>')) {
       result.sliced = true;
       result.plates = parseSliceInfo(sliceInfoXml);
     }
 
-    // Also try plate_N.json files for object names (works for both sliced and unsliced)
+    // --- Extract plate_N.json files for object names ---
     for (let i = 1; i <= 20; i++) {
-      try {
-        const json = execSync(
-          `unzip -p "${filePath}" "Metadata/plate_${i}.json" 2>/dev/null`,
-          { encoding: 'utf-8', timeout: 5000 }
-        );
-        const data = JSON.parse(json);
-        // Merge object names into plate if we have it
-        if (result.plates[i - 1]) {
-          if (!result.plates[i - 1].objects.length && data.bbox_objects) {
-            result.plates[i - 1].objects = data.bbox_objects
-              .filter(o => !o.name?.includes('wipe_tower'))
-              .map(o => o.name);
-          }
-        } else if (!result.sliced) {
-          // Un-sliced: create plate entry from JSON
-          result.plates.push({
-            index: i,
-            printTimeSeconds: 0,
-            printTimeMinutes: 0,
-            weightGrams: 0,
-            objects: (data.bbox_objects || [])
-              .filter(o => !o.name?.includes('wipe_tower'))
-              .map(o => o.name),
-            filaments: [],
-            layerHeight: data.bbox_objects?.[0]?.layer_height || null,
-          });
+      const json = extractFile(filePath, `Metadata/plate_${i}.json`);
+      if (!json) break;
+      let data;
+      try { data = JSON.parse(json); } catch { continue; }
+
+      const objects = (data.bbox_objects || [])
+        .filter(o => !o.name?.includes('wipe_tower'))
+        .map(o => o.name);
+
+      if (result.plates[i - 1]) {
+        if (!result.plates[i - 1].objects.length) {
+          result.plates[i - 1].objects = objects;
         }
-      } catch {
-        break; // No more plates
+        result.plates[i - 1].plateName = plateNames[i] || null;
+      } else if (!result.sliced) {
+        result.plates.push({
+          index: i,
+          plateName: plateNames[i] || null,
+          printTimeSeconds: 0,
+          printTimeMinutes: 0,
+          weightGrams: 0,
+          objects,
+          filaments: [],
+          layerHeight: data.bbox_objects?.[0]?.layer_height || null,
+        });
       }
+    }
+
+    // --- Compute summary per plate ---
+    for (const plate of result.plates) {
+      // Determine dominant filament type (are all the same or mixed?)
+      const types = [...new Set(plate.filaments.map(f => f.type).filter(Boolean))];
+      plate.filamentType = types.length === 1 ? types[0] : (types.length > 1 ? 'Mixed' : null);
+      plate.filamentTypes = types;
+
+      // Try to match vendor from filament profiles
+      const vendorSet = new Set();
+      for (const f of plate.filaments) {
+        const profile = result.filamentProfiles[f.id - 1];
+        if (profile?.vendor && profile.vendor !== 'Generic') vendorSet.add(profile.vendor);
+      }
+      plate.filamentVendors = [...vendorSet];
+
+      // Object count (items on plate, excluding wipe tower)
+      plate.objectCount = plate.objects.length;
     }
 
     return result;
@@ -97,13 +158,12 @@ function parse3mf(input) {
  */
 function parseSliceInfo(xml) {
   const plates = [];
-
-  // Split by <plate> blocks
   const plateBlocks = xml.split('<plate>').slice(1);
 
   for (const block of plateBlocks) {
     const plate = {
       index: 0,
+      plateName: null,
       printTimeSeconds: 0,
       printTimeMinutes: 0,
       weightGrams: 0,
@@ -112,7 +172,6 @@ function parseSliceInfo(xml) {
       printerModel: null,
     };
 
-    // Extract metadata values
     const metaRegex = /<metadata key="([^"]+)" value="([^"]*)"/g;
     let match;
     while ((match = metaRegex.exec(block)) !== null) {
@@ -134,13 +193,11 @@ function parseSliceInfo(xml) {
       }
     }
 
-    // Extract objects
     const objRegex = /<object[^>]+name="([^"]+)"[^>]*\/>/g;
     while ((match = objRegex.exec(block)) !== null) {
       plate.objects.push(match[1]);
     }
 
-    // Extract filament usage
     const filRegex = /<filament([^>]+)\/>/g;
     while ((match = filRegex.exec(block)) !== null) {
       const attrs = match[1];
