@@ -921,10 +921,11 @@ input:focus, select:focus, textarea:focus {
 /* ================================================================== */
 .editable { cursor: pointer; }
 .editable:hover { background: var(--primary-tint) !important; border-radius: 3px; }
-.inline-input {
-  width: 36px;
-  padding: 4px 6px;
-  border: 2px solid var(--primary);
+input.inline-input,
+select.inline-input {
+  width: 36px !important;
+  padding: 4px 6px !important;
+  border: 2px solid var(--primary) !important;
   border-radius: 4px;
   font-size: 13px;
   background: var(--surface);
@@ -933,8 +934,8 @@ input:focus, select:focus, textarea:focus {
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
-.inline-input-sm { width: 28px; text-align: center; }
-select.inline-input { width: auto; max-width: 160px; text-align: left; }
+input.inline-input-sm { width: 28px !important; text-align: center; }
+select.inline-input { width: auto !important; max-width: 160px; text-align: left; }
 .inline-time-edit {
   display: flex;
   align-items: center;
