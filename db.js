@@ -123,7 +123,22 @@ function bootstrap(db) {
     );
   `);
 
+  migrate(db);
   seedDefaults(db);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Migrations (add columns to existing tables)                        */
+/* ------------------------------------------------------------------ */
+function migrate(db) {
+  const addCol = (table, col, def) => {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+    if (!cols.includes(col)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+    }
+  };
+  addCol('projects', 'tags', "TEXT NOT NULL DEFAULT ''");
+  addCol('project_plates', 'notes', 'TEXT');
 }
 
 /* ------------------------------------------------------------------ */
