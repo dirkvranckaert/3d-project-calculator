@@ -296,11 +296,11 @@ app.get('/api/projects/:id', (req, res) => {
 
 app.post('/api/projects', (req, res) => {
   const db = getDb();
-  const { name, customer_name = null, items_per_set = 1 } = req.body;
+  const { name, customer_name = null, items_per_set = 1, tags = '' } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
 
-  const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set) VALUES (?,?,?)')
-    .run(name, customer_name, items_per_set);
+  const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set, tags) VALUES (?,?,?,?)')
+    .run(name, customer_name, items_per_set, tags);
   const projectId = r.lastInsertRowid;
 
   // Auto-add default extra cost items
@@ -316,10 +316,10 @@ app.post('/api/projects', (req, res) => {
 
 app.put('/api/projects/:id', (req, res) => {
   const db = getDb();
-  const { name, customer_name, items_per_set, actual_sales_price } = req.body;
-  db.prepare(`UPDATE projects SET name=?, customer_name=?, items_per_set=?, actual_sales_price=?,
+  const { name, customer_name, items_per_set, actual_sales_price, tags } = req.body;
+  db.prepare(`UPDATE projects SET name=?, customer_name=?, items_per_set=?, actual_sales_price=?, tags=?,
     updated_at=datetime('now') WHERE id=?`)
-    .run(name, customer_name, items_per_set, actual_sales_price ?? null, req.params.id);
+    .run(name, customer_name, items_per_set, actual_sales_price ?? null, tags ?? '', req.params.id);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Not found' });
   res.json(enrichProject(db, project));

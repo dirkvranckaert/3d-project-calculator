@@ -162,7 +162,8 @@ function renderListView() {
     const q = searchQuery.toLowerCase();
     filtered = projects.filter(p =>
       (p.name || '').toLowerCase().includes(q) ||
-      (p.customer_name || '').toLowerCase().includes(q)
+      (p.customer_name || '').toLowerCase().includes(q) ||
+      (p.tags || '').toLowerCase().includes(q)
     );
   }
 
@@ -224,6 +225,7 @@ function renderSummaryCard(p) {
       </div>
     </div>
     <div class="summary-card-meta">${p.plates.length} plate${p.plates.length !== 1 ? 's' : ''}${p.items_per_set > 1 ? ` \u00b7 set of ${p.items_per_set}` : ''}</div>
+    ${renderTagsPills(p.tags)}
     ` : ''}
   </div>`;
 }
@@ -242,8 +244,11 @@ function renderDetailView(p) {
     </button>
     <div class="detail-topbar-title">
       <h2>${esc(p.name)}</h2>
-      ${p.customer_name ? `<span class="project-customer">${esc(p.customer_name)}</span>` : ''}
-      ${p.items_per_set > 1 ? `<span class="project-customer">(set of ${p.items_per_set})</span>` : ''}
+      <div>
+        ${p.customer_name ? `<span class="project-customer">${esc(p.customer_name)}</span>` : ''}
+        ${p.items_per_set > 1 ? `<span class="project-customer">(set of ${p.items_per_set})</span>` : ''}
+        ${renderTagsPills(p.tags)}
+      </div>
     </div>
     <div class="detail-topbar-actions">
       <button class="btn btn-sm" onclick="openProjectModal(${p.id})">Edit</button>
@@ -462,6 +467,7 @@ function openProjectModal(id = null) {
   document.getElementById('proj-name').value = p?.name || '';
   document.getElementById('proj-customer').value = p?.customer_name || '';
   document.getElementById('proj-items-per-set').value = p?.items_per_set || 1;
+  document.getElementById('proj-tags').value = p?.tags || '';
   openModal('project-modal');
   document.getElementById('proj-name').focus();
 }
@@ -471,6 +477,7 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
     name: document.getElementById('proj-name').value.trim(),
     customer_name: document.getElementById('proj-customer').value.trim() || null,
     items_per_set: parseInt(document.getElementById('proj-items-per-set').value) || 1,
+    tags: document.getElementById('proj-tags').value.trim(),
   };
   if (!data.name) return;
   if (editingProjectId) {
@@ -501,7 +508,7 @@ async function updateActualPrice(projectId, value) {
   if (!p) return;
   await PUT(`/api/projects/${projectId}`, {
     name: p.name, customer_name: p.customer_name,
-    items_per_set: p.items_per_set,
+    items_per_set: p.items_per_set, tags: p.tags || '',
     actual_sales_price: value ? parseFloat(value) : null,
   });
   await reloadSingleProject(projectId);
@@ -858,6 +865,13 @@ async function saveTheme(value) { await PUT(`/api/settings/theme`, { value }); s
 /*  Utility                                                            */
 /* ================================================================== */
 function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function renderTagsPills(tags) {
+  if (!tags) return '';
+  const list = tags.split(',').map(t => t.trim()).filter(Boolean);
+  if (!list.length) return '';
+  return `<div class="tags-list">${list.map(t => `<span class="tag-pill">${esc(t)}</span>`).join('')}</div>`;
+}
 
 /* ================================================================== */
 /*  Topbar                                                             */

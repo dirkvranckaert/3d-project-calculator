@@ -79,6 +79,7 @@ function bootstrap(db) {
       customer_name      TEXT,
       items_per_set      INTEGER NOT NULL DEFAULT 1,
       actual_sales_price REAL,
+      tags               TEXT NOT NULL DEFAULT '',
       created_at         TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
     );
