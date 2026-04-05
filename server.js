@@ -296,11 +296,11 @@ app.get('/api/projects/:id', (req, res) => {
 
 app.post('/api/projects', (req, res) => {
   const db = getDb();
-  const { name, customer_name = null, items_per_set = 1, tags = '' } = req.body;
+  const { name, customer_name = null, items_per_set = 1, tags = '', notes = null } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
 
-  const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set, tags) VALUES (?,?,?,?)')
-    .run(name, customer_name, items_per_set, tags);
+  const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set, tags, notes) VALUES (?,?,?,?,?)')
+    .run(name, customer_name, items_per_set, tags, notes);
   const projectId = r.lastInsertRowid;
 
   // Auto-add default extra cost items
@@ -316,13 +316,44 @@ app.post('/api/projects', (req, res) => {
 
 app.put('/api/projects/:id', (req, res) => {
   const db = getDb();
-  const { name, customer_name, items_per_set, actual_sales_price, tags } = req.body;
-  db.prepare(`UPDATE projects SET name=?, customer_name=?, items_per_set=?, actual_sales_price=?, tags=?,
+  const { name, customer_name, items_per_set, actual_sales_price, tags, notes } = req.body;
+  db.prepare(`UPDATE projects SET name=?, customer_name=?, items_per_set=?, actual_sales_price=?, tags=?, notes=?,
     updated_at=datetime('now') WHERE id=?`)
-    .run(name, customer_name, items_per_set, actual_sales_price ?? null, tags ?? '', req.params.id);
+    .run(name, customer_name, items_per_set, actual_sales_price ?? null, tags ?? '', notes ?? null, req.params.id);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Not found' });
   res.json(enrichProject(db, project));
+});
+
+app.post('/api/projects/:id/duplicate', (req, res) => {
+  const db = getDb();
+  const src = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+  if (!src) return res.status(404).json({ error: 'Not found' });
+
+  const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set, tags, notes) VALUES (?,?,?,?,?)')
+    .run(`${src.name} (copy)`, src.customer_name, src.items_per_set, src.tags || '', src.notes);
+  const newId = r.lastInsertRowid;
+
+  // Copy plates
+  const plates = db.prepare('SELECT * FROM project_plates WHERE project_id = ? ORDER BY sort_order').all(src.id);
+  const insPlate = db.prepare(`INSERT INTO project_plates
+    (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
+     risk_multiplier, pre_processing_minutes, post_processing_minutes,
+     printer_id, material_id, material_waste_grams, notes, enabled, sort_order)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  for (const pl of plates) {
+    insPlate.run(newId, pl.name, pl.print_time_minutes, pl.plastic_grams, pl.items_per_plate,
+      pl.risk_multiplier, pl.pre_processing_minutes, pl.post_processing_minutes,
+      pl.printer_id, pl.material_id, pl.material_waste_grams, pl.notes, pl.enabled, pl.sort_order);
+  }
+
+  // Copy extras
+  const extras = db.prepare('SELECT extra_cost_id, quantity FROM project_extra_costs WHERE project_id = ?').all(src.id);
+  const insEC = db.prepare('INSERT INTO project_extra_costs (project_id, extra_cost_id, quantity) VALUES (?,?,?)');
+  for (const e of extras) insEC.run(newId, e.extra_cost_id, e.quantity);
+
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(newId);
+  res.status(201).json(enrichProject(db, project));
 });
 
 app.delete('/api/projects/:id', (req, res) => {
@@ -394,6 +425,27 @@ app.put('/api/projects/:projectId/plates/:plateId', (req, res) => {
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(req.params.projectId);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.projectId);
   if (!project) return res.status(404).json({ error: 'Not found' });
+  res.json(enrichProject(db, project));
+});
+
+app.patch('/api/projects/:projectId/plates/:plateId', (req, res) => {
+  const db = getDb();
+  const plate = db.prepare('SELECT * FROM project_plates WHERE id = ? AND project_id = ?')
+    .get(req.params.plateId, req.params.projectId);
+  if (!plate) return res.status(404).json({ error: 'Not found' });
+  const allowed = ['name', 'print_time_minutes', 'plastic_grams', 'items_per_plate',
+    'risk_multiplier', 'pre_processing_minutes', 'post_processing_minutes',
+    'printer_id', 'material_id', 'material_waste_grams', 'notes', 'enabled'];
+  const updates = [];
+  const values = [];
+  for (const [k, v] of Object.entries(req.body)) {
+    if (allowed.includes(k)) { updates.push(`${k}=?`); values.push(v); }
+  }
+  if (updates.length === 0) return res.status(400).json({ error: 'No valid fields' });
+  values.push(req.params.plateId);
+  db.prepare(`UPDATE project_plates SET ${updates.join(', ')} WHERE id=?`).run(...values);
+  db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(req.params.projectId);
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.projectId);
   res.json(enrichProject(db, project));
 });
 

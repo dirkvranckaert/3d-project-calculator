@@ -198,32 +198,25 @@ function renderSummaryCard(p) {
   const marginPct = hasActual ? c?.actualMargin?.marginPct : pr.suggestedMarginPct;
 
   return `
-  <div class="summary-card" onclick="navigate('#/project/${p.id}')">
+  <div class="summary-card" onclick="navigate('#/project/${p.id}')" oncontextmenu="showProjectContextMenu(event, ${p.id})">
     <div class="summary-card-top">
       <div class="summary-card-title">
         <span class="project-name">${esc(p.name)}</span>
         ${p.customer_name ? `<span class="project-customer">${esc(p.customer_name)}</span>` : ''}
       </div>
-      ${hasPlates ? `<span class="project-price-badge ${indicator || 'green'}">${fmt(displayPrice)}</span>` : `<span class="project-price-badge" style="opacity:.4">No plates</span>`}
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+        ${hasPlates ? `<span class="project-price-badge ${indicator || 'green'}">${fmt(displayPrice)}</span>` : `<span class="project-price-badge" style="opacity:.4">No plates</span>`}
+        <button class="btn-icon mobile-only" title="More" onclick="event.stopPropagation();showProjectContextMenu(event,${p.id},true)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+        </button>
+      </div>
     </div>
     ${hasPlates ? `
     <div class="summary-card-grid">
-      <div class="summary-stat">
-        <span class="summary-stat-label">Production</span>
-        <span class="summary-stat-value">${fmt(pr.productionCost)}</span>
-      </div>
-      <div class="summary-stat">
-        <span class="summary-stat-label">Suggested</span>
-        <span class="summary-stat-value">${fmt(pr.suggestedPrice)}</span>
-      </div>
-      <div class="summary-stat">
-        <span class="summary-stat-label">Actual</span>
-        <span class="summary-stat-value">${hasActual ? fmt(p.actual_sales_price) : '<span style="opacity:.4">-</span>'}</span>
-      </div>
-      <div class="summary-stat">
-        <span class="summary-stat-label">Margin</span>
-        <span class="summary-stat-value"><span class="margin-badge ${indicator || 'green'}">${marginPct != null ? fmtPct(marginPct) : '-'}</span></span>
-      </div>
+      <div class="summary-stat"><span class="summary-stat-label">Production</span><span class="summary-stat-value">${fmt(pr.productionCost)}</span></div>
+      <div class="summary-stat"><span class="summary-stat-label">Suggested</span><span class="summary-stat-value">${fmt(pr.suggestedPrice)}</span></div>
+      <div class="summary-stat"><span class="summary-stat-label">Actual</span><span class="summary-stat-value">${hasActual ? fmt(p.actual_sales_price) : '<span style="opacity:.4">-</span>'}</span></div>
+      <div class="summary-stat"><span class="summary-stat-label">Margin</span><span class="summary-stat-value"><span class="margin-badge ${indicator || 'green'}">${marginPct != null ? fmtPct(marginPct) : '-'}</span></span></div>
     </div>
     <div class="summary-card-meta">${p.plates.length} plate${p.plates.length !== 1 ? 's' : ''}${p.items_per_set > 1 ? ` \u00b7 set of ${p.items_per_set}` : ''}</div>
     ${renderTagsPills(p.tags)}
@@ -256,6 +249,7 @@ function renderDetailView(p) {
       <button class="btn btn-sm btn-danger" onclick="deleteProject(${p.id})">Delete</button>
     </div>
   </div>
+  ${renderProjectNotes(p)}
   ${renderPlatesSection(p)}
   ${renderCostSection(p)}
   ${renderExtrasSection(p)}
@@ -285,12 +279,12 @@ function renderPlatesSection(p) {
       : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
     return `<tr class="${rowCls}">
       <td>${esc(pl.name || `Plate ${i + 1}`)} ${disabledBadge}${pl.notes ? `<div style="font-size:11px;color:var(--text-muted);white-space:normal">${esc(pl.notes)}</div>` : ''}</td>
-      <td class="num" data-label="Time">${fmtTime(pl.print_time_minutes)}</td>
-      <td class="num" data-label="Plastic">${fmtGrams(pl.plastic_grams)}</td>
-      <td class="num" data-label="#/Plate">${pl.items_per_plate}</td>
-      <td class="num col-hide-mobile" data-label="Risk">${pl.risk_multiplier}</td>
-      <td class="col-hide-mobile" data-label="Printer">${esc(pl.printer_name || '-')}</td>
-      <td class="col-hide-mobile" data-label="Material">${esc(pl.material_name || '-')}</td>
+      <td class="num editable" data-label="Time" onclick="startInlineEdit(${p.id},${pl.id},'print_time_minutes',${pl.print_time_minutes},this,'time')">${fmtTime(pl.print_time_minutes)}</td>
+      <td class="num editable" data-label="Plastic" onclick="startInlineEdit(${p.id},${pl.id},'plastic_grams',${pl.plastic_grams},this,'float')">${fmtGrams(pl.plastic_grams)}</td>
+      <td class="num editable" data-label="#/Plate" onclick="startInlineEdit(${p.id},${pl.id},'items_per_plate',${pl.items_per_plate},this,'int')">${pl.items_per_plate}</td>
+      <td class="num col-hide-mobile editable" data-label="Risk" onclick="startInlineEdit(${p.id},${pl.id},'risk_multiplier',${pl.risk_multiplier},this,'float')">${pl.risk_multiplier}</td>
+      <td class="col-hide-mobile editable" data-label="Printer" onclick="startInlineEdit(${p.id},${pl.id},'printer_id',${pl.printer_id||'null'},this,'select-printer')">${esc(pl.printer_name || '-')}</td>
+      <td class="col-hide-mobile editable" data-label="Material" onclick="startInlineEdit(${p.id},${pl.id},'material_id',${pl.material_id||'null'},this,'select-material')">${esc(pl.material_name || '-')}</td>
       <td class="num col-hide-mobile" data-label="Mat. cost">${fmt(pb?.materialCost)}</td>
       <td class="num col-hide-mobile" data-label="Proc. cost">${fmt(pb?.processingCost)}</td>
       <td class="num col-hide-mobile" data-label="Elec. cost">${fmt(pb?.electricityCost)}</td>
@@ -468,6 +462,145 @@ function renderPricingSection(p) {
 }
 
 /* ================================================================== */
+/*  Project notes (inline editable)                                    */
+/* ================================================================== */
+function renderProjectNotes(p) {
+  return `<div class="project-notes-section">
+    <div class="project-notes-label">Notes</div>
+    <textarea class="project-notes-input" placeholder="Add project notes..." rows="2"
+      onblur="saveProjectNotes(${p.id}, this.value)">${esc(p.notes || '')}</textarea>
+  </div>`;
+}
+
+async function saveProjectNotes(projectId, value) {
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return;
+  if ((p.notes || '') === value) return; // no change
+  await PUT(`/api/projects/${projectId}`, {
+    name: p.name, customer_name: p.customer_name,
+    items_per_set: p.items_per_set, tags: p.tags || '', notes: value || null,
+    actual_sales_price: p.actual_sales_price,
+  });
+  p.notes = value || null; // update local state without full reload
+}
+
+/* ================================================================== */
+/*  Context menu (project list)                                        */
+/* ================================================================== */
+function showProjectContextMenu(e, projectId, fromButton) {
+  e.preventDefault();
+  e.stopPropagation();
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'context-menu';
+  menu.id = 'context-menu';
+  menu.innerHTML = `
+    <button onclick="navigateToProject(${projectId})">Open</button>
+    <button onclick="duplicateProject(${projectId})">Duplicate</button>
+    <button onclick="openProjectModal(${projectId})">Edit</button>
+    <button class="danger" onclick="deleteProject(${projectId})">Delete</button>`;
+  document.body.appendChild(menu);
+  // Position
+  const x = fromButton ? e.currentTarget.getBoundingClientRect().right : e.clientX;
+  const y = fromButton ? e.currentTarget.getBoundingClientRect().bottom : e.clientY;
+  menu.style.left = Math.min(x, window.innerWidth - menu.offsetWidth - 8) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - menu.offsetHeight - 8) + 'px';
+  setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 10);
+}
+
+function closeContextMenu() {
+  const m = document.getElementById('context-menu');
+  if (m) m.remove();
+}
+
+function navigateToProject(id) { closeContextMenu(); navigate(`#/project/${id}`); }
+
+async function duplicateProject(id) {
+  closeContextMenu();
+  const dup = await POST(`/api/projects/${id}/duplicate`);
+  if (dup) {
+    projects.unshift(dup);
+    navigate(`#/project/${dup.id}`);
+  }
+}
+
+/* ================================================================== */
+/*  Inline plate editing                                               */
+/* ================================================================== */
+function startInlineEdit(projectId, plateId, field, currentValue, el, type) {
+  if (el.querySelector('input, select')) return; // already editing
+  const display = el.textContent;
+  let input;
+  if (type === 'time') {
+    const mins = parseFloat(currentValue) || 0;
+    const h = Math.floor(mins / 60);
+    const m = Math.round(mins % 60);
+    input = document.createElement('div');
+    input.className = 'inline-time-edit';
+    input.innerHTML = `<input type="number" min="0" value="${h}" class="inline-input inline-input-sm">h
+      <input type="number" min="0" max="59" value="${m}" class="inline-input inline-input-sm">m`;
+    el.textContent = '';
+    el.appendChild(input);
+    const inputs = input.querySelectorAll('input');
+    inputs[0].focus();
+    inputs[0].select();
+    const save = () => {
+      const newH = parseInt(inputs[0].value) || 0;
+      const newM = parseInt(inputs[1].value) || 0;
+      const newMins = newH * 60 + newM;
+      if (newMins !== mins) patchPlateField(projectId, plateId, field, newMins);
+      else { el.textContent = display; }
+    };
+    inputs.forEach(inp => {
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') { el.textContent = display; } });
+    });
+    inputs[1].addEventListener('blur', e => { if (!input.contains(e.relatedTarget)) save(); });
+    inputs[0].addEventListener('blur', e => { if (!input.contains(e.relatedTarget)) save(); });
+  } else if (type === 'select-printer') {
+    input = document.createElement('select');
+    input.className = 'inline-input';
+    input.innerHTML = '<option value="">--</option>' + printers.map(pr => `<option value="${pr.id}" ${pr.id == currentValue ? 'selected' : ''}>${esc(pr.name)}</option>`).join('');
+    el.textContent = '';
+    el.appendChild(input);
+    input.focus();
+    input.addEventListener('change', () => patchPlateField(projectId, plateId, field, parseInt(input.value) || null));
+    input.addEventListener('blur', () => { el.textContent = display; });
+  } else if (type === 'select-material') {
+    input = document.createElement('select');
+    input.className = 'inline-input';
+    input.innerHTML = '<option value="">--</option>' + materials.map(m => `<option value="${m.id}" ${m.id == currentValue ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+    el.textContent = '';
+    el.appendChild(input);
+    input.focus();
+    input.addEventListener('change', () => patchPlateField(projectId, plateId, field, parseInt(input.value) || null));
+    input.addEventListener('blur', () => { el.textContent = display; });
+  } else {
+    input = document.createElement('input');
+    input.type = 'number';
+    input.className = 'inline-input';
+    input.value = currentValue;
+    input.step = type === 'int' ? '1' : '0.01';
+    if (type === 'int') input.min = '1';
+    el.textContent = '';
+    el.appendChild(input);
+    input.focus();
+    input.select();
+    const save = () => {
+      const v = type === 'int' ? parseInt(input.value) : parseFloat(input.value);
+      if (v != currentValue && !isNaN(v)) patchPlateField(projectId, plateId, field, v);
+      else el.textContent = display;
+    };
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') el.textContent = display; });
+    input.addEventListener('blur', save);
+  }
+}
+
+async function patchPlateField(projectId, plateId, field, value) {
+  await PATCH(`/api/projects/${projectId}/plates/${plateId}`, { [field]: value });
+  await reloadSingleProject(projectId);
+}
+
+/* ================================================================== */
 /*  Project actions                                                    */
 /* ================================================================== */
 function openProjectModal(id = null) {
@@ -493,6 +626,7 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
   if (editingProjectId) {
     const existing = projects.find(x => x.id === editingProjectId);
     data.actual_sales_price = existing?.actual_sales_price || null;
+    data.notes = existing?.notes || null;
     await PUT(`/api/projects/${editingProjectId}`, data);
     closeModal('project-modal');
     await reloadSingleProject(editingProjectId);
@@ -518,7 +652,7 @@ async function updateActualPrice(projectId, value) {
   if (!p) return;
   await PUT(`/api/projects/${projectId}`, {
     name: p.name, customer_name: p.customer_name,
-    items_per_set: p.items_per_set, tags: p.tags || '',
+    items_per_set: p.items_per_set, tags: p.tags || '', notes: p.notes || null,
     actual_sales_price: value ? parseFloat(value) : null,
   });
   await reloadSingleProject(projectId);

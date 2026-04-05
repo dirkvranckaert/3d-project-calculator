@@ -80,6 +80,7 @@ function bootstrap(db) {
       items_per_set      INTEGER NOT NULL DEFAULT 1,
       actual_sales_price REAL,
       tags               TEXT NOT NULL DEFAULT '',
+      notes              TEXT,
       created_at         TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -141,6 +142,7 @@ function migrate(db) {
   addCol('projects', 'tags', "TEXT NOT NULL DEFAULT ''");
   addCol('project_plates', 'notes', 'TEXT');
   addCol('project_plates', 'enabled', 'INTEGER NOT NULL DEFAULT 1');
+  addCol('projects', 'notes', 'TEXT');
 }
 
 /* ------------------------------------------------------------------ */
