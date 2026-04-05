@@ -358,15 +358,16 @@ app.post('/api/projects/:projectId/plates', (req, res) => {
   const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order),0) as m FROM project_plates WHERE project_id = ?').get(pid).m;
 
   const notes = req.body.notes || null;
+  const enabled = req.body.enabled !== undefined ? (req.body.enabled ? 1 : 0) : 1;
 
   const r = db.prepare(`INSERT INTO project_plates
     (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
      risk_multiplier, pre_processing_minutes, post_processing_minutes,
-     printer_id, material_id, material_waste_grams, notes, sort_order)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+     printer_id, material_id, material_waste_grams, notes, enabled, sort_order)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(pid, name, print_time_minutes, plastic_grams, items_per_plate,
       risk_multiplier, pre_processing_minutes, post_processing_minutes,
-      printer_id, material_id, material_waste_grams, notes, maxOrder + 1);
+      printer_id, material_id, material_waste_grams, notes, enabled, maxOrder + 1);
 
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
   const updatedProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
@@ -377,21 +378,34 @@ app.put('/api/projects/:projectId/plates/:plateId', (req, res) => {
   const db = getDb();
   const { name, print_time_minutes, plastic_grams, items_per_plate,
     risk_multiplier, pre_processing_minutes, post_processing_minutes,
-    printer_id, material_id, material_waste_grams, notes, sort_order } = req.body;
+    printer_id, material_id, material_waste_grams, notes, enabled, sort_order } = req.body;
 
   db.prepare(`UPDATE project_plates SET
     name=?, print_time_minutes=?, plastic_grams=?, items_per_plate=?,
     risk_multiplier=?, pre_processing_minutes=?, post_processing_minutes=?,
-    printer_id=?, material_id=?, material_waste_grams=?, notes=?, sort_order=?
+    printer_id=?, material_id=?, material_waste_grams=?, notes=?, enabled=?, sort_order=?
     WHERE id=? AND project_id=?`)
     .run(name, print_time_minutes, plastic_grams, items_per_plate,
       risk_multiplier, pre_processing_minutes, post_processing_minutes,
       printer_id, material_id, material_waste_grams, notes || null,
+      enabled !== undefined ? (enabled ? 1 : 0) : 1,
       sort_order || 0, req.params.plateId, req.params.projectId);
 
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(req.params.projectId);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.projectId);
   if (!project) return res.status(404).json({ error: 'Not found' });
+  res.json(enrichProject(db, project));
+});
+
+app.patch('/api/projects/:projectId/plates/:plateId/toggle', (req, res) => {
+  const db = getDb();
+  const plate = db.prepare('SELECT enabled FROM project_plates WHERE id = ? AND project_id = ?')
+    .get(req.params.plateId, req.params.projectId);
+  if (!plate) return res.status(404).json({ error: 'Not found' });
+  db.prepare('UPDATE project_plates SET enabled = ? WHERE id = ?')
+    .run(plate.enabled ? 0 : 1, req.params.plateId);
+  db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(req.params.projectId);
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.projectId);
   res.json(enrichProject(db, project));
 });
 

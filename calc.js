@@ -315,11 +315,13 @@ function calculateProject(opts) {
       ...costs,
       plateId: plate.id,
       plateName: plate.name || '',
+      enabled: plate.enabled !== undefined ? !!plate.enabled : true,
     };
   });
 
-  // Per-item costs
-  const perItemCosts = calculatePerItemCosts(plateBreakdowns);
+  // Per-item costs (only enabled plates)
+  const enabledPlates = plateBreakdowns.filter(p => p.enabled);
+  const perItemCosts = calculatePerItemCosts(enabledPlates);
 
   // Profit margins
   const profits = applyProfitMargins(perItemCosts, s);

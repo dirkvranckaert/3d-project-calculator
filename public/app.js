@@ -32,6 +32,7 @@ const GET = (p) => api(p);
 const POST = (p, body) => api(p, { method: 'POST', body });
 const PUT = (p, body) => api(p, { method: 'PUT', body });
 const DEL = (p) => api(p, { method: 'DELETE' });
+const PATCH = (p, body) => api(p, { method: 'PATCH', body });
 
 /* ================================================================== */
 /*  Formatting helpers                                                 */
@@ -275,8 +276,15 @@ function renderPlatesSection(p) {
   }
   const rows = p.plates.map((pl, i) => {
     const pb = p.calculation?.plateBreakdowns?.[i];
-    return `<tr>
-      <td>${esc(pl.name || `Plate ${i + 1}`)}${pl.notes ? `<div style="font-size:11px;color:var(--text-muted);white-space:normal;max-width:200px">${esc(pl.notes)}</div>` : ''}</td>
+    const disabled = !pl.enabled;
+    const rowCls = disabled ? 'plate-disabled' : '';
+    const disabledBadge = disabled ? '<span class="plate-disabled-badge">DISABLED</span>' : '';
+    const toggleTitle = disabled ? 'Enable plate' : 'Disable plate';
+    const toggleIcon = disabled
+      ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
+      : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+    return `<tr class="${rowCls}">
+      <td>${esc(pl.name || `Plate ${i + 1}`)} ${disabledBadge}${pl.notes ? `<div style="font-size:11px;color:var(--text-muted);white-space:normal;max-width:200px">${esc(pl.notes)}</div>` : ''}</td>
       <td class="num">${fmtTime(pl.print_time_minutes)}</td>
       <td class="num">${fmtGrams(pl.plastic_grams)}</td>
       <td class="num">${pl.items_per_plate}</td>
@@ -289,6 +297,7 @@ function renderPlatesSection(p) {
       <td class="num">${fmt(pb?.printerUsageCost)}</td>
       <td class="num" style="font-weight:600">${fmt(pb?.totalPlateCost)}</td>
       <td><div class="plate-actions">
+        <button class="btn-icon" title="${toggleTitle}" onclick="togglePlate(${p.id}, ${pl.id})">${toggleIcon}</button>
         <button class="btn-icon" title="Edit" onclick="openPlateModal(${p.id}, ${pl.id})"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
         <button class="btn-icon" title="Delete" onclick="deletePlate(${p.id}, ${pl.id})"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></button>
       </div></td>
@@ -675,6 +684,11 @@ document.getElementById('btn-save-plate').addEventListener('click', async () => 
   closeModal('plate-modal');
   await reloadSingleProject(editingPlateProjectId);
 });
+
+async function togglePlate(projectId, plateId) {
+  await PATCH(`/api/projects/${projectId}/plates/${plateId}/toggle`);
+  await reloadSingleProject(projectId);
+}
 
 async function deletePlate(projectId, plateId) {
   if (!confirm('Delete this plate?')) return;

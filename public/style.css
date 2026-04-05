@@ -385,6 +385,31 @@ body {
 .plates-table tr:last-child td { border-bottom: none; }
 .plates-table tr:hover td { background: var(--surface-hover); }
 .plates-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Disabled plate row */
+.plates-table tr.plate-disabled td {
+  opacity: 0.35;
+  text-decoration: line-through;
+  text-decoration-color: var(--danger);
+}
+.plates-table tr.plate-disabled td:last-child {
+  opacity: 1;
+  text-decoration: none;
+}
+.plate-disabled-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--danger-tint);
+  color: var(--danger);
+  text-decoration: none !important;
+  vertical-align: middle;
+  margin-left: 6px;
+}
 .plate-actions {
   display: flex;
   gap: 4px;
