@@ -56,6 +56,9 @@ function parse3mf(input) {
     }
 
     if (projSettings) {
+      result.printerName = projSettings.printer_model || null;
+      result.printerVariant = projSettings.printer_variant || null;
+
       const vendors = projSettings.filament_vendor || [];
       const types = projSettings.filament_type || [];
       const costs = projSettings.filament_cost || [];

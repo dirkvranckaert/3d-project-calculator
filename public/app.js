@@ -785,7 +785,8 @@ async function import3mf(projectId, input) {
 
 function show3mfPreview(parsed) {
   const body = document.getElementById('edit-dialog-body');
-  document.getElementById('edit-dialog-title').textContent = `Import from 3MF — ${parsed.plates.length} plate${parsed.plates.length > 1 ? 's' : ''} found`;
+  const printerLabel = parsed.printerName ? ` (${parsed.printerName})` : '';
+  document.getElementById('edit-dialog-title').textContent = `Import from 3MF — ${parsed.plates.length} plate${parsed.plates.length > 1 ? 's' : ''}${printerLabel}`;
 
   const rows = parsed.plates.map((pl, i) => {
     const typeInfo = pl.filamentType || 'Unknown';
@@ -818,10 +819,20 @@ function show3mfPreview(parsed) {
 
   body.innerHTML = `<div class="import-plates-list">${rows.join('')}</div>`;
 
-  // Try to auto-select printer/material based on filament type
+  // Auto-select printer: match by name from 3MF
+  if (parsed.printerName) {
+    const pName = parsed.printerName.toLowerCase();
+    const matchedPrinter = printers.find(pr => pName.includes(pr.name.toLowerCase()) || pr.name.toLowerCase().includes(pName));
+    if (matchedPrinter) {
+      for (let i = 0; i < parsed.plates.length; i++) {
+        body.querySelector(`[data-import-printer="${i}"]`).value = matchedPrinter.id;
+      }
+    }
+  }
+
+  // Auto-select material per plate: match by filament type
   for (let i = 0; i < parsed.plates.length; i++) {
     const pl = parsed.plates[i];
-    // Auto-select material: match by type
     if (pl.filamentType && pl.filamentType !== 'Mixed') {
       const matSel = body.querySelector(`[data-import-material="${i}"]`);
       const match = materials.find(m =>
