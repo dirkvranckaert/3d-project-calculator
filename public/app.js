@@ -386,7 +386,7 @@ function renderFilesSection(p) {
 
   return `<div class="extras-section">
     <div class="extras-section-header"><h3>Files</h3>
-      <label class="btn btn-sm" style="cursor:pointer">Upload<input type="file" accept=".3mf,.stl,.gcode" style="display:none" onchange="uploadFile(${p.id}, this)" multiple></label>
+      <label class="btn btn-sm" style="cursor:pointer">Upload<input type="file" accept=".3mf,.stl,.gcode,.scad" style="display:none" onchange="uploadFile(${p.id}, this)" multiple></label>
     </div>
     <div class="file-list" id="file-list-${p.id}">
       ${fileRows || '<p style="color:var(--text-muted);font-size:12px">No files uploaded yet.</p>'}

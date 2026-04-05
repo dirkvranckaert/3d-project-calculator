@@ -439,8 +439,8 @@ app.post('/api/projects/:projectId/files', express.raw({ type: 'application/octe
   const filename = req.headers['x-filename'] || 'upload.3mf';
   const plateId = req.headers['x-plate-id'] ? parseInt(req.headers['x-plate-id']) : null;
   const ext = path.extname(filename).toLowerCase();
-  if (!['.3mf', '.stl', '.gcode'].includes(ext)) {
-    return res.status(400).json({ error: 'Only .3mf, .stl, .gcode files allowed' });
+  if (!['.3mf', '.stl', '.gcode', '.scad'].includes(ext)) {
+    return res.status(400).json({ error: 'Only .3mf, .stl, .gcode, .scad files allowed' });
   }
 
   const fileId = crypto.randomBytes(8).toString('hex');
