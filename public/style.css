@@ -171,9 +171,9 @@ body {
 /*  Main content                                                       */
 /* ================================================================== */
 .main {
-  max-width: 1200px;
+  max-width: 1600px;
   margin: 0 auto;
-  padding: 20px 16px;
+  padding: 20px 24px;
 }
 
 /* Search bar */
@@ -357,17 +357,16 @@ body {
 }
 .plates-table-wrap {
   overflow-x: auto;
-  margin: 0 -16px;
-  padding: 0 16px;
 }
 .plates-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  table-layout: auto;
 }
 .plates-table th {
   text-align: left;
-  padding: 6px 10px;
+  padding: 6px 8px;
   border-bottom: 2px solid var(--border);
   color: var(--text-muted);
   font-weight: 600;
@@ -377,11 +376,13 @@ body {
   white-space: nowrap;
 }
 .plates-table td {
-  padding: 8px 10px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
   white-space: nowrap;
 }
+/* Name column wraps */
+.plates-table td:first-child { white-space: normal; min-width: 120px; }
 .plates-table tr:last-child td { border-bottom: none; }
 .plates-table tr:hover td { background: var(--surface-hover); }
 .plates-table .num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -561,10 +562,11 @@ body {
 .ec-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 .ec-name { font-weight: 500; }
 .ec-qty input {
-  width: 60px;
+  width: 64px;
   text-align: center;
-  padding: 4px 6px;
-  font-size: 13px;
+  padding: 8px 6px;
+  font-size: 15px;
+  font-weight: 600;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -889,9 +891,69 @@ input:focus, select:focus, textarea:focus {
 /* ================================================================== */
 /*  Responsive                                                         */
 /* ================================================================== */
+
+/* Tablet */
+@media (max-width: 900px) {
+  .main { padding: 16px 12px; }
+  .summary-card-grid { grid-template-columns: repeat(2, 1fr); }
+  .pricing-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Mobile */
 @media (max-width: 600px) {
   .topbar-title { display: none; }
+  .main { padding: 12px 8px; }
   .form-grid { grid-template-columns: 1fr; }
   .pricing-grid { grid-template-columns: 1fr; }
   .cost-grid { grid-template-columns: 1fr; }
+  .project-grid { grid-template-columns: 1fr; }
+  .summary-card-grid { grid-template-columns: repeat(2, 1fr); }
+
+  /* Detail topbar */
+  .detail-topbar { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+  .detail-topbar-title h2 { font-size: 16px; }
+  .detail-topbar-actions { width: 100%; justify-content: flex-end; }
+
+  /* Hide less important columns on mobile */
+  .col-hide-mobile { display: none; }
+
+  /* Plates table: compact */
+  .plates-table th, .plates-table td { padding: 6px 6px; font-size: 12px; }
+  .plates-table td:first-child { min-width: 80px; }
+  .plate-actions { gap: 2px; }
+  .plate-actions .btn-icon { padding: 4px; }
+
+  /* Supply table: card layout */
+  .ec-table thead { display: none; }
+  .ec-table, .ec-table tbody, .ec-table tr, .ec-table td { display: block; width: 100%; }
+  .ec-table tr {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .ec-table td { border: none; padding: 0; }
+  .ec-name { flex: 1 1 100%; font-size: 14px; }
+  .ec-price { flex: 1; }
+  .ec-qty { flex: 0; }
+  .ec-qty input { width: 56px; padding: 8px 4px; }
+  .ec-total { flex: 1; text-align: right; font-weight: 600; }
+  .ec-action { flex: 0; }
+  .ec-table tfoot { display: none; }
+  .ec-total-badge { font-size: 14px; }
+
+  /* Add supply dropdown */
+  .ec-add-row { flex-direction: column; }
+  .ec-add-select { width: 100%; }
+
+  /* Pricing blocks */
+  .big-price { font-size: 22px; }
+  .actual-price-input { width: 100%; font-size: 18px; }
+
+  /* Section padding */
+  .plates-section, .cost-section, .extras-section, .pricing-section { padding: 12px; }
 }
