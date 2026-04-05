@@ -752,17 +752,22 @@ async function deleteFile(fileId, projectId) {
 /* ================================================================== */
 let import3mfProjectId = null;
 let import3mfData = null;
+let import3mfFile = null; // { name, buffer }
 
 async function import3mf(projectId, input) {
   const file = input.files?.[0];
   if (!file) return;
   input.value = '';
 
+  // Keep the file for uploading after import
+  const fileBuffer = await file.arrayBuffer();
+  import3mfFile = { name: file.name, buffer: fileBuffer };
+
   // Parse the 3MF server-side
   const res = await fetch('/api/parse-3mf', {
     method: 'POST',
     headers: { 'Content-Type': 'application/octet-stream' },
-    body: await file.arrayBuffer(),
+    body: fileBuffer,
   });
   if (res.status === 401) { window.location.replace('/login'); return; }
   if (!res.ok) { alert('Failed to parse 3MF file'); return; }
@@ -870,6 +875,17 @@ async function confirm3mfImport() {
   if (!platesToImport.length) { alert('No plates selected'); return; }
 
   await POST(`/api/projects/${import3mfProjectId}/import-3mf`, { plates: platesToImport });
+
+  // Also upload the 3MF as a project file
+  if (import3mfFile) {
+    await fetch(`/api/projects/${import3mfProjectId}/files`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': import3mfFile.name },
+      body: import3mfFile.buffer,
+    });
+    import3mfFile = null;
+  }
+
   closeModal('edit-dialog');
   await reloadSingleProject(import3mfProjectId);
 }
