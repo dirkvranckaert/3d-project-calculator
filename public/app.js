@@ -819,10 +819,14 @@ function show3mfPreview(parsed) {
 
   body.innerHTML = `<div class="import-plates-list">${rows.join('')}</div>`;
 
-  // Auto-select printer: match by name from 3MF
+  // Auto-select printer: fuzzy match by name (ignore spaces, case, "lab")
   if (parsed.printerName) {
-    const pName = parsed.printerName.toLowerCase();
-    const matchedPrinter = printers.find(pr => pName.includes(pr.name.toLowerCase()) || pr.name.toLowerCase().includes(pName));
+    const norm = s => s.toLowerCase().replace(/[\s\-_]+/g, '').replace('lab', '');
+    const pNorm = norm(parsed.printerName);
+    const matchedPrinter = printers.find(pr => {
+      const n = norm(pr.name);
+      return pNorm.includes(n) || n.includes(pNorm);
+    });
     if (matchedPrinter) {
       for (let i = 0; i < parsed.plates.length; i++) {
         body.querySelector(`[data-import-printer="${i}"]`).value = matchedPrinter.id;
