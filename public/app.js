@@ -277,7 +277,7 @@ function renderDetailView(p) {
 /*  Plates table                                                       */
 /* ================================================================== */
 function renderPlatesSection(p) {
-  const importBtn = `<label class="btn btn-sm" style="cursor:pointer">Import 3MF<input type="file" accept=".3mf" style="display:none" onchange="import3mf(${p.id}, this)"></label>`;
+  const importBtn = `<button class="btn btn-sm" type="button" onclick="document.getElementById('import3mf-${p.id}').click()">Import 3MF</button><input type="file" id="import3mf-${p.id}" accept=".3mf" style="display:none" onchange="import3mf(${p.id}, this)">`;
   if (!p.plates || p.plates.length === 0) {
     return `<div class="plates-section">
       <div class="plates-section-header"><h3>Print Plates</h3>
