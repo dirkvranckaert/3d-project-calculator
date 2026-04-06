@@ -1126,22 +1126,32 @@ select.inline-input { width: auto !important; max-width: 160px; text-align: left
 .import-plate-header {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   margin-bottom: 4px;
 }
-.import-plate-header-text {
-  display: flex;
-  align-items: center;
+.import-name-group {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: flex-end;
   gap: 10px;
-  flex: 1;
+  grid-column: 1 / -1 !important;
 }
+.import-name-field { flex: 1; }
 .import-plate-thumb {
-  width: 72px;
-  height: 72px;
+  width: 56px;
+  height: 56px;
   object-fit: cover;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   flex-shrink: 0;
+  cursor: pointer;
+  transition: all .2s ease;
+}
+.import-plate-thumb.expanded {
+  width: 240px;
+  height: 240px;
+  position: relative;
+  z-index: 10;
 }
 
 /* Archive */

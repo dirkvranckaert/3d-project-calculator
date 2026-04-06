@@ -909,15 +909,15 @@ function show3mfPreview(parsed) {
     const thumb = parsed.thumbnails?.[pl.index];
     return `<div class="import-plate-row" data-plate-idx="${i}">
       <div class="import-plate-header">
-        ${thumb ? `<img src="${thumb}" class="import-plate-thumb" alt="">` : ''}
-        <div class="import-plate-header-text">
-          <label class="toggle"><input type="checkbox" checked data-import-check="${i}"><span class="toggle-slider"></span></label>
-          <strong>Plate ${pl.index}</strong>
-          <span style="color:var(--text-muted);font-size:12px">${typeInfo}${vendorInfo ? ` / ${vendorInfo}` : ''}</span>
-        </div>
+        <label class="toggle"><input type="checkbox" checked data-import-check="${i}"><span class="toggle-slider"></span></label>
+        <strong>Plate ${pl.index}</strong>
+        <span style="color:var(--text-muted);font-size:12px">${typeInfo}${vendorInfo ? ` / ${vendorInfo}` : ''}</span>
       </div>
       <div class="form-grid" style="margin-top:8px">
-        <div class="form-group"><label>Name</label><input type="text" data-import-name="${i}" value="${esc(nameDefault)}"></div>
+        <div class="form-group import-name-group">
+          ${thumb ? `<img src="${thumb}" class="import-plate-thumb" alt="" onclick="this.classList.toggle('expanded')">` : ''}
+          <div class="import-name-field"><label>Name</label><input type="text" data-import-name="${i}" value="${esc(nameDefault)}"></div>
+        </div>
         <div class="form-group"><label>Print Time</label><span style="font-size:14px;font-weight:600;padding:8px 0;display:block">${fmtTime(pl.printTimeMinutes)}</span></div>
         <div class="form-group"><label>Plastic (g)</label><span style="font-size:14px;font-weight:600;padding:8px 0;display:block">${fmtGrams(pl.weightGrams)}</span></div>
         <div class="form-group"><label>Items per Plate</label><input type="number" min="1" value="${pl.objectCount || 1}" data-import-items="${i}"></div>
