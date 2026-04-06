@@ -104,7 +104,7 @@ window.addEventListener('hashchange', () => render());
 /*  Data loading                                                       */
 /* ================================================================== */
 async function loadAll() {
-  const projUrl = showArchived ? '/api/projects?archived=1' : '/api/projects';
+  const projUrl = '/api/projects?lite=1' + (showArchived ? '&archived=1' : '');
   [projects, printers, materials, extraCostItems, settings] = await Promise.all([
     GET(projUrl), GET('/api/printers'), GET('/api/materials'),
     GET('/api/extra-costs'), GET('/api/settings'),
@@ -115,7 +115,7 @@ async function loadAll() {
 }
 
 async function reloadProjects() {
-  projects = await GET(showArchived ? '/api/projects?archived=1' : '/api/projects');
+  projects = await GET('/api/projects?lite=1' + (showArchived ? '&archived=1' : ''));
   GET('/api/projects/archived-count').then(r => { archivedCountCache = r.count; });
   render();
 }
@@ -725,9 +725,12 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
 async function deleteProject(id, e) {
   const anchor = e?.currentTarget || e?.target || document.body;
   if (!await inlineConfirm('Delete this project and all its plates?', anchor)) return;
-  await DEL(`/api/projects/${id}`);
+  // Remove from UI immediately
   projects = projects.filter(p => p.id !== id);
-  navigate('#/');
+  window.location.hash = '#/';
+  render();
+  // Delete in background
+  DEL(`/api/projects/${id}`);
 }
 
 async function updateActualPrice(projectId, value) {

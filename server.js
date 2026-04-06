@@ -296,9 +296,58 @@ app.get('/api/projects', (req, res) => {
     ? 'SELECT * FROM projects ORDER BY archived ASC, updated_at DESC'
     : 'SELECT * FROM projects WHERE archived = 0 ORDER BY updated_at DESC';
   const projects = db.prepare(sql).all();
-  const result = projects.map(p => enrichProject(db, p));
+  const lite = req.query.lite === '1';
+  const result = projects.map(p => lite ? enrichProjectLite(db, p) : enrichProject(db, p));
   res.json(result);
 });
+
+function enrichProjectLite(db, project) {
+  // Lightweight enrichment for list view — no plate-level details, just totals
+  const plates = db.prepare(`
+    SELECT pp.*,
+      m.material_type, m.price_per_kg as material_price_per_kg,
+      p.purchase_price as printer_purchase_price,
+      p.earn_back_months as printer_earn_back_months
+    FROM project_plates pp
+    LEFT JOIN printers p ON pp.printer_id = p.id
+    LEFT JOIN materials m ON pp.material_id = m.id
+    WHERE pp.project_id = ?
+    ORDER BY pp.sort_order, pp.id
+  `).all(project.id);
+
+  // Add kwh lookup
+  for (const plate of plates) {
+    plate.printer_kwh_per_hour = 0;
+    if (plate.printer_id) {
+      const mt = plate.material_type || 'PLA';
+      let elec = db.prepare('SELECT kwh_per_hour FROM printer_electricity WHERE printer_id = ? AND material_type = ?').get(plate.printer_id, mt);
+      if (!elec) elec = db.prepare('SELECT kwh_per_hour FROM printer_electricity WHERE printer_id = ? AND material_type = ?').get(plate.printer_id, mt.split(/\s/)[0]);
+      if (!elec) elec = db.prepare('SELECT kwh_per_hour FROM printer_electricity WHERE printer_id = ? AND material_type = ?').get(plate.printer_id, 'PLA');
+      if (elec) plate.printer_kwh_per_hour = elec.kwh_per_hour;
+    }
+  }
+
+  const extras = db.prepare(`
+    SELECT pec.*, eci.price_excl_vat FROM project_extra_costs pec
+    JOIN extra_cost_items eci ON pec.extra_cost_id = eci.id WHERE pec.project_id = ?
+  `).all(project.id);
+
+  const images = db.prepare('SELECT id, is_primary FROM project_images WHERE project_id = ? ORDER BY is_primary DESC LIMIT 1').all(project.id);
+
+  const settings = getAllSettings(db);
+  const calculation = calc.calculateProject({
+    plates, extras, settings,
+    itemsPerSet: project.items_per_set,
+    actualSalesPrice: project.actual_sales_price,
+  });
+
+  return {
+    ...project,
+    plates: plates.map(p => ({ id: p.id, name: p.name, enabled: p.enabled })),
+    images,
+    calculation,
+  };
+}
 
 app.get('/api/projects/:id', (req, res) => {
   const db = getDb();
