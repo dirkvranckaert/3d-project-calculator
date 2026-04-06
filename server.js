@@ -283,9 +283,13 @@ function enrichProject(db, project) {
   return { ...project, plates, extras, files, calculation };
 }
 
-app.get('/api/projects', (_req, res) => {
+app.get('/api/projects', (req, res) => {
   const db = getDb();
-  const projects = db.prepare('SELECT * FROM projects ORDER BY updated_at DESC').all();
+  const includeArchived = req.query.archived === '1';
+  const sql = includeArchived
+    ? 'SELECT * FROM projects ORDER BY archived ASC, updated_at DESC'
+    : 'SELECT * FROM projects WHERE archived = 0 ORDER BY updated_at DESC';
+  const projects = db.prepare(sql).all();
   const result = projects.map(p => enrichProject(db, p));
   res.json(result);
 });
@@ -357,6 +361,14 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
 
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(newId);
   res.status(201).json(enrichProject(db, project));
+});
+
+app.patch('/api/projects/:id/archive', (req, res) => {
+  const db = getDb();
+  const project = db.prepare('SELECT archived FROM projects WHERE id = ?').get(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Not found' });
+  db.prepare('UPDATE projects SET archived = ? WHERE id = ?').run(project.archived ? 0 : 1, req.params.id);
+  res.json({ ok: true, archived: !project.archived });
 });
 
 app.delete('/api/projects/:id', (req, res) => {
@@ -595,6 +607,74 @@ app.post('/api/projects/:projectId/import-3mf', (req, res) => {
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
   const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
   res.status(201).json(enrichProject(db, updated));
+});
+
+/* ------------------------------------------------------------------ */
+/*  Price impact simulation                                            */
+/* ------------------------------------------------------------------ */
+app.post('/api/materials/:id/price-impact', (req, res) => {
+  const db = getDb();
+  const material = db.prepare('SELECT * FROM materials WHERE id = ?').get(req.params.id);
+  if (!material) return res.status(404).json({ error: 'Material not found' });
+  const newPrice = parseFloat(req.body.new_price_per_kg);
+  if (isNaN(newPrice)) return res.status(400).json({ error: 'new_price_per_kg required' });
+
+  const oldPrice = material.price_per_kg;
+  const allSettings = getAllSettings(db);
+
+  // Find all projects that use this material
+  const projectIds = db.prepare(
+    'SELECT DISTINCT project_id FROM project_plates WHERE material_id = ?'
+  ).all(req.params.id).map(r => r.project_id);
+
+  const impacts = [];
+  for (const pid of projectIds) {
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+    if (!project) continue;
+    const enriched = enrichProject(db, project);
+
+    // Calculate with current price
+    const currentPricing = enriched.calculation?.pricing;
+    if (!currentPricing) continue;
+
+    // Calculate with new price: re-enrich with overridden material price
+    // Temporarily override the material price
+    db.prepare('UPDATE materials SET price_per_kg = ? WHERE id = ?').run(newPrice, req.params.id);
+    const newEnriched = enrichProject(db, db.prepare('SELECT * FROM projects WHERE id = ?').get(pid));
+    // Restore original price
+    db.prepare('UPDATE materials SET price_per_kg = ? WHERE id = ?').run(oldPrice, req.params.id);
+
+    const newPricing = newEnriched.calculation?.pricing;
+    if (!newPricing) continue;
+
+    impacts.push({
+      projectId: pid,
+      projectName: project.name,
+      customerName: project.customer_name,
+      archived: !!project.archived,
+      actualSalesPrice: project.actual_sales_price,
+      current: {
+        productionCost: currentPricing.productionCost,
+        suggestedPrice: currentPricing.suggestedPrice,
+        marginPct: project.actual_sales_price
+          ? enriched.calculation.actualMargin?.marginPct
+          : currentPricing.suggestedMarginPct,
+      },
+      simulated: {
+        productionCost: newPricing.productionCost,
+        suggestedPrice: newPricing.suggestedPrice,
+        marginPct: project.actual_sales_price
+          ? newEnriched.calculation.actualMargin?.marginPct
+          : newPricing.suggestedMarginPct,
+      },
+    });
+  }
+
+  res.json({
+    material: { id: material.id, name: material.name, oldPrice, newPrice },
+    affectedProjects: impacts.length,
+    impacts: impacts.sort((a, b) => (a.simulated.marginPct || 0) - (b.simulated.marginPct || 0)),
+  });
 });
 
 /* ------------------------------------------------------------------ */

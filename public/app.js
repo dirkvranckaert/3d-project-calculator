@@ -12,6 +12,7 @@ let editingProjectId = null;
 let editingPlateId = null;
 let editingPlateProjectId = null;
 let searchQuery = '';
+let showArchived = false;
 let currentView = 'list'; // 'list' or 'detail'
 let currentProjectId = null;
 
@@ -102,8 +103,9 @@ window.addEventListener('hashchange', () => render());
 /*  Data loading                                                       */
 /* ================================================================== */
 async function loadAll() {
+  const projUrl = showArchived ? '/api/projects?archived=1' : '/api/projects';
   [projects, printers, materials, extraCostItems, settings] = await Promise.all([
-    GET('/api/projects'), GET('/api/printers'), GET('/api/materials'),
+    GET(projUrl), GET('/api/printers'), GET('/api/materials'),
     GET('/api/extra-costs'), GET('/api/settings'),
   ]);
   applyTheme(settings.theme || 'system');
@@ -111,7 +113,7 @@ async function loadAll() {
 }
 
 async function reloadProjects() {
-  projects = await GET('/api/projects');
+  projects = await GET(showArchived ? '/api/projects?archived=1' : '/api/projects');
   render();
 }
 
@@ -168,8 +170,15 @@ function renderListView() {
     );
   }
 
+  const archivedCount = projects.filter(p => p.archived).length;
+  const archiveToggle = archivedCount > 0 || showArchived
+    ? `<label class="archive-toggle"><input type="checkbox" ${showArchived ? 'checked' : ''} onchange="toggleShowArchived(this.checked)"> Show archived (${archivedCount})</label>`
+    : (showArchived ? `<label class="archive-toggle"><input type="checkbox" checked onchange="toggleShowArchived(this.checked)"> Show archived (0)</label>` : '');
   const searchBar = `<div class="search-bar">
-    <input type="text" id="search-input" placeholder="Search projects..." value="${esc(searchQuery)}" oninput="onSearch(this.value)">
+    <div class="search-bar-row">
+      <input type="text" id="search-input" placeholder="Search projects..." value="${esc(searchQuery)}" oninput="onSearch(this.value)">
+      ${archiveToggle}
+    </div>
   </div>`;
 
   if (filtered.length === 0) {
@@ -198,10 +207,10 @@ function renderSummaryCard(p) {
   const marginPct = hasActual ? c?.actualMargin?.marginPct : pr.suggestedMarginPct;
 
   return `
-  <div class="summary-card" onclick="navigate('#/project/${p.id}')" oncontextmenu="showProjectContextMenu(event, ${p.id})">
+  <div class="summary-card ${p.archived ? 'summary-card-archived' : ''}" onclick="navigate('#/project/${p.id}')" oncontextmenu="showProjectContextMenu(event, ${p.id})">
     <div class="summary-card-top">
       <div class="summary-card-title">
-        <span class="project-name">${esc(p.name)}</span>
+        <span class="project-name">${esc(p.name)}</span>${p.archived ? ' <span class="archived-badge">ARCHIVED</span>' : ''}
         ${p.customer_name ? `<span class="project-customer">${esc(p.customer_name)}</span>` : ''}
       </div>
       <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
@@ -495,10 +504,13 @@ function showProjectContextMenu(e, projectId, fromButton) {
   const menu = document.createElement('div');
   menu.className = 'context-menu';
   menu.id = 'context-menu';
+  const p = projects.find(x => x.id === projectId);
+  const archiveLabel = p?.archived ? 'Unarchive' : 'Archive';
   menu.innerHTML = `
     <button onclick="navigateToProject(${projectId})">Open</button>
     <button onclick="duplicateProject(${projectId})">Duplicate</button>
     <button onclick="openProjectModal(${projectId})">Edit</button>
+    <button onclick="toggleArchive(${projectId})">${archiveLabel}</button>
     <button class="danger" onclick="deleteProject(${projectId},event)">Delete</button>`;
   document.body.appendChild(menu);
   // Position
@@ -515,6 +527,17 @@ function closeContextMenu() {
 }
 
 function navigateToProject(id) { closeContextMenu(); navigate(`#/project/${id}`); }
+
+async function toggleArchive(id) {
+  closeContextMenu();
+  await PATCH(`/api/projects/${id}/archive`);
+  await reloadProjects();
+}
+
+async function toggleShowArchived(checked) {
+  showArchived = checked;
+  await reloadProjects();
+}
 
 async function duplicateProject(id) {
   closeContextMenu();
@@ -1119,6 +1142,7 @@ function renderMaterialsSettings() {
     <div class="name">${esc(m.name)}${m.color ? ` <span style="color:var(--text-muted)">(${esc(m.color)})</span>`:''}</div>
     <div class="meta">${m.material_type} | ${fmt(m.price_per_kg)}/kg | ${fmtWeight(m.roll_weight_g)} roll</div>
   </div><div style="display:flex;gap:4px">
+    <button class="btn btn-sm" onclick="showPriceImpact(${m.id})">What-if</button>
     <button class="btn btn-sm" onclick="editMaterial(${m.id})">Edit</button>
     <button class="btn btn-sm btn-danger" onclick="deleteMaterialItem(${m.id},event)">Del</button>
   </div></div>`).join('');
@@ -1144,6 +1168,54 @@ window.saveMaterial = async function(id) {
   if (id) await PUT(`/api/materials/${id}`, data); else await POST('/api/materials', data);
   closeModal('edit-dialog'); materials = await GET('/api/materials'); renderSettingsTab('materials'); await reloadProjects();
 };
+window.showPriceImpact = async function(materialId) {
+  const m = materials.find(x => x.id === materialId);
+  if (!m) return;
+  document.getElementById('edit-dialog-title').textContent = `Price Impact: ${m.name}`;
+  document.getElementById('edit-dialog-body').innerHTML = `
+    <div class="price-impact-form">
+      <p style="margin-bottom:12px">Simulate a price change for <strong>${esc(m.name)}</strong> and see how it affects all projects using this material.</p>
+      <div class="settings-row"><label>Current price/kg</label><span style="font-weight:600">${fmt(m.price_per_kg)}</span></div>
+      <div class="settings-row"><label>New price/kg</label><input type="number" id="pi-new-price" step="0.01" value="${m.price_per_kg}"></div>
+      <div style="margin-top:12px"><button class="btn btn-primary" onclick="runPriceImpact(${materialId})">Simulate</button></div>
+    </div>
+    <div id="pi-results"></div>`;
+  document.getElementById('btn-edit-dialog-save').onclick = () => closeModal('edit-dialog');
+  document.getElementById('btn-edit-dialog-save').textContent = 'Close';
+  openModal('edit-dialog');
+};
+
+window.runPriceImpact = async function(materialId) {
+  const newPrice = parseFloat(document.getElementById('pi-new-price').value);
+  if (isNaN(newPrice)) return;
+  const result = await POST(`/api/materials/${materialId}/price-impact`, { new_price_per_kg: newPrice });
+  const el = document.getElementById('pi-results');
+  if (!result.impacts.length) {
+    el.innerHTML = '<p style="color:var(--text-muted);margin-top:12px">No projects use this material.</p>';
+    return;
+  }
+  const diff = result.material.newPrice - result.material.oldPrice;
+  const diffLabel = diff > 0 ? `+${fmt(diff)}` : fmt(diff);
+  el.innerHTML = `
+    <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+      <h4 style="margin-bottom:8px">${result.affectedProjects} project${result.affectedProjects > 1 ? 's' : ''} affected (${diffLabel}/kg)</h4>
+      <table class="ec-table">
+        <thead><tr><th>Project</th><th>Production</th><th>Suggested</th><th>Margin</th><th>Change</th></tr></thead>
+        <tbody>${result.impacts.map(i => {
+          const marginDiff = (i.simulated.marginPct || 0) - (i.current.marginPct || 0);
+          const indicator = marginDiff < -2 ? 'red' : marginDiff < 0 ? 'orange' : 'green';
+          return `<tr${i.archived ? ' style="opacity:.5"' : ''}>
+            <td>${esc(i.projectName)}${i.archived ? ' <span class="archived-badge">ARCHIVED</span>' : ''}</td>
+            <td class="num">${fmt(i.current.productionCost)} → ${fmt(i.simulated.productionCost)}</td>
+            <td class="num">${fmt(i.current.suggestedPrice)} → ${fmt(i.simulated.suggestedPrice)}</td>
+            <td class="num"><span class="margin-badge ${indicator}">${fmtPct(i.simulated.marginPct)}</span></td>
+            <td class="num" style="color:var(--${indicator})">${marginDiff > 0 ? '+' : ''}${marginDiff.toFixed(2)}%</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>`;
+};
+
 window.deleteMaterialItem = async function(id, e) { const a = e?.currentTarget||e?.target||document.body; if (!await inlineConfirm('Delete this material?', a)) return; await DEL(`/api/materials/${id}`); materials = await GET('/api/materials'); renderSettingsTab('materials'); };
 
 function renderExtrasSettings() {

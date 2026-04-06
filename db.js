@@ -81,6 +81,7 @@ function bootstrap(db) {
       actual_sales_price REAL,
       tags               TEXT NOT NULL DEFAULT '',
       notes              TEXT,
+      archived           INTEGER NOT NULL DEFAULT 0,
       created_at         TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -145,6 +146,7 @@ function migrate(db) {
   addCol('project_plates', 'enabled', 'INTEGER NOT NULL DEFAULT 1');
   addCol('projects', 'notes', 'TEXT');
   addCol('project_plates', 'colors', 'TEXT');
+  addCol('projects', 'archived', 'INTEGER NOT NULL DEFAULT 0');
 }
 
 /* ------------------------------------------------------------------ */

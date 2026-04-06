@@ -1060,6 +1060,42 @@ select.inline-input { width: auto !important; max-width: 160px; text-align: left
   margin-bottom: 4px;
 }
 
+/* Archive */
+.summary-card-archived {
+  opacity: 0.5;
+  border-style: dashed;
+}
+.summary-card-archived:hover { opacity: 0.7; }
+.archived-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--text-muted);
+  color: var(--surface);
+  vertical-align: middle;
+}
+.archive-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  margin: 0;
+}
+.archive-toggle input { width: auto; margin: 0; }
+.search-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.search-bar-row input { flex: 1; }
+
 /* Mobile-only elements */
 .mobile-only { display: none; }
 
