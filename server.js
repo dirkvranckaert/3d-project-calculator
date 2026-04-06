@@ -647,6 +647,12 @@ app.post('/api/parse-3mf', express.raw({ type: '*/*', limit: '100mb' }), (req, r
       return res.status(400).json({ error: 'Empty body — no file received' });
     }
     const result = parse3mf(req.body);
+    // Also extract thumbnails as base64 for preview
+    const thumbs = extractThumbnails(req.body);
+    result.thumbnails = {};
+    for (const t of thumbs) {
+      result.thumbnails[t.plateIndex] = 'data:image/png;base64,' + t.buffer.toString('base64');
+    }
     res.json(result);
   } catch (err) {
     console.error('3MF parse error:', err.message);

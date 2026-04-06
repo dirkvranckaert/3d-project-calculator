@@ -1108,6 +1108,13 @@ select.inline-input { width: auto !important; max-width: 160px; text-align: left
   flex-shrink: 0;
 }
 
+/* Themed scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+* { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
+
 /* 3MF import preview */
 .import-plates-list { display: flex; flex-direction: column; gap: 12px; }
 .import-plate-row {
@@ -1119,8 +1126,22 @@ select.inline-input { width: auto !important; max-width: 160px; text-align: left
 .import-plate-header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   margin-bottom: 4px;
+}
+.import-plate-header-text {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
+.import-plate-thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 /* Archive */

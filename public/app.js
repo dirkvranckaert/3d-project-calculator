@@ -836,42 +836,60 @@ let import3mfProjectId = null;
 let import3mfData = null;
 let import3mfFile = null; // { name, buffer }
 
-async function import3mf(projectId, input) {
+function import3mf(projectId, input) {
   const file = input.files?.[0];
   if (!file) return;
   input.value = '';
 
-  // Keep the file for uploading after import
-  const fileBuffer = await file.arrayBuffer();
-  import3mfFile = { name: file.name, buffer: fileBuffer };
+  // Show progress in the edit dialog
+  document.getElementById('edit-dialog-title').textContent = 'Importing 3MF...';
+  document.getElementById('edit-dialog-body').innerHTML = `
+    <div style="text-align:center;padding:24px 0">
+      <p style="margin-bottom:12px">${esc(file.name)} (${fmtFileSize(file.size)})</p>
+      <div class="file-progress" style="width:100%;height:8px;margin:0 auto 8px"><div class="file-progress-bar" id="import-progress-bar"></div></div>
+      <span id="import-progress-pct" style="font-size:13px;color:var(--text-muted)">Uploading... 0%</span>
+    </div>`;
+  document.getElementById('btn-edit-dialog-save').style.display = 'none';
+  openModal('edit-dialog');
 
-  // Parse the 3MF server-side
-  const res = await fetch('/api/parse-3mf', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream' },
-    body: fileBuffer,
+  const fileBuffer = file;
+  import3mfFile = { name: file.name };
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/parse-3mf');
+  xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+  xhr.upload.addEventListener('progress', e => {
+    if (!e.lengthComputable) return;
+    const pct = Math.round((e.loaded / e.total) * 100);
+    const bar = document.getElementById('import-progress-bar');
+    const label = document.getElementById('import-progress-pct');
+    if (bar) bar.style.width = pct + '%';
+    if (label) label.textContent = pct < 100 ? `Uploading... ${pct}%` : 'Parsing...';
   });
-  if (res.status === 401) { window.location.replace('/login'); return; }
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    alert('Failed to parse 3MF file: ' + (err.error || res.statusText));
-    return;
-  }
-  const parsed = await res.json();
 
-  if (!parsed.plates?.length) {
-    alert('No plates found in this 3MF file.');
-    return;
-  }
+  xhr.addEventListener('load', async () => {
+    document.getElementById('btn-edit-dialog-save').style.display = '';
+    if (xhr.status === 401) { window.location.replace('/login'); return; }
+    let parsed;
+    try { parsed = JSON.parse(xhr.responseText); } catch { alert('Failed to parse server response'); closeModal('edit-dialog'); return; }
+    if (xhr.status >= 400) { alert('Failed to parse 3MF: ' + (parsed.error || '')); closeModal('edit-dialog'); return; }
+    if (!parsed.plates?.length) { alert('No plates found in this 3MF file.'); closeModal('edit-dialog'); return; }
+    if (!parsed.sliced) { alert('This 3MF is not sliced. Please slice it first.'); closeModal('edit-dialog'); return; }
 
-  if (!parsed.sliced) {
-    alert('This 3MF is not sliced — no print time or filament data available. Please slice it first in BambuStudio/OrcaSlicer.');
-    return;
-  }
+    // Store raw buffer for later file upload
+    import3mfFile.buffer = await file.arrayBuffer();
+    import3mfProjectId = projectId;
+    import3mfData = parsed;
+    show3mfPreview(parsed);
+  });
 
-  import3mfProjectId = projectId;
-  import3mfData = parsed;
-  show3mfPreview(parsed);
+  xhr.addEventListener('error', () => {
+    alert('Upload failed — network error');
+    closeModal('edit-dialog');
+  });
+
+  xhr.send(file);
 }
 
 function show3mfPreview(parsed) {
@@ -884,11 +902,15 @@ function show3mfPreview(parsed) {
     const vendorInfo = pl.filamentVendors?.length ? pl.filamentVendors.join(', ') : '';
     const nameDefault = pl.plateName || pl.objects.join(', ') || `Plate ${pl.index}`;
 
+    const thumb = parsed.thumbnails?.[pl.index];
     return `<div class="import-plate-row" data-plate-idx="${i}">
       <div class="import-plate-header">
-        <label class="toggle"><input type="checkbox" checked data-import-check="${i}"><span class="toggle-slider"></span></label>
-        <strong>Plate ${pl.index}</strong>
-        <span style="color:var(--text-muted);font-size:12px">${typeInfo}${vendorInfo ? ` / ${vendorInfo}` : ''}</span>
+        ${thumb ? `<img src="${thumb}" class="import-plate-thumb" alt="">` : ''}
+        <div class="import-plate-header-text">
+          <label class="toggle"><input type="checkbox" checked data-import-check="${i}"><span class="toggle-slider"></span></label>
+          <strong>Plate ${pl.index}</strong>
+          <span style="color:var(--text-muted);font-size:12px">${typeInfo}${vendorInfo ? ` / ${vendorInfo}` : ''}</span>
+        </div>
       </div>
       <div class="form-grid" style="margin-top:8px">
         <div class="form-group"><label>Name</label><input type="text" data-import-name="${i}" value="${esc(nameDefault)}"></div>
