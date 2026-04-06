@@ -148,6 +148,7 @@ function render() {
     currentProjectId = null;
     newBtn.style.display = '';
     el.innerHTML = renderListView();
+    setTimeout(attachLongPress, 0);
   }
 }
 
@@ -209,7 +210,7 @@ function renderSummaryCard(p) {
   const marginPct = hasActual ? c?.actualMargin?.marginPct : pr.suggestedMarginPct;
 
   return `
-  <div class="summary-card ${p.archived ? 'summary-card-archived' : ''}" onclick="navigate('#/project/${p.id}')" oncontextmenu="showProjectContextMenu(event, ${p.id})">
+  <div class="summary-card ${p.archived ? 'summary-card-archived' : ''}" data-project-id="${p.id}" onclick="navigate('#/project/${p.id}')" oncontextmenu="showProjectContextMenu(event, ${p.id})">
     ${primaryImage ? `<div class="summary-card-img"><img src="/api/images/${primaryImage.id}" alt=""></div>` : ''}
     <div class="summary-card-top">
       <div class="summary-card-title">
@@ -551,6 +552,10 @@ async function saveProjectNotes(projectId, value) {
 function showProjectContextMenu(e, projectId, fromButton) {
   e.preventDefault();
   e.stopPropagation();
+  if (isTouchDevice || window.innerWidth <= 480) {
+    showProjectBottomSheet(projectId);
+    return;
+  }
   closeContextMenu();
   const menu = document.createElement('div');
   menu.className = 'context-menu';
@@ -1455,6 +1460,72 @@ function renderTagsPills(tags) {
   const list = tags.split(',').map(t => t.trim()).filter(Boolean);
   if (!list.length) return '';
   return `<div class="tags-list">${list.map(t => `<span class="tag-pill">${esc(t)}</span>`).join('')}</div>`;
+}
+
+/* ================================================================== */
+/*  Touch & bottom sheet                                               */
+/* ================================================================== */
+let isTouchDevice = false;
+document.addEventListener('touchstart', () => { isTouchDevice = true; }, { once: true, passive: true });
+
+function showBottomSheet(html) {
+  const overlay = document.getElementById('bottom-sheet-overlay');
+  const sheet = document.getElementById('bottom-sheet');
+  document.getElementById('bottom-sheet-content').innerHTML = html;
+  overlay.classList.add('open');
+  sheet.offsetHeight; // force reflow
+  sheet.classList.add('open');
+  overlay.addEventListener('click', hideBottomSheet, { once: true });
+}
+
+function hideBottomSheet() {
+  document.getElementById('bottom-sheet').classList.remove('open');
+  document.getElementById('bottom-sheet-overlay').classList.remove('open');
+}
+
+// Swipe down to dismiss
+(function() {
+  const sheet = document.getElementById('bottom-sheet');
+  let startY = 0;
+  sheet.addEventListener('touchstart', e => { startY = e.touches[0].clientY; }, { passive: true });
+  sheet.addEventListener('touchmove', e => {
+    if (e.touches[0].clientY - startY > 60) hideBottomSheet();
+  }, { passive: true });
+})();
+
+function addLongPress(el, callback, duration = 500) {
+  let timer = null, triggered = false;
+  el.addEventListener('touchstart', e => {
+    triggered = false;
+    timer = setTimeout(() => { triggered = true; if (navigator.vibrate) navigator.vibrate(30); callback(e); }, duration);
+  }, { passive: true });
+  el.addEventListener('touchmove', () => { if (timer) { clearTimeout(timer); timer = null; } }, { passive: true });
+  el.addEventListener('touchend', e => { if (timer) { clearTimeout(timer); timer = null; } if (triggered) { e.preventDefault(); triggered = false; } });
+  el.addEventListener('touchcancel', () => { if (timer) { clearTimeout(timer); timer = null; } triggered = false; }, { passive: true });
+}
+
+// After render, attach long-press to project cards
+function attachLongPress() {
+  document.querySelectorAll('.summary-card[data-project-id]').forEach(el => {
+    addLongPress(el, () => {
+      const id = parseInt(el.dataset.projectId);
+      showProjectBottomSheet(id);
+    });
+  });
+}
+
+function showProjectBottomSheet(projectId) {
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return;
+  const archiveLabel = p.archived ? 'Unarchive' : 'Archive';
+  showBottomSheet(`
+    <div class="bottom-sheet-header">${esc(p.name)}</div>
+    <button class="bottom-sheet-item" onclick="hideBottomSheet();navigateToProject(${projectId})">Open</button>
+    <button class="bottom-sheet-item" onclick="hideBottomSheet();duplicateProject(${projectId})">Duplicate</button>
+    <button class="bottom-sheet-item" onclick="hideBottomSheet();openProjectModal(${projectId})">Edit</button>
+    <button class="bottom-sheet-item" onclick="hideBottomSheet();toggleArchive(${projectId})">${archiveLabel}</button>
+    <button class="bottom-sheet-item danger" onclick="hideBottomSheet();deleteProject(${projectId},event)">Delete</button>
+  `);
 }
 
 /* ================================================================== */

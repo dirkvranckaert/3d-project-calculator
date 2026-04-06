@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>3D Project Calculator</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="manifest" href="manifest.json">
@@ -164,6 +164,13 @@
         <button class="btn btn-primary" id="btn-edit-dialog-save">Save</button>
       </div>
     </div>
+  </div>
+
+  <!-- Bottom sheet (mobile context menu) -->
+  <div id="bottom-sheet-overlay" class="bottom-sheet-overlay"></div>
+  <div id="bottom-sheet" class="bottom-sheet">
+    <div class="bottom-sheet-handle"></div>
+    <div id="bottom-sheet-content"></div>
   </div>
 
   <script src="app.js"></script>
