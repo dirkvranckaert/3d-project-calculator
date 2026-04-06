@@ -1470,41 +1470,13 @@ function collectColors(idPrefix) {
   });
 }
 
-// Nearest-color naming: find closest named color by Euclidean distance in RGB space
-const NAMED_COLORS = [
-  ['#000000','Black'],['#FFFFFF','White'],['#808080','Gray'],['#C0C0C0','Silver'],
-  ['#404040','Dark Gray'],['#FF0000','Red'],['#8B0000','Dark Red'],['#FF6347','Tomato'],
-  ['#CC0000','Crimson'],['#FF4500','Orange Red'],['#FF8C00','Dark Orange'],['#FFA500','Orange'],
-  ['#FFD700','Gold'],['#FFFF00','Yellow'],['#FFFACD','Lemon'],['#F0E68C','Khaki'],
-  ['#BDB76B','Dark Khaki'],['#808000','Olive'],['#006400','Dark Green'],['#008000','Green'],
-  ['#228B22','Forest Green'],['#32CD32','Lime Green'],['#00FF00','Lime'],['#90EE90','Light Green'],
-  ['#2E8B57','Sea Green'],['#008080','Teal'],['#20B2AA','Light Sea Green'],
-  ['#00CED1','Dark Turquoise'],['#00FFFF','Cyan'],['#87CEEB','Sky Blue'],
-  ['#4682B4','Steel Blue'],['#1E90FF','Dodger Blue'],['#0000FF','Blue'],
-  ['#000080','Navy'],['#191970','Midnight Blue'],['#4B0082','Indigo'],
-  ['#800080','Purple'],['#9400D3','Dark Violet'],['#8A2BE2','Blue Violet'],
-  ['#FF00FF','Magenta'],['#FF69B4','Hot Pink'],['#FF1493','Deep Pink'],
-  ['#FFC0CB','Pink'],['#FFB6C1','Light Pink'],['#FFDEAD','Navajo White'],
-  ['#DEB887','Burlywood'],['#D2B48C','Tan'],['#BC8F8F','Rosy Brown'],
-  ['#F4A460','Sandy Brown'],['#CD853F','Peru'],['#D2691E','Chocolate'],
-  ['#8B4513','Saddle Brown'],['#A0522D','Sienna'],['#A52A2A','Brown'],
-  ['#F5F5DC','Beige'],['#FFFFF0','Ivory'],['#FFFAF0','Floral White'],
-  ['#FAF0E6','Linen'],['#FFF8DC','Cornsilk'],['#2F4F4F','Dark Slate Gray'],
-];
-function hexToRgb(hex) {
-  const h = hex.replace('#', '');
-  return [parseInt(h.substring(0,2),16), parseInt(h.substring(2,4),16), parseInt(h.substring(4,6),16)];
-}
+// Color naming via ntc.js (Name that Color — 1566 colors, HSL-based matching)
 function hexToName(hex) {
   if (!hex) return '';
-  const [r, g, b] = hexToRgb(hex);
-  let best = '', bestDist = Infinity;
-  for (const [h, name] of NAMED_COLORS) {
-    const [nr, ng, nb] = hexToRgb(h);
-    const d = (r-nr)**2 + (g-ng)**2 + (b-nb)**2;
-    if (d < bestDist) { bestDist = d; best = name; }
-  }
-  return best;
+  try {
+    const result = ntc.name(hex);
+    return result[1] || hex; // result[1] is the color name
+  } catch { return hex; }
 }
 
 function renderTagsPills(tags) {
