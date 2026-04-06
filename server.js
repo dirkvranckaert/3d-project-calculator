@@ -29,7 +29,7 @@ function parseCookie(req) {
 
 function requireAuth(req, res, next) {
   // Public paths
-  const pub = ['/login', '/favicon.svg', '/favicon.ico'];
+  const pub = ['/login', '/favicon.svg', '/favicon.ico', '/manifest.json', '/sw.js'];
   if (pub.includes(req.path)) return next();
 
   const token = parseCookie(req);
