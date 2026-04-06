@@ -148,7 +148,7 @@ body {
 .btn-primary:hover { background: var(--primary-h); border-color: var(--primary-h); }
 .btn-danger { color: var(--danger); border-color: var(--danger); }
 .btn-danger:hover { background: var(--danger-tint); }
-.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn-sm { padding: 4px 10px; font-size: 12px; line-height: 1.5; }
 .btn-icon {
   padding: 6px;
   border: none;
