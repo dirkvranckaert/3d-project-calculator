@@ -122,6 +122,7 @@ async function reloadProjects() {
 
 async function reloadSingleProject(id) {
   const updated = await GET(`/api/projects/${id}`);
+  updated._full = true;
   const idx = projects.findIndex(p => p.id === id);
   if (idx >= 0) projects[idx] = updated;
   else projects.unshift(updated);
@@ -142,6 +143,17 @@ function render() {
     newBtn.style.display = 'none';
     const p = projects.find(x => x.id === route.projectId);
     if (!p) { el.innerHTML = `<div class="empty-state"><p>Project not found.</p><button class="btn btn-primary" onclick="navigate('#/')">Back to list</button></div>`; return; }
+    // If lite data (no full extras/plates), fetch full project
+    if (!p._full) {
+      el.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div>`;
+      GET(`/api/projects/${route.projectId}`).then(full => {
+        full._full = true;
+        const idx = projects.findIndex(x => x.id === full.id);
+        if (idx >= 0) projects[idx] = full; else projects.unshift(full);
+        render();
+      });
+      return;
+    }
     el.innerHTML = renderDetailView(p);
   } else {
     currentView = 'list';
