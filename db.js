@@ -100,6 +100,7 @@ function bootstrap(db) {
       material_id             INTEGER REFERENCES materials(id) ON DELETE SET NULL,
       material_waste_grams    REAL NOT NULL DEFAULT 0,
       notes                   TEXT,
+      colors                  TEXT,
       enabled                 INTEGER NOT NULL DEFAULT 1,
       sort_order              INTEGER NOT NULL DEFAULT 0
     );
@@ -143,6 +144,7 @@ function migrate(db) {
   addCol('project_plates', 'notes', 'TEXT');
   addCol('project_plates', 'enabled', 'INTEGER NOT NULL DEFAULT 1');
   addCol('projects', 'notes', 'TEXT');
+  addCol('project_plates', 'colors', 'TEXT');
 }
 
 /* ------------------------------------------------------------------ */

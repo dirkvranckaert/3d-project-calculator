@@ -979,6 +979,47 @@ select.inline-input { width: auto !important; max-width: 160px; text-align: left
   box-shadow: 0 0 0 2px rgba(15,118,110,.12);
 }
 
+/* Color swatches (plate table) */
+.color-swatches {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.color-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid rgba(0,0,0,.15);
+  flex-shrink: 0;
+}
+
+/* Color editor (plate modal) */
+.color-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.color-picker {
+  width: 36px !important;
+  height: 32px;
+  padding: 2px !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.color-name-input {
+  flex: 1;
+  min-width: 80px;
+}
+.color-brand-input {
+  width: 100px !important;
+  flex-shrink: 0;
+}
+
 /* 3MF import preview */
 .import-plates-list { display: flex; flex-direction: column; gap: 12px; }
 .import-plate-row {

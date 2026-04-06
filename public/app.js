@@ -279,7 +279,7 @@ function renderPlatesSection(p) {
       ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
       : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
     return `<tr class="${rowCls}">
-      <td>${esc(pl.name || `Plate ${i + 1}`)} ${disabledBadge}${pl.notes ? `<div style="font-size:11px;color:var(--text-muted);white-space:normal">${esc(pl.notes)}</div>` : ''}</td>
+      <td>${esc(pl.name || `Plate ${i + 1}`)} ${disabledBadge}${renderColorSwatches(pl.colors)}${pl.notes ? `<div style="font-size:11px;color:var(--text-muted);white-space:normal">${esc(pl.notes)}</div>` : ''}</td>
       <td class="num editable" data-label="Time" onclick="startInlineEdit(${p.id},${pl.id},'print_time_minutes',${pl.print_time_minutes},this,'time')">${fmtTime(pl.print_time_minutes)}</td>
       <td class="num editable" data-label="Plastic" onclick="startInlineEdit(${p.id},${pl.id},'plastic_grams',${pl.plastic_grams},this,'float')">${fmtGrams(pl.plastic_grams)}</td>
       <td class="num editable" data-label="#/Plate" onclick="startInlineEdit(${p.id},${pl.id},'items_per_plate',${pl.items_per_plate},this,'int')">${pl.items_per_plate}</td>
@@ -862,6 +862,17 @@ async function confirm3mfImport() {
     const check = document.querySelector(`[data-import-check="${i}"]`);
     if (!check?.checked) continue;
     const pl = import3mfData.plates[i];
+    // Build colors from filament data
+    const colors = pl.filaments.map(f => {
+      const profile = import3mfData.filamentProfiles?.[f.id - 1];
+      return {
+        color: f.color || '#888888',
+        name: profile?.vendor && profile.vendor !== 'Generic'
+          ? `${profile.vendor} ${f.type || ''}`.trim()
+          : (f.type || ''),
+        brand: profile?.vendor && profile.vendor !== 'Generic' ? profile.vendor : '',
+      };
+    });
     platesToImport.push({
       name: document.querySelector(`[data-import-name="${i}"]`)?.value || `Plate ${pl.index}`,
       print_time_minutes: Math.round(pl.printTimeMinutes),
@@ -869,6 +880,7 @@ async function confirm3mfImport() {
       items_per_plate: parseInt(document.querySelector(`[data-import-items="${i}"]`)?.value) || 1,
       printer_id: parseInt(document.querySelector(`[data-import-printer="${i}"]`)?.value) || null,
       material_id: parseInt(document.querySelector(`[data-import-material="${i}"]`)?.value) || null,
+      colors,
     });
   }
 
@@ -920,6 +932,7 @@ function openPlateModal(projectId, plateId = null) {
     document.getElementById('plate-notes').value = plate.notes || '';
     printerSel.value = plate.printer_id || '';
     matSel.value = plate.material_id || '';
+    document.getElementById('plate-colors-editor').innerHTML = renderColorEditor(plate.colors || [], 'plate-colors');
   } else {
     const last = p?.plates?.[p.plates.length - 1];
     document.getElementById('plate-name').value = '';
@@ -934,6 +947,7 @@ function openPlateModal(projectId, plateId = null) {
     document.getElementById('plate-notes').value = '';
     printerSel.value = last?.printer_id || '';
     matSel.value = last?.material_id || '';
+    document.getElementById('plate-colors-editor').innerHTML = renderColorEditor([], 'plate-colors');
   }
   openModal('plate-modal');
   document.getElementById('plate-name').focus();
@@ -954,6 +968,7 @@ document.getElementById('btn-save-plate').addEventListener('click', async () => 
     printer_id: parseInt(document.getElementById('plate-printer').value) || null,
     material_id: parseInt(document.getElementById('plate-material').value) || null,
     notes: document.getElementById('plate-notes').value.trim() || null,
+    colors: collectColors('plate-colors'),
   };
   if (editingPlateId) {
     await PUT(`/api/projects/${editingPlateProjectId}/plates/${editingPlateId}`, data);
@@ -980,6 +995,7 @@ async function duplicatePlate(projectId, plateId) {
     material_id: plate.material_id,
     material_waste_grams: plate.material_waste_grams,
     notes: plate.notes,
+    colors: plate.colors || [],
     enabled: plate.enabled,
   });
   await reloadSingleProject(projectId);
@@ -1179,6 +1195,59 @@ async function saveTheme(value) { await PUT(`/api/settings/theme`, { value }); s
 /*  Utility                                                            */
 /* ================================================================== */
 function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function renderColorSwatches(colors) {
+  if (!colors || !colors.length) return '';
+  return `<div class="color-swatches">${colors.map(c =>
+    `<span class="color-swatch" style="background:${esc(c.color)}" title="${esc(c.name || c.color)}${c.brand ? ` (${esc(c.brand)})` : ''}"></span>`
+  ).join('')}</div>`;
+}
+
+function renderColorEditor(colors, idPrefix) {
+  const list = (colors || []).map((c, i) => renderColorRow(c, i, idPrefix)).join('');
+  return `<div id="${idPrefix}-list">${list}</div>
+    <button class="btn btn-sm" type="button" style="margin-top:4px" onclick="addColorRow('${idPrefix}')">+ Add Color</button>`;
+}
+
+function renderColorRow(c, i, idPrefix) {
+  return `<div class="color-edit-row" data-color-idx="${i}">
+    <input type="color" value="${c.color || '#888888'}" data-cfield="color" class="color-picker">
+    <input type="text" value="${esc(c.name || '')}" placeholder="Name (auto)" data-cfield="name" class="color-name-input">
+    <input type="text" value="${esc(c.brand || '')}" placeholder="Brand" data-cfield="brand" class="color-brand-input">
+    <button class="btn-icon" type="button" onclick="this.closest('.color-edit-row').remove()" title="Remove">&times;</button>
+  </div>`;
+}
+
+function addColorRow(idPrefix) {
+  const list = document.getElementById(`${idPrefix}-list`);
+  const i = list.children.length;
+  const div = document.createElement('div');
+  div.className = 'color-edit-row';
+  div.dataset.colorIdx = i;
+  div.innerHTML = `<input type="color" value="#888888" data-cfield="color" class="color-picker">
+    <input type="text" value="" placeholder="Name (auto)" data-cfield="name" class="color-name-input">
+    <input type="text" value="" placeholder="Brand" data-cfield="brand" class="color-brand-input">
+    <button class="btn-icon" type="button" onclick="this.closest('.color-edit-row').remove()" title="Remove">&times;</button>`;
+  list.appendChild(div);
+}
+
+function collectColors(idPrefix) {
+  const rows = document.querySelectorAll(`#${idPrefix}-list .color-edit-row`);
+  return Array.from(rows).map(row => {
+    const color = row.querySelector('[data-cfield="color"]').value;
+    const name = row.querySelector('[data-cfield="name"]').value.trim();
+    const brand = row.querySelector('[data-cfield="brand"]').value.trim();
+    return { color, name: name || hexToName(color), brand };
+  });
+}
+
+function hexToName(hex) {
+  // Simple auto-name from common hex values
+  const map = { '#000000': 'Black', '#ffffff': 'White', '#ff0000': 'Red', '#00ff00': 'Green',
+    '#0000ff': 'Blue', '#ffff00': 'Yellow', '#ff8000': 'Orange', '#800080': 'Purple',
+    '#888888': 'Gray', '#c0c0c0': 'Silver', '#623e2a': 'Brown', '#ae835b': 'Tan' };
+  return map[hex.toLowerCase()] || hex;
+}
 
 function renderTagsPills(tags) {
   if (!tags) return '';

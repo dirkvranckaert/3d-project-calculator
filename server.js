@@ -254,6 +254,8 @@ function enrichProject(db, project) {
       }
       if (elec) plate.printer_kwh_per_hour = elec.kwh_per_hour;
     }
+    // Parse colors JSON
+    try { plate.colors = plate.colors ? JSON.parse(plate.colors) : []; } catch { plate.colors = []; }
   }
 
   // Project extra costs
@@ -340,12 +342,12 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
   const insPlate = db.prepare(`INSERT INTO project_plates
     (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
      risk_multiplier, pre_processing_minutes, post_processing_minutes,
-     printer_id, material_id, material_waste_grams, notes, enabled, sort_order)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   for (const pl of plates) {
     insPlate.run(newId, pl.name, pl.print_time_minutes, pl.plastic_grams, pl.items_per_plate,
       pl.risk_multiplier, pl.pre_processing_minutes, pl.post_processing_minutes,
-      pl.printer_id, pl.material_id, pl.material_waste_grams, pl.notes, pl.enabled, pl.sort_order);
+      pl.printer_id, pl.material_id, pl.material_waste_grams, pl.notes, pl.colors, pl.enabled, pl.sort_order);
   }
 
   // Copy extras
@@ -391,15 +393,16 @@ app.post('/api/projects/:projectId/plates', (req, res) => {
 
   const notes = req.body.notes || null;
   const enabled = req.body.enabled !== undefined ? (req.body.enabled ? 1 : 0) : 1;
+  const colors = req.body.colors ? JSON.stringify(req.body.colors) : null;
 
   const r = db.prepare(`INSERT INTO project_plates
     (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
      risk_multiplier, pre_processing_minutes, post_processing_minutes,
-     printer_id, material_id, material_waste_grams, notes, enabled, sort_order)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(pid, name, print_time_minutes, plastic_grams, items_per_plate,
       risk_multiplier, pre_processing_minutes, post_processing_minutes,
-      printer_id, material_id, material_waste_grams, notes, enabled, maxOrder + 1);
+      printer_id, material_id, material_waste_grams, notes, colors, enabled, maxOrder + 1);
 
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
   const updatedProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
@@ -410,16 +413,17 @@ app.put('/api/projects/:projectId/plates/:plateId', (req, res) => {
   const db = getDb();
   const { name, print_time_minutes, plastic_grams, items_per_plate,
     risk_multiplier, pre_processing_minutes, post_processing_minutes,
-    printer_id, material_id, material_waste_grams, notes, enabled, sort_order } = req.body;
+    printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order } = req.body;
 
   db.prepare(`UPDATE project_plates SET
     name=?, print_time_minutes=?, plastic_grams=?, items_per_plate=?,
     risk_multiplier=?, pre_processing_minutes=?, post_processing_minutes=?,
-    printer_id=?, material_id=?, material_waste_grams=?, notes=?, enabled=?, sort_order=?
+    printer_id=?, material_id=?, material_waste_grams=?, notes=?, colors=?, enabled=?, sort_order=?
     WHERE id=? AND project_id=?`)
     .run(name, print_time_minutes, plastic_grams, items_per_plate,
       risk_multiplier, pre_processing_minutes, post_processing_minutes,
       printer_id, material_id, material_waste_grams, notes || null,
+      colors ? JSON.stringify(colors) : null,
       enabled !== undefined ? (enabled ? 1 : 0) : 1,
       sort_order || 0, req.params.plateId, req.params.projectId);
 
@@ -436,10 +440,11 @@ app.patch('/api/projects/:projectId/plates/:plateId', (req, res) => {
   if (!plate) return res.status(404).json({ error: 'Not found' });
   const allowed = ['name', 'print_time_minutes', 'plastic_grams', 'items_per_plate',
     'risk_multiplier', 'pre_processing_minutes', 'post_processing_minutes',
-    'printer_id', 'material_id', 'material_waste_grams', 'notes', 'enabled'];
+    'printer_id', 'material_id', 'material_waste_grams', 'notes', 'colors', 'enabled'];
   const updates = [];
   const values = [];
   for (const [k, v] of Object.entries(req.body)) {
+    if (k === 'colors') { updates.push('colors=?'); values.push(v ? JSON.stringify(v) : null); continue; }
     if (allowed.includes(k)) { updates.push(`${k}=?`); values.push(v); }
   }
   if (updates.length === 0) return res.status(400).json({ error: 'No valid fields' });
@@ -573,8 +578,8 @@ app.post('/api/projects/:projectId/import-3mf', (req, res) => {
   const ins = db.prepare(`INSERT INTO project_plates
     (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
      risk_multiplier, pre_processing_minutes, post_processing_minutes,
-     printer_id, material_id, material_waste_grams, notes, enabled, sort_order)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
 
   for (let i = 0; i < plates.length; i++) {
     const pl = plates[i];
@@ -583,7 +588,8 @@ app.post('/api/projects/:projectId/import-3mf', (req, res) => {
       pl.items_per_plate || 1, pl.risk_multiplier || 1,
       pl.pre_processing_minutes || 0, pl.post_processing_minutes || 2,
       pl.printer_id || null, pl.material_id || null,
-      pl.material_waste_grams || 0, pl.notes || null, 1, maxOrder + i + 1);
+      pl.material_waste_grams || 0, pl.notes || null,
+      pl.colors ? JSON.stringify(pl.colors) : null, 1, maxOrder + i + 1);
   }
 
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
