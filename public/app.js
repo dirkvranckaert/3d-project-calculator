@@ -723,10 +723,11 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
 });
 
 async function deleteProject(id, e) {
-  const anchor = e?.currentTarget || e?.target || document.body;
-  if (!await inlineConfirm('Delete this project and all its plates?', anchor)) return;
+  // Use native confirm — inline popover doesn't work well from context menus
+  if (!confirm('Delete this project and all its plates?')) return;
   // Remove from UI immediately
   projects = projects.filter(p => p.id !== id);
+  archivedCountCache = projects.filter(p => p.archived).length;
   window.location.hash = '#/';
   render();
   // Delete in background
