@@ -836,9 +836,11 @@ let import3mfProjectId = null;
 let import3mfData = null;
 let import3mfFile = null; // { name, buffer }
 
+let import3mfBusy = false;
 function import3mf(projectId, input) {
   const file = input.files?.[0];
-  if (!file) return;
+  if (!file || import3mfBusy) return;
+  import3mfBusy = true;
   input.value = '';
 
   // Show progress in the edit dialog
@@ -870,21 +872,23 @@ function import3mf(projectId, input) {
 
   xhr.addEventListener('load', async () => {
     document.getElementById('btn-edit-dialog-save').style.display = '';
-    if (xhr.status === 401) { window.location.replace('/login'); return; }
+    if (xhr.status === 401) { import3mfBusy = false; window.location.replace('/login'); return; }
     let parsed;
-    try { parsed = JSON.parse(xhr.responseText); } catch { alert('Failed to parse server response'); closeModal('edit-dialog'); return; }
-    if (xhr.status >= 400) { alert('Failed to parse 3MF: ' + (parsed.error || '')); closeModal('edit-dialog'); return; }
-    if (!parsed.plates?.length) { alert('No plates found in this 3MF file.'); closeModal('edit-dialog'); return; }
-    if (!parsed.sliced) { alert('This 3MF is not sliced. Please slice it first.'); closeModal('edit-dialog'); return; }
+    try { parsed = JSON.parse(xhr.responseText); } catch { import3mfBusy = false; alert('Failed to parse server response'); closeModal('edit-dialog'); return; }
+    if (xhr.status >= 400) { import3mfBusy = false; alert('Failed to parse 3MF: ' + (parsed.error || '')); closeModal('edit-dialog'); return; }
+    if (!parsed.plates?.length) { import3mfBusy = false; alert('No plates found in this 3MF file.'); closeModal('edit-dialog'); return; }
+    if (!parsed.sliced) { import3mfBusy = false; alert('This 3MF is not sliced. Please slice it first.'); closeModal('edit-dialog'); return; }
 
     // Store raw buffer for later file upload
     import3mfFile.buffer = await file.arrayBuffer();
+    import3mfBusy = false;
     import3mfProjectId = projectId;
     import3mfData = parsed;
     show3mfPreview(parsed);
   });
 
   xhr.addEventListener('error', () => {
+    import3mfBusy = false;
     alert('Upload failed — network error');
     closeModal('edit-dialog');
   });
@@ -964,7 +968,17 @@ function show3mfPreview(parsed) {
   openModal('edit-dialog');
 }
 
+let importSaving = false;
 async function confirm3mfImport() {
+  if (importSaving) return;
+  importSaving = true;
+
+  // Disable button and show progress
+  const saveBtn = document.getElementById('btn-edit-dialog-save');
+  const origText = saveBtn.textContent;
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Importing...';
+
   const platesToImport = [];
   for (let i = 0; i < import3mfData.plates.length; i++) {
     const check = document.querySelector(`[data-import-check="${i}"]`);
@@ -990,22 +1004,32 @@ async function confirm3mfImport() {
     });
   }
 
-  if (!platesToImport.length) { alert('No plates selected'); return; }
+  if (!platesToImport.length) { alert('No plates selected'); saveBtn.disabled = false; saveBtn.textContent = origText; importSaving = false; return; }
 
-  await POST(`/api/projects/${import3mfProjectId}/import-3mf`, { plates: platesToImport });
+  try {
+    saveBtn.textContent = 'Creating plates...';
+    await POST(`/api/projects/${import3mfProjectId}/import-3mf`, { plates: platesToImport });
 
-  // Also upload the 3MF as a project file
-  if (import3mfFile) {
-    await fetch(`/api/projects/${import3mfProjectId}/files`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': import3mfFile.name },
-      body: import3mfFile.buffer,
-    });
-    import3mfFile = null;
+    // Also upload the 3MF as a project file (with images extraction)
+    if (import3mfFile?.buffer) {
+      saveBtn.textContent = 'Uploading 3MF file & extracting images...';
+      await fetch(`/api/projects/${import3mfProjectId}/files`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': import3mfFile.name },
+        body: import3mfFile.buffer,
+      });
+      import3mfFile = null;
+    }
+
+    closeModal('edit-dialog');
+    await reloadSingleProject(import3mfProjectId);
+  } catch (err) {
+    alert('Import failed: ' + err.message);
+  } finally {
+    importSaving = false;
+    saveBtn.disabled = false;
+    saveBtn.textContent = origText;
   }
-
-  closeModal('edit-dialog');
-  await reloadSingleProject(import3mfProjectId);
 }
 
 /* ================================================================== */
