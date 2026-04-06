@@ -246,7 +246,7 @@ function renderDetailView(p) {
     </div>
     <div class="detail-topbar-actions">
       <button class="btn btn-sm" onclick="openProjectModal(${p.id})">Edit</button>
-      <button class="btn btn-sm btn-danger" onclick="deleteProject(${p.id})">Delete</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteProject(${p.id},event)">Delete</button>
     </div>
   </div>
   ${renderProjectNotes(p)}
@@ -295,7 +295,7 @@ function renderPlatesSection(p) {
         <button class="btn-icon" title="${toggleTitle}" onclick="togglePlate(${p.id}, ${pl.id})">${toggleIcon}</button>
         <button class="btn-icon" title="Duplicate" onclick="duplicatePlate(${p.id}, ${pl.id})"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>
         <button class="btn-icon" title="Edit" onclick="openPlateModal(${p.id}, ${pl.id})"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
-        <button class="btn-icon" title="Delete" onclick="deletePlate(${p.id}, ${pl.id})"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></button>
+        <button class="btn-icon" title="Delete" onclick="deletePlate(${p.id},${pl.id},event)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></button>
       </div></td>
     </tr>`;
   });
@@ -499,7 +499,7 @@ function showProjectContextMenu(e, projectId, fromButton) {
     <button onclick="navigateToProject(${projectId})">Open</button>
     <button onclick="duplicateProject(${projectId})">Duplicate</button>
     <button onclick="openProjectModal(${projectId})">Edit</button>
-    <button class="danger" onclick="deleteProject(${projectId})">Delete</button>`;
+    <button class="danger" onclick="deleteProject(${projectId},event)">Delete</button>`;
   document.body.appendChild(menu);
   // Position
   const x = fromButton ? e.currentTarget.getBoundingClientRect().right : e.clientX;
@@ -641,8 +641,9 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
   }
 });
 
-async function deleteProject(id) {
-  if (!confirm('Delete this project and all its plates?')) return;
+async function deleteProject(id, e) {
+  const anchor = e?.currentTarget || e?.target || document.body;
+  if (!await inlineConfirm('Delete this project and all its plates?', anchor)) return;
   await DEL(`/api/projects/${id}`);
   projects = projects.filter(p => p.id !== id);
   navigate('#/');
@@ -1004,8 +1005,9 @@ async function togglePlate(projectId, plateId) {
   await reloadSingleProject(projectId);
 }
 
-async function deletePlate(projectId, plateId) {
-  if (!confirm('Delete this plate?')) return;
+async function deletePlate(projectId, plateId, e) {
+  const anchor = e?.currentTarget || e?.target || document.body;
+  if (!await inlineConfirm('Delete this plate?', anchor)) return;
   await DEL(`/api/projects/${projectId}/plates/${plateId}`);
   await reloadSingleProject(projectId);
 }
@@ -1082,7 +1084,7 @@ function renderPrintersSettings() {
     <div class="meta">${fmt(p.purchase_price)} | ${p.expected_prints} prints | ${p.earn_back_months}mo payback${p.electricity?.map(e => ` | ${e.material_type}: ${e.kwh_per_hour} kWh`).join('') || ''}</div>
   </div><div style="display:flex;gap:4px">
     <button class="btn btn-sm" onclick="editPrinter(${p.id})">Edit</button>
-    <button class="btn btn-sm btn-danger" onclick="deletePrinterItem(${p.id})">Del</button>
+    <button class="btn btn-sm btn-danger" onclick="deletePrinterItem(${p.id},event)">Del</button>
   </div></div>`).join('');
   html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editPrinter(null)">+ Add Printer</button></div>`;
   return html;
@@ -1110,7 +1112,7 @@ window.savePrinter = async function(id) {
   if (id) await PUT(`/api/printers/${id}`, data); else await POST('/api/printers', data);
   closeModal('edit-dialog'); printers = await GET('/api/printers'); renderSettingsTab('printers'); await reloadProjects();
 };
-window.deletePrinterItem = async function(id) { if (!confirm('Delete this printer?')) return; await DEL(`/api/printers/${id}`); printers = await GET('/api/printers'); renderSettingsTab('printers'); };
+window.deletePrinterItem = async function(id, e) { const a = e?.currentTarget||e?.target||document.body; if (!await inlineConfirm('Delete this printer?', a)) return; await DEL(`/api/printers/${id}`); printers = await GET('/api/printers'); renderSettingsTab('printers'); };
 
 function renderMaterialsSettings() {
   let html = materials.map(m => `<div class="settings-list-item"><div>
@@ -1118,7 +1120,7 @@ function renderMaterialsSettings() {
     <div class="meta">${m.material_type} | ${fmt(m.price_per_kg)}/kg | ${fmtWeight(m.roll_weight_g)} roll</div>
   </div><div style="display:flex;gap:4px">
     <button class="btn btn-sm" onclick="editMaterial(${m.id})">Edit</button>
-    <button class="btn btn-sm btn-danger" onclick="deleteMaterialItem(${m.id})">Del</button>
+    <button class="btn btn-sm btn-danger" onclick="deleteMaterialItem(${m.id},event)">Del</button>
   </div></div>`).join('');
   html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editMaterial(null)">+ Add Material</button></div>`;
   return html;
@@ -1142,7 +1144,7 @@ window.saveMaterial = async function(id) {
   if (id) await PUT(`/api/materials/${id}`, data); else await POST('/api/materials', data);
   closeModal('edit-dialog'); materials = await GET('/api/materials'); renderSettingsTab('materials'); await reloadProjects();
 };
-window.deleteMaterialItem = async function(id) { if (!confirm('Delete this material?')) return; await DEL(`/api/materials/${id}`); materials = await GET('/api/materials'); renderSettingsTab('materials'); };
+window.deleteMaterialItem = async function(id, e) { const a = e?.currentTarget||e?.target||document.body; if (!await inlineConfirm('Delete this material?', a)) return; await DEL(`/api/materials/${id}`); materials = await GET('/api/materials'); renderSettingsTab('materials'); };
 
 function renderExtrasSettings() {
   let html = extraCostItems.map(e => `<div class="settings-list-item"><div>
@@ -1150,7 +1152,7 @@ function renderExtrasSettings() {
     <div class="meta">${fmt(e.price_excl_vat)} excl. VAT | Default: ${e.default_included ? `Yes (qty ${e.default_quantity})` : 'No'}</div>
   </div><div style="display:flex;gap:4px">
     <button class="btn btn-sm" onclick="editExtraCost(${e.id})">Edit</button>
-    <button class="btn btn-sm btn-danger" onclick="deleteExtraCostItem(${e.id})">Del</button>
+    <button class="btn btn-sm btn-danger" onclick="deleteExtraCostItem(${e.id},event)">Del</button>
   </div></div>`).join('');
   html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editExtraCost(null)">+ Add Supply</button></div>`;
   return html;
@@ -1173,7 +1175,7 @@ window.saveExtraCost = async function(id) {
   if (id) await PUT(`/api/extra-costs/${id}`, data); else await POST('/api/extra-costs', data);
   closeModal('edit-dialog'); extraCostItems = await GET('/api/extra-costs'); renderSettingsTab('extras');
 };
-window.deleteExtraCostItem = async function(id) { if (!confirm('Delete?')) return; await DEL(`/api/extra-costs/${id}`); extraCostItems = await GET('/api/extra-costs'); renderSettingsTab('extras'); };
+window.deleteExtraCostItem = async function(id, e) { const a = e?.currentTarget||e?.target||document.body; if (!await inlineConfirm('Delete this item?', a)) return; await DEL(`/api/extra-costs/${id}`); extraCostItems = await GET('/api/extra-costs'); renderSettingsTab('extras'); };
 
 /* ================================================================== */
 /*  Settings save helpers                                              */
@@ -1193,6 +1195,35 @@ async function saveTheme(value) { await PUT(`/api/settings/theme`, { value }); s
 /*  Utility                                                            */
 /* ================================================================== */
 function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function inlineConfirm(message, anchorEl) {
+  return new Promise(resolve => {
+    document.querySelectorAll('.confirm-popover').forEach(e => e.remove());
+    const pop = document.createElement('div');
+    pop.className = 'confirm-popover';
+    pop.innerHTML = `<div class="confirm-popover-msg">${esc(message)}</div>
+      <div class="confirm-popover-actions">
+        <button class="btn btn-sm btn-danger confirm-popover-yes">Delete</button>
+        <button class="btn btn-sm confirm-popover-no">Cancel</button>
+      </div>`;
+    document.body.appendChild(pop);
+    const rect = anchorEl.getBoundingClientRect();
+    let left = rect.left + rect.width / 2 - 110;
+    let top = rect.bottom + 6;
+    if (left + 220 > window.innerWidth - 8) left = window.innerWidth - 228;
+    if (left < 8) left = 8;
+    if (top + 80 > window.innerHeight) top = rect.top - 80;
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+    const cleanup = (result) => { pop.remove(); resolve(result); };
+    pop.querySelector('.confirm-popover-yes').addEventListener('click', () => cleanup(true));
+    pop.querySelector('.confirm-popover-no').addEventListener('click', () => cleanup(false));
+    setTimeout(() => {
+      const dismiss = (e) => { if (!pop.contains(e.target)) { cleanup(false); document.removeEventListener('click', dismiss); } };
+      document.addEventListener('click', dismiss);
+    }, 10);
+  });
+}
 
 function renderColorSwatches(colors) {
   if (!colors || !colors.length) return '';
@@ -1239,12 +1270,41 @@ function collectColors(idPrefix) {
   });
 }
 
+// Nearest-color naming: find closest named color by Euclidean distance in RGB space
+const NAMED_COLORS = [
+  ['#000000','Black'],['#FFFFFF','White'],['#808080','Gray'],['#C0C0C0','Silver'],
+  ['#404040','Dark Gray'],['#FF0000','Red'],['#8B0000','Dark Red'],['#FF6347','Tomato'],
+  ['#CC0000','Crimson'],['#FF4500','Orange Red'],['#FF8C00','Dark Orange'],['#FFA500','Orange'],
+  ['#FFD700','Gold'],['#FFFF00','Yellow'],['#FFFACD','Lemon'],['#F0E68C','Khaki'],
+  ['#BDB76B','Dark Khaki'],['#808000','Olive'],['#006400','Dark Green'],['#008000','Green'],
+  ['#228B22','Forest Green'],['#32CD32','Lime Green'],['#00FF00','Lime'],['#90EE90','Light Green'],
+  ['#2E8B57','Sea Green'],['#008080','Teal'],['#20B2AA','Light Sea Green'],
+  ['#00CED1','Dark Turquoise'],['#00FFFF','Cyan'],['#87CEEB','Sky Blue'],
+  ['#4682B4','Steel Blue'],['#1E90FF','Dodger Blue'],['#0000FF','Blue'],
+  ['#000080','Navy'],['#191970','Midnight Blue'],['#4B0082','Indigo'],
+  ['#800080','Purple'],['#9400D3','Dark Violet'],['#8A2BE2','Blue Violet'],
+  ['#FF00FF','Magenta'],['#FF69B4','Hot Pink'],['#FF1493','Deep Pink'],
+  ['#FFC0CB','Pink'],['#FFB6C1','Light Pink'],['#FFDEAD','Navajo White'],
+  ['#DEB887','Burlywood'],['#D2B48C','Tan'],['#BC8F8F','Rosy Brown'],
+  ['#F4A460','Sandy Brown'],['#CD853F','Peru'],['#D2691E','Chocolate'],
+  ['#8B4513','Saddle Brown'],['#A0522D','Sienna'],['#A52A2A','Brown'],
+  ['#F5F5DC','Beige'],['#FFFFF0','Ivory'],['#FFFAF0','Floral White'],
+  ['#FAF0E6','Linen'],['#FFF8DC','Cornsilk'],['#2F4F4F','Dark Slate Gray'],
+];
+function hexToRgb(hex) {
+  const h = hex.replace('#', '');
+  return [parseInt(h.substring(0,2),16), parseInt(h.substring(2,4),16), parseInt(h.substring(4,6),16)];
+}
 function hexToName(hex) {
-  // Simple auto-name from common hex values
-  const map = { '#000000': 'Black', '#ffffff': 'White', '#ff0000': 'Red', '#00ff00': 'Green',
-    '#0000ff': 'Blue', '#ffff00': 'Yellow', '#ff8000': 'Orange', '#800080': 'Purple',
-    '#888888': 'Gray', '#c0c0c0': 'Silver', '#623e2a': 'Brown', '#ae835b': 'Tan' };
-  return map[hex.toLowerCase()] || hex;
+  if (!hex) return '';
+  const [r, g, b] = hexToRgb(hex);
+  let best = '', bestDist = Infinity;
+  for (const [h, name] of NAMED_COLORS) {
+    const [nr, ng, nb] = hexToRgb(h);
+    const d = (r-nr)**2 + (g-ng)**2 + (b-nb)**2;
+    if (d < bestDist) { bestDist = d; best = name; }
+  }
+  return best;
 }
 
 function renderTagsPills(tags) {

@@ -979,6 +979,31 @@ select.inline-input { width: auto !important; max-width: 160px; text-align: left
   box-shadow: 0 0 0 2px rgba(15,118,110,.12);
 }
 
+/* Confirm popover */
+.confirm-popover {
+  position: fixed;
+  z-index: 400;
+  background: var(--surface);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 12px 14px;
+  width: 220px;
+  animation: popIn .12s ease-out;
+}
+@keyframes popIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+.confirm-popover-msg {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 10px;
+  color: var(--text);
+}
+.confirm-popover-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 /* Color swatches (plate table) */
 .color-swatches {
   display: inline-flex;
