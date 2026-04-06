@@ -641,11 +641,15 @@ app.patch('/api/images/:imageId/primary', (req, res) => {
 /* ------------------------------------------------------------------ */
 
 // Parse a 3MF and return extracted plate data (no persistence)
-app.post('/api/parse-3mf', express.raw({ type: 'application/octet-stream', limit: '100mb' }), (req, res) => {
+app.post('/api/parse-3mf', express.raw({ type: '*/*', limit: '100mb' }), (req, res) => {
   try {
+    if (!req.body || !req.body.length) {
+      return res.status(400).json({ error: 'Empty body — no file received' });
+    }
     const result = parse3mf(req.body);
     res.json(result);
   } catch (err) {
+    console.error('3MF parse error:', err.message);
     res.status(400).json({ error: 'Failed to parse 3MF: ' + err.message });
   }
 });

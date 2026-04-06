@@ -852,7 +852,11 @@ async function import3mf(projectId, input) {
     body: fileBuffer,
   });
   if (res.status === 401) { window.location.replace('/login'); return; }
-  if (!res.ok) { alert('Failed to parse 3MF file'); return; }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert('Failed to parse 3MF file: ' + (err.error || res.statusText));
+    return;
+  }
   const parsed = await res.json();
 
   if (!parsed.plates?.length) {
