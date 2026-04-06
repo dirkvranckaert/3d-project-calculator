@@ -996,6 +996,14 @@ select.inline-input { width: auto !important; max-width: 160px; text-align: left
   height: 100%;
   object-fit: cover;
 }
+.summary-card-img-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
 
 /* Image gallery */
 .image-gallery {

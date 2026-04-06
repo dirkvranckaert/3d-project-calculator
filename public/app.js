@@ -211,7 +211,9 @@ function renderSummaryCard(p) {
 
   return `
   <div class="summary-card ${p.archived ? 'summary-card-archived' : ''}" data-project-id="${p.id}" onclick="navigate('#/project/${p.id}')" oncontextmenu="showProjectContextMenu(event, ${p.id})">
-    ${primaryImage ? `<div class="summary-card-img"><img src="/api/images/${primaryImage.id}" alt=""></div>` : ''}
+    <div class="summary-card-img">${primaryImage
+      ? `<img src="/api/images/${primaryImage.id}" alt="">`
+      : `<div class="summary-card-img-placeholder"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".25"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0022 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></div>`}</div>
     <div class="summary-card-top">
       <div class="summary-card-title">
         <span class="project-name">${esc(p.name)}</span>${p.archived ? ' <span class="archived-badge">ARCHIVED</span>' : ''}
