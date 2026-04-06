@@ -7,7 +7,7 @@ const path = require('path');
 const express = require('express');
 const { getDb, getSetting, setSetting, getAllSettings } = require('./db');
 const calc = require('./calc');
-const { parse3mf } = require('./parse3mf');
+const { parse3mf, extractThumbnails } = require('./parse3mf');
 
 const UPLOADS_DIR = path.join(__dirname, 'data', 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -267,8 +267,9 @@ function enrichProject(db, project) {
     ORDER BY eci.name
   `).all(project.id);
 
-  // Files
+  // Files & images
   const files = db.prepare('SELECT * FROM project_files WHERE project_id = ? ORDER BY uploaded_at DESC').all(project.id);
+  const images = db.prepare('SELECT * FROM project_images WHERE project_id = ? ORDER BY is_primary DESC, uploaded_at ASC').all(project.id);
 
   // Calculate
   const settings = getAllSettings(db);
@@ -280,8 +281,13 @@ function enrichProject(db, project) {
     actualSalesPrice: project.actual_sales_price,
   });
 
-  return { ...project, plates, extras, files, calculation };
+  return { ...project, plates, extras, files, images, calculation };
 }
+
+app.get('/api/projects/archived-count', (_req, res) => {
+  const c = getDb().prepare('SELECT COUNT(*) as count FROM projects WHERE archived = 1').get();
+  res.json({ count: c.count });
+});
 
 app.get('/api/projects', (req, res) => {
   const db = getDb();
@@ -534,6 +540,24 @@ app.post('/api/projects/:projectId/files', express.raw({ type: 'application/octe
 
   const r = db.prepare('INSERT INTO project_files (project_id, plate_id, filename, filepath, size_bytes) VALUES (?,?,?,?,?)')
     .run(pid, plateId, filename, storedName, req.body.length);
+
+  // Auto-extract thumbnails from 3MF files
+  if (ext === '.3mf') {
+    try {
+      const thumbs = extractThumbnails(req.body);
+      if (thumbs.length > 0) {
+        const hasImages = db.prepare('SELECT COUNT(*) as c FROM project_images WHERE project_id = ?').get(pid).c;
+        const insImg = db.prepare('INSERT INTO project_images (project_id, filename, filepath, is_primary) VALUES (?,?,?,?)');
+        for (let i = 0; i < thumbs.length; i++) {
+          const imgId = crypto.randomBytes(8).toString('hex');
+          const imgName = `${imgId}.png`;
+          fs.writeFileSync(path.join(UPLOADS_DIR, imgName), thumbs[i].buffer);
+          insImg.run(pid, thumbs[i].filename, imgName, (!hasImages && i === 0) ? 1 : 0);
+        }
+      }
+    } catch { /* thumbnail extraction is best-effort */ }
+  }
+
   res.status(201).json(db.prepare('SELECT * FROM project_files WHERE id = ?').get(r.lastInsertRowid));
 });
 
@@ -559,6 +583,56 @@ app.delete('/api/files/:fileId', (req, res) => {
     if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
     db.prepare('DELETE FROM project_files WHERE id = ?').run(req.params.fileId);
   }
+  res.json({ ok: true });
+});
+
+/* ------------------------------------------------------------------ */
+/*  Project images                                                     */
+/* ------------------------------------------------------------------ */
+app.post('/api/projects/:projectId/images', express.raw({ type: 'application/octet-stream', limit: '10mb' }), (req, res) => {
+  const db = getDb();
+  const pid = req.params.projectId;
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  const filename = req.headers['x-filename'] || 'image.png';
+  const imgId = crypto.randomBytes(8).toString('hex');
+  const ext = path.extname(filename).toLowerCase() || '.png';
+  const storedName = `${imgId}${ext}`;
+  fs.writeFileSync(path.join(UPLOADS_DIR, storedName), req.body);
+  const hasImages = db.prepare('SELECT COUNT(*) as c FROM project_images WHERE project_id = ?').get(pid).c;
+  db.prepare('INSERT INTO project_images (project_id, filename, filepath, is_primary) VALUES (?,?,?,?)')
+    .run(pid, filename, storedName, hasImages === 0 ? 1 : 0);
+  const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  res.status(201).json(enrichProject(db, updated));
+});
+
+app.get('/api/images/:imageId', (req, res) => {
+  const img = getDb().prepare('SELECT * FROM project_images WHERE id = ?').get(req.params.imageId);
+  if (!img) return res.status(404).json({ error: 'Not found' });
+  const filepath = path.join(UPLOADS_DIR, img.filepath);
+  if (!fs.existsSync(filepath)) return res.status(404).json({ error: 'File missing' });
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.sendFile(filepath);
+});
+
+app.delete('/api/images/:imageId', (req, res) => {
+  const db = getDb();
+  const img = db.prepare('SELECT * FROM project_images WHERE id = ?').get(req.params.imageId);
+  if (img) {
+    const filepath = path.join(UPLOADS_DIR, img.filepath);
+    if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
+    db.prepare('DELETE FROM project_images WHERE id = ?').run(req.params.imageId);
+  }
+  res.json({ ok: true });
+});
+
+app.patch('/api/images/:imageId/primary', (req, res) => {
+  const db = getDb();
+  const img = db.prepare('SELECT * FROM project_images WHERE id = ?').get(req.params.imageId);
+  if (!img) return res.status(404).json({ error: 'Not found' });
+  db.prepare('UPDATE project_images SET is_primary = 0 WHERE project_id = ?').run(img.project_id);
+  db.prepare('UPDATE project_images SET is_primary = 1 WHERE id = ?').run(req.params.imageId);
   res.json({ ok: true });
 });
 

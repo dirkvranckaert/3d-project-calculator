@@ -13,6 +13,7 @@ let editingPlateId = null;
 let editingPlateProjectId = null;
 let searchQuery = '';
 let showArchived = false;
+let archivedCountCache = 0;
 let currentView = 'list'; // 'list' or 'detail'
 let currentProjectId = null;
 
@@ -109,11 +110,13 @@ async function loadAll() {
     GET('/api/extra-costs'), GET('/api/settings'),
   ]);
   applyTheme(settings.theme || 'system');
+  GET('/api/projects/archived-count').then(r => { archivedCountCache = r.count; });
   render();
 }
 
 async function reloadProjects() {
   projects = await GET(showArchived ? '/api/projects?archived=1' : '/api/projects');
+  GET('/api/projects/archived-count').then(r => { archivedCountCache = r.count; });
   render();
 }
 
@@ -170,10 +173,7 @@ function renderListView() {
     );
   }
 
-  const archivedCount = projects.filter(p => p.archived).length;
-  const archiveToggle = archivedCount > 0 || showArchived
-    ? `<label class="archive-toggle"><input type="checkbox" ${showArchived ? 'checked' : ''} onchange="toggleShowArchived(this.checked)"> Show archived (${archivedCount})</label>`
-    : (showArchived ? `<label class="archive-toggle"><input type="checkbox" checked onchange="toggleShowArchived(this.checked)"> Show archived (0)</label>` : '');
+  const archiveToggle = `<label class="archive-toggle"><input type="checkbox" ${showArchived ? 'checked' : ''} onchange="toggleShowArchived(this.checked)"> Show archived${archivedCountCache > 0 ? ` (${archivedCountCache})` : ''}</label>`;
   const searchBar = `<div class="search-bar">
     <div class="search-bar-row">
       <input type="text" id="search-input" placeholder="Search projects..." value="${esc(searchQuery)}" oninput="onSearch(this.value)">
@@ -200,6 +200,8 @@ function renderSummaryCard(p) {
   const pr = c?.pricing || {};
   const hasPlates = p.plates?.length > 0;
 
+  const primaryImage = (p.images || []).find(i => i.is_primary) || (p.images || [])[0] || null;
+
   // Determine which price/margin to highlight
   const hasActual = p.actual_sales_price > 0;
   const displayPrice = hasActual ? p.actual_sales_price : (pr.suggestedPrice || 0);
@@ -208,6 +210,7 @@ function renderSummaryCard(p) {
 
   return `
   <div class="summary-card ${p.archived ? 'summary-card-archived' : ''}" onclick="navigate('#/project/${p.id}')" oncontextmenu="showProjectContextMenu(event, ${p.id})">
+    ${primaryImage ? `<div class="summary-card-img"><img src="/api/images/${primaryImage.id}" alt=""></div>` : ''}
     <div class="summary-card-top">
       <div class="summary-card-title">
         <span class="project-name">${esc(p.name)}</span>${p.archived ? ' <span class="archived-badge">ARCHIVED</span>' : ''}
@@ -262,6 +265,7 @@ function renderDetailView(p) {
   ${renderPlatesSection(p)}
   ${renderCostSection(p)}
   ${renderExtrasSection(p)}
+  ${renderImagesSection(p)}
   ${renderFilesSection(p)}
   ${renderPricingSection(p)}`;
 }
@@ -386,6 +390,53 @@ function renderExtrasSection(p) {
 /* ================================================================== */
 /*  Files section                                                      */
 /* ================================================================== */
+function renderImagesSection(p) {
+  const images = p.images || [];
+  return `<div class="extras-section">
+    <div class="extras-section-header"><h3>Images</h3>
+      <label class="btn btn-sm" style="cursor:pointer">Upload<input type="file" accept="image/*" style="display:none" onchange="uploadImage(${p.id}, this)"></label>
+    </div>
+    ${images.length === 0 ? '<p style="color:var(--text-muted);font-size:12px">No images yet. Upload a 3MF to auto-extract thumbnails.</p>' :
+      `<div class="image-gallery">${images.map(img => `
+        <div class="image-thumb ${img.is_primary ? 'image-thumb-primary' : ''}">
+          <img src="/api/images/${img.id}" alt="${esc(img.filename)}" loading="lazy">
+          <div class="image-thumb-actions">
+            ${!img.is_primary ? `<button class="btn-icon" title="Set as primary" onclick="setPrimaryImage(${img.id},${p.id})">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+            </button>` : ''}
+            <button class="btn-icon" title="Delete" onclick="deleteImage(${img.id},${p.id},event)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        </div>`).join('')}</div>`}
+  </div>`;
+}
+
+async function uploadImage(projectId, input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  const res = await fetch(`/api/projects/${projectId}/images`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name },
+    body: await file.arrayBuffer(),
+  });
+  if (res.status === 401) { window.location.replace('/login'); return; }
+  input.value = '';
+  await reloadSingleProject(projectId);
+}
+
+async function setPrimaryImage(imageId, projectId) {
+  await PATCH(`/api/images/${imageId}/primary`);
+  await reloadSingleProject(projectId);
+}
+
+async function deleteImage(imageId, projectId, e) {
+  const anchor = e?.currentTarget || e?.target || document.body;
+  if (!await inlineConfirm('Delete this image?', anchor)) return;
+  await DEL(`/api/images/${imageId}`);
+  await reloadSingleProject(projectId);
+}
+
 function renderFilesSection(p) {
   const files = p.files || [];
   const fileRows = files.map(f => `
@@ -1185,12 +1236,29 @@ window.showPriceImpact = async function(materialId) {
   openModal('edit-dialog');
 };
 
+let priceImpactData = null;
+let priceImpactShowArchived = false;
+
 window.runPriceImpact = async function(materialId) {
   const newPrice = parseFloat(document.getElementById('pi-new-price').value);
   if (isNaN(newPrice)) return;
-  const result = await POST(`/api/materials/${materialId}/price-impact`, { new_price_per_kg: newPrice });
+  priceImpactData = await POST(`/api/materials/${materialId}/price-impact`, { new_price_per_kg: newPrice });
+  priceImpactShowArchived = false;
+  renderPriceImpactResults();
+};
+
+window.togglePiArchived = function(checked) {
+  priceImpactShowArchived = checked;
+  renderPriceImpactResults();
+};
+
+function renderPriceImpactResults() {
   const el = document.getElementById('pi-results');
-  if (!result.impacts.length) {
+  const result = priceImpactData;
+  if (!result) return;
+  const filtered = priceImpactShowArchived ? result.impacts : result.impacts.filter(i => !i.archived);
+  const archivedHidden = result.impacts.length - filtered.length;
+  if (!filtered.length && !archivedHidden) {
     el.innerHTML = '<p style="color:var(--text-muted);margin-top:12px">No projects use this material.</p>';
     return;
   }
@@ -1198,10 +1266,13 @@ window.runPriceImpact = async function(materialId) {
   const diffLabel = diff > 0 ? `+${fmt(diff)}` : fmt(diff);
   el.innerHTML = `
     <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
-      <h4 style="margin-bottom:8px">${result.affectedProjects} project${result.affectedProjects > 1 ? 's' : ''} affected (${diffLabel}/kg)</h4>
-      <table class="ec-table">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <h4>${filtered.length} project${filtered.length !== 1 ? 's' : ''} affected (${diffLabel}/kg)</h4>
+        ${archivedHidden || priceImpactShowArchived ? `<label class="archive-toggle"><input type="checkbox" ${priceImpactShowArchived ? 'checked' : ''} onchange="togglePiArchived(this.checked)"> Include archived (${archivedHidden})</label>` : ''}
+      </div>
+      ${filtered.length ? `<table class="ec-table">
         <thead><tr><th>Project</th><th>Production</th><th>Suggested</th><th>Margin</th><th>Change</th></tr></thead>
-        <tbody>${result.impacts.map(i => {
+        <tbody>${filtered.map(i => {
           const marginDiff = (i.simulated.marginPct || 0) - (i.current.marginPct || 0);
           const indicator = marginDiff < -2 ? 'red' : marginDiff < 0 ? 'orange' : 'green';
           return `<tr${i.archived ? ' style="opacity:.5"' : ''}>
@@ -1212,9 +1283,9 @@ window.runPriceImpact = async function(materialId) {
             <td class="num" style="color:var(--${indicator})">${marginDiff > 0 ? '+' : ''}${marginDiff.toFixed(2)}%</td>
           </tr>`;
         }).join('')}</tbody>
-      </table>
+      </table>` : '<p style="color:var(--text-muted)">No active projects affected.</p>'}
     </div>`;
-};
+}
 
 window.deleteMaterialItem = async function(id, e) { const a = e?.currentTarget||e?.target||document.body; if (!await inlineConfirm('Delete this material?', a)) return; await DEL(`/api/materials/${id}`); materials = await GET('/api/materials'); renderSettingsTab('materials'); };
 

@@ -115,6 +115,16 @@ function bootstrap(db) {
       UNIQUE(project_id, extra_cost_id)
     );
 
+    /* ---- Project images ---- */
+    CREATE TABLE IF NOT EXISTS project_images (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      filename    TEXT NOT NULL,
+      filepath    TEXT NOT NULL,
+      is_primary  INTEGER NOT NULL DEFAULT 0,
+      uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     /* ---- Project file attachments ---- */
     CREATE TABLE IF NOT EXISTS project_files (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,

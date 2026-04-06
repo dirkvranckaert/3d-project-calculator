@@ -29,6 +29,45 @@ function extractFile(zipPath, innerPath) {
 }
 
 /**
+ * Extract a binary file from a ZIP archive. Returns Buffer or null.
+ */
+function extractBinary(zipPath, innerPath) {
+  try {
+    return execSync(
+      `unzip -p "${zipPath}" "${innerPath}" 2>/dev/null`,
+      { timeout: 10000 }
+    );
+  } catch { return null; }
+}
+
+/**
+ * Extract thumbnail images from a 3MF file.
+ * Returns array of { plateIndex, buffer, filename } for each plate_N.png found.
+ */
+function extractThumbnails(input) {
+  let filePath;
+  let tempFile = null;
+  if (Buffer.isBuffer(input)) {
+    tempFile = path.join(require('os').tmpdir(), `thumb3mf_${Date.now()}.3mf`);
+    fs.writeFileSync(tempFile, input);
+    filePath = tempFile;
+  } else {
+    filePath = input;
+  }
+  try {
+    const thumbnails = [];
+    for (let i = 1; i <= 20; i++) {
+      const buf = extractBinary(filePath, `Metadata/plate_${i}.png`);
+      if (!buf || buf.length < 100) break;
+      thumbnails.push({ plateIndex: i, buffer: buf, filename: `plate_${i}.png` });
+    }
+    return thumbnails;
+  } finally {
+    if (tempFile && fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+  }
+}
+
+/**
  * Parse a 3MF file buffer or path.
  * @param {string|Buffer} input — file path or Buffer
  * @returns {object}
@@ -223,4 +262,4 @@ function parseSliceInfo(xml) {
   return plates;
 }
 
-module.exports = { parse3mf };
+module.exports = { parse3mf, extractThumbnails };
