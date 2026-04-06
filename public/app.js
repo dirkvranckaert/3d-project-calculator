@@ -867,9 +867,7 @@ async function confirm3mfImport() {
       const profile = import3mfData.filamentProfiles?.[f.id - 1];
       return {
         color: f.color || '#888888',
-        name: profile?.vendor && profile.vendor !== 'Generic'
-          ? `${profile.vendor} ${f.type || ''}`.trim()
-          : (f.type || ''),
+        name: hexToName(f.color || '#888888'),
         brand: profile?.vendor && profile.vendor !== 'Generic' ? profile.vendor : '',
       };
     });
