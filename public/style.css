@@ -1069,6 +1069,29 @@ select.inline-input { width: auto !important; max-width: 160px; text-align: left
   text-decoration: underline;
   margin: 0;
 }
+.drop-zone-lg {
+  padding: 32px 16px;
+}
+.drop-zone-lg .drop-zone-hint {
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14px;
+}
+.drop-zone-subtle {
+  border-color: transparent;
+  padding: 0;
+}
+.drop-zone-subtle.drop-zone-active {
+  border-color: var(--primary);
+  padding: 8px;
+}
+.drop-zone-hint-sm {
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 4px;
+  opacity: 0.5;
+}
 
 /* Image upload placeholder */
 .image-thumb-uploading {

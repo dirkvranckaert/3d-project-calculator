@@ -294,7 +294,12 @@ function renderPlatesSection(p) {
     return `<div class="plates-section">
       <div class="plates-section-header"><h3>Print Plates</h3>
         <div style="display:flex;gap:6px">${importBtn}<button class="btn btn-sm btn-primary" onclick="openPlateModal(${p.id})">+ Add Plate</button></div></div>
-      <p style="color:var(--text-muted)">No plates yet. Add a plate or import from a sliced 3MF.</p>
+      <div class="drop-zone drop-zone-lg" data-project-id="${p.id}" data-drop-type="3mf">
+        <div class="drop-zone-hint">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0022 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+          Drop a sliced .3mf file here to import plates
+        </div>
+      </div>
     </div>`;
   }
   const rows = p.plates.map((pl, i) => {
@@ -331,10 +336,13 @@ function renderPlatesSection(p) {
   return `<div class="plates-section">
     <div class="plates-section-header"><h3>Print Plates</h3>
       <div style="display:flex;gap:6px">${importBtn}<button class="btn btn-sm btn-primary" onclick="openPlateModal(${p.id})">+ Add Plate</button></div></div>
-    <div class="plates-table-wrap"><table class="plates-table">
-      <thead><tr><th>Name</th><th>Time</th><th>Plastic</th><th>#/Plate</th><th class="col-hide-mobile">Risk</th><th class="col-hide-mobile">Printer</th><th class="col-hide-mobile">Material</th><th class="col-hide-mobile">Mat. Cost</th><th class="col-hide-mobile">Process.</th><th class="col-hide-mobile">Electric.</th><th class="col-hide-mobile">Printer</th><th>Total</th><th></th></tr></thead>
-      <tbody>${rows.join('')}</tbody>
-    </table></div>
+    <div class="drop-zone drop-zone-subtle" data-project-id="${p.id}" data-drop-type="3mf">
+      <div class="plates-table-wrap"><table class="plates-table">
+        <thead><tr><th>Name</th><th>Time</th><th>Plastic</th><th>#/Plate</th><th class="col-hide-mobile">Risk</th><th class="col-hide-mobile">Printer</th><th class="col-hide-mobile">Material</th><th class="col-hide-mobile">Mat. Cost</th><th class="col-hide-mobile">Process.</th><th class="col-hide-mobile">Electric.</th><th class="col-hide-mobile">Printer</th><th>Total</th><th></th></tr></thead>
+        <tbody>${rows.join('')}</tbody>
+      </table></div>
+      <div class="drop-zone-hint-sm">Drop .3mf to add plates</div>
+    </div>
   </div>`;
 }
 
@@ -1648,12 +1656,18 @@ document.addEventListener('drop', e => {
   if (!files?.length || !projectId) return;
 
   if (type === 'image') {
-    // Feed files to uploadImage
     const fakeInput = { files, value: '', _files: Array.from(files) };
     uploadImage(projectId, fakeInput);
   } else if (type === 'file') {
     const fakeInput = { files, value: '' };
     uploadFile(projectId, fakeInput);
+  } else if (type === '3mf') {
+    const file = Array.from(files).find(f => f.name.toLowerCase().endsWith('.3mf'));
+    if (file) {
+      const fakeInput = { files: [file], value: '' };
+      Object.defineProperty(fakeInput, 'files', { value: [file] });
+      import3mf(projectId, { files: [file], value: '' });
+    }
   }
 });
 
