@@ -407,65 +407,85 @@ function renderExtrasSection(p) {
 /* ================================================================== */
 function renderImagesSection(p) {
   const images = p.images || [];
+  const thumbs = images.map(img => `
+    <div class="image-thumb ${img.is_primary ? 'image-thumb-primary' : ''}">
+      <img src="/api/images/${img.id}" alt="${esc(img.filename)}" loading="lazy">
+      <div class="image-thumb-actions">
+        ${!img.is_primary ? `<button class="btn-icon" title="Set as primary" onclick="setPrimaryImage(${img.id},${p.id})">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        </button>` : ''}
+        <button class="btn-icon" title="Delete" onclick="deleteImage(${img.id},${p.id},event)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    </div>`).join('');
+
   return `<div class="extras-section">
-    <div class="extras-section-header"><h3>Images</h3>
-      <label class="btn btn-sm" style="cursor:pointer">Upload<input type="file" accept="image/*" style="display:none" onchange="uploadImage(${p.id}, this)"></label>
+    <div class="extras-section-header"><h3>Images</h3></div>
+    <div class="drop-zone" id="image-drop-${p.id}" data-project-id="${p.id}" data-drop-type="image">
+      <div class="image-gallery" id="image-gallery-${p.id}">
+        ${thumbs}
+      </div>
+      <div class="drop-zone-hint">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Drop images here or <label class="drop-zone-link">browse<input type="file" accept="image/*" style="display:none" onchange="uploadImage(${p.id}, this)" multiple></label>
+      </div>
     </div>
-    ${images.length === 0 ? '<p style="color:var(--text-muted);font-size:12px">No images yet. Upload a 3MF to auto-extract thumbnails.</p>' :
-      `<div class="image-gallery">${images.map(img => `
-        <div class="image-thumb ${img.is_primary ? 'image-thumb-primary' : ''}">
-          <img src="/api/images/${img.id}" alt="${esc(img.filename)}" loading="lazy">
-          <div class="image-thumb-actions">
-            ${!img.is_primary ? `<button class="btn-icon" title="Set as primary" onclick="setPrimaryImage(${img.id},${p.id})">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-            </button>` : ''}
-            <button class="btn-icon" title="Delete" onclick="deleteImage(${img.id},${p.id},event)">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-          </div>
-        </div>`).join('')}</div>`}
   </div>`;
 }
 
 async function uploadImage(projectId, input) {
-  const file = input.files?.[0];
-  if (!file) return;
+  const files = input.files ? Array.from(input.files) : (input._files || []);
+  if (!files.length) return;
+  if (input.value) input.value = '';
 
-  // Convert HEIC/non-standard formats client-side
-  let uploadBuffer, uploadName;
-  const ext = file.name.split('.').pop().toLowerCase();
-  if (['heic', 'heif'].includes(ext)) {
-    try {
-      // Lazy-load heic2any
-      if (!window.heic2any) {
-        await new Promise((resolve, reject) => {
-          const s = document.createElement('script');
-          s.src = '/heic2any.min.js';
-          s.onload = resolve;
-          s.onerror = reject;
-          document.head.appendChild(s);
-        });
-      }
-      const blob = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.85 });
-      uploadBuffer = await blob.arrayBuffer();
-      uploadName = file.name.replace(/\.[^.]+$/, '.jpg');
-    } catch (e) {
-      alert('Could not convert HEIC image: ' + (e.message || e));
-      input.value = '';
-      return;
+  for (const file of files) {
+    // Show placeholder immediately
+    const gallery = document.getElementById(`image-gallery-${projectId}`);
+    const placeholderId = 'img-upload-' + Math.random().toString(36).slice(2, 8);
+    if (gallery) {
+      const ph = document.createElement('div');
+      ph.className = 'image-thumb image-thumb-uploading';
+      ph.id = placeholderId;
+      ph.innerHTML = `<div class="image-upload-spinner"></div><span class="image-upload-label">Processing...</span>`;
+      gallery.appendChild(ph);
     }
-  } else {
-    uploadBuffer = await file.arrayBuffer();
-    uploadName = file.name;
-  }
 
-  const res = await fetch(`/api/projects/${projectId}/images`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': uploadName },
-    body: uploadBuffer,
-  });
-  if (res.status === 401) { window.location.replace('/login'); return; }
-  input.value = '';
+    let uploadBuffer, uploadName;
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (['heic', 'heif'].includes(ext)) {
+      try {
+        const ph = document.getElementById(placeholderId);
+        if (ph) ph.querySelector('.image-upload-label').textContent = 'Converting HEIC...';
+        if (!window.heic2any) {
+          await new Promise((resolve, reject) => {
+            const s = document.createElement('script'); s.src = '/heic2any.min.js';
+            s.onload = resolve; s.onerror = reject; document.head.appendChild(s);
+          });
+        }
+        const blob = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.85 });
+        uploadBuffer = await blob.arrayBuffer();
+        uploadName = file.name.replace(/\.[^.]+$/, '.jpg');
+      } catch (e) {
+        const ph = document.getElementById(placeholderId);
+        if (ph) ph.innerHTML = `<span style="color:var(--danger);font-size:10px">Failed</span>`;
+        continue;
+      }
+    } else {
+      uploadBuffer = await file.arrayBuffer();
+      uploadName = file.name;
+    }
+
+    const ph = document.getElementById(placeholderId);
+    if (ph) ph.querySelector('.image-upload-label').textContent = 'Uploading...';
+
+    const res = await fetch(`/api/projects/${projectId}/images`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': uploadName },
+      body: uploadBuffer,
+    });
+    if (res.status === 401) { window.location.replace('/login'); return; }
+  }
   await reloadSingleProject(projectId);
 }
 
@@ -494,11 +514,13 @@ function renderFilesSection(p) {
     </div>`).join('');
 
   return `<div class="extras-section">
-    <div class="extras-section-header"><h3>Files</h3>
-      <label class="btn btn-sm" style="cursor:pointer">Upload<input type="file" accept=".3mf,.stl,.gcode,.scad" style="display:none" onchange="uploadFile(${p.id}, this)" multiple></label>
-    </div>
-    <div class="file-list" id="file-list-${p.id}">
-      ${fileRows || '<p style="color:var(--text-muted);font-size:12px">No files uploaded yet.</p>'}
+    <div class="extras-section-header"><h3>Files</h3></div>
+    <div class="drop-zone" id="file-drop-${p.id}" data-project-id="${p.id}" data-drop-type="file">
+      <div class="file-list" id="file-list-${p.id}">${fileRows}</div>
+      <div class="drop-zone-hint">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Drop files here or <label class="drop-zone-link">browse<input type="file" accept=".3mf,.stl,.gcode,.scad" style="display:none" onchange="uploadFile(${p.id}, this)" multiple></label>
+      </div>
     </div>
   </div>`;
 }
@@ -1603,6 +1625,37 @@ function showProjectBottomSheet(projectId) {
 /* ================================================================== */
 document.getElementById('btn-new-project').addEventListener('click', () => openProjectModal());
 document.getElementById('btn-logout').addEventListener('click', async () => { await POST('/logout'); window.location.replace('/login'); });
+
+/* ================================================================== */
+/*  Drag & Drop                                                        */
+/* ================================================================== */
+document.addEventListener('dragover', e => {
+  const zone = e.target.closest('.drop-zone');
+  if (zone) { e.preventDefault(); zone.classList.add('drop-zone-active'); }
+});
+document.addEventListener('dragleave', e => {
+  const zone = e.target.closest('.drop-zone');
+  if (zone && !zone.contains(e.relatedTarget)) zone.classList.remove('drop-zone-active');
+});
+document.addEventListener('drop', e => {
+  const zone = e.target.closest('.drop-zone');
+  if (!zone) return;
+  e.preventDefault();
+  zone.classList.remove('drop-zone-active');
+  const projectId = parseInt(zone.dataset.projectId);
+  const type = zone.dataset.dropType;
+  const files = e.dataTransfer?.files;
+  if (!files?.length || !projectId) return;
+
+  if (type === 'image') {
+    // Feed files to uploadImage
+    const fakeInput = { files, value: '', _files: Array.from(files) };
+    uploadImage(projectId, fakeInput);
+  } else if (type === 'file') {
+    const fakeInput = { files, value: '' };
+    uploadFile(projectId, fakeInput);
+  }
+});
 
 /* ================================================================== */
 /*  Init                                                               */
