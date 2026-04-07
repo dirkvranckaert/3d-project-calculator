@@ -431,21 +431,26 @@ async function uploadImage(projectId, input) {
   const file = input.files?.[0];
   if (!file) return;
 
-  // Convert HEIC/non-standard formats client-side via canvas
+  // Convert HEIC/non-standard formats client-side
   let uploadBuffer, uploadName;
   const ext = file.name.split('.').pop().toLowerCase();
-  if (['heic', 'heif', 'tiff', 'tif', 'bmp'].includes(ext)) {
+  if (['heic', 'heif'].includes(ext)) {
     try {
-      const bitmap = await createImageBitmap(file);
-      const canvas = document.createElement('canvas');
-      canvas.width = bitmap.width;
-      canvas.height = bitmap.height;
-      canvas.getContext('2d').drawImage(bitmap, 0, 0);
-      const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.85));
+      // Lazy-load heic2any
+      if (!window.heic2any) {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = '/heic2any.min.js';
+          s.onload = resolve;
+          s.onerror = reject;
+          document.head.appendChild(s);
+        });
+      }
+      const blob = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.85 });
       uploadBuffer = await blob.arrayBuffer();
       uploadName = file.name.replace(/\.[^.]+$/, '.jpg');
-    } catch {
-      alert('Could not convert this image format. Try converting to JPEG first.');
+    } catch (e) {
+      alert('Could not convert HEIC image: ' + (e.message || e));
       input.value = '';
       return;
     }
