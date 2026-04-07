@@ -569,7 +569,7 @@ app.put('/api/projects/:projectId/extras', (req, res) => {
 /* ------------------------------------------------------------------ */
 /*  File uploads                                                       */
 /* ------------------------------------------------------------------ */
-app.post('/api/projects/:projectId/files', express.raw({ type: 'application/octet-stream', limit: '50mb' }), (req, res) => {
+app.post('/api/projects/:projectId/files', express.raw({ type: 'application/octet-stream', limit: '500mb' }), (req, res) => {
   const db = getDb();
   const pid = req.params.projectId;
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
@@ -638,7 +638,7 @@ app.delete('/api/files/:fileId', (req, res) => {
 /* ------------------------------------------------------------------ */
 /*  Project images                                                     */
 /* ------------------------------------------------------------------ */
-app.post('/api/projects/:projectId/images', express.raw({ type: 'application/octet-stream', limit: '10mb' }), (req, res) => {
+app.post('/api/projects/:projectId/images', express.raw({ type: 'application/octet-stream', limit: '500mb' }), (req, res) => {
   const db = getDb();
   const pid = req.params.projectId;
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
@@ -690,7 +690,7 @@ app.patch('/api/images/:imageId/primary', (req, res) => {
 /* ------------------------------------------------------------------ */
 
 // Parse a 3MF and return extracted plate data (no persistence)
-app.post('/api/parse-3mf', express.raw({ type: '*/*', limit: '100mb' }), (req, res) => {
+app.post('/api/parse-3mf', express.raw({ type: '*/*', limit: '500mb' }), (req, res) => {
   try {
     if (!req.body || !req.body.length) {
       return res.status(400).json({ error: 'Empty body — no file received' });
