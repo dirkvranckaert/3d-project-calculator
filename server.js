@@ -638,7 +638,7 @@ app.delete('/api/files/:fileId', (req, res) => {
 /* ------------------------------------------------------------------ */
 /*  Project images                                                     */
 /* ------------------------------------------------------------------ */
-app.post('/api/projects/:projectId/images', express.raw({ type: 'application/octet-stream', limit: '500mb' }), (req, res) => {
+app.post('/api/projects/:projectId/images', express.raw({ type: 'application/octet-stream', limit: '500mb' }), async (req, res) => {
   const db = getDb();
   const pid = req.params.projectId;
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
@@ -646,8 +646,24 @@ app.post('/api/projects/:projectId/images', express.raw({ type: 'application/oct
   const filename = req.headers['x-filename'] || 'image.png';
   const imgId = crypto.randomBytes(8).toString('hex');
   const ext = path.extname(filename).toLowerCase() || '.png';
-  const storedName = `${imgId}${ext}`;
-  fs.writeFileSync(path.join(UPLOADS_DIR, storedName), req.body);
+
+  // Convert HEIC/HEIF and other non-web formats to JPEG via sharp
+  let storedName, imageBuffer;
+  const needsConvert = ['.heic', '.heif', '.tiff', '.tif', '.bmp', '.webp'].includes(ext);
+  try {
+    if (needsConvert) {
+      const sharp = require('sharp');
+      imageBuffer = await sharp(req.body).jpeg({ quality: 85 }).toBuffer();
+      storedName = `${imgId}.jpg`;
+    } else {
+      imageBuffer = req.body;
+      storedName = `${imgId}${ext}`;
+    }
+  } catch (err) {
+    return res.status(400).json({ error: 'Failed to process image: ' + err.message });
+  }
+
+  fs.writeFileSync(path.join(UPLOADS_DIR, storedName), imageBuffer);
   const hasImages = db.prepare('SELECT COUNT(*) as c FROM project_images WHERE project_id = ?').get(pid).c;
   db.prepare('INSERT INTO project_images (project_id, filename, filepath, is_primary) VALUES (?,?,?,?)')
     .run(pid, filename, storedName, hasImages === 0 ? 1 : 0);
@@ -660,7 +676,9 @@ app.get('/api/images/:imageId', (req, res) => {
   if (!img) return res.status(404).json({ error: 'Not found' });
   const filepath = path.join(UPLOADS_DIR, img.filepath);
   if (!fs.existsSync(filepath)) return res.status(404).json({ error: 'File missing' });
-  res.setHeader('Content-Type', 'image/png');
+  const imgExt = path.extname(img.filepath).toLowerCase();
+  const mimeMap = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml' };
+  res.setHeader('Content-Type', mimeMap[imgExt] || 'image/jpeg');
   res.setHeader('Cache-Control', 'public, max-age=86400');
   res.sendFile(filepath);
 });
