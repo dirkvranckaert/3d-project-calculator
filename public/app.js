@@ -430,10 +430,34 @@ function renderImagesSection(p) {
 async function uploadImage(projectId, input) {
   const file = input.files?.[0];
   if (!file) return;
+
+  // Convert HEIC/non-standard formats client-side via canvas
+  let uploadBuffer, uploadName;
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (['heic', 'heif', 'tiff', 'tif', 'bmp'].includes(ext)) {
+    try {
+      const bitmap = await createImageBitmap(file);
+      const canvas = document.createElement('canvas');
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      canvas.getContext('2d').drawImage(bitmap, 0, 0);
+      const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.85));
+      uploadBuffer = await blob.arrayBuffer();
+      uploadName = file.name.replace(/\.[^.]+$/, '.jpg');
+    } catch {
+      alert('Could not convert this image format. Try converting to JPEG first.');
+      input.value = '';
+      return;
+    }
+  } else {
+    uploadBuffer = await file.arrayBuffer();
+    uploadName = file.name;
+  }
+
   const res = await fetch(`/api/projects/${projectId}/images`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name },
-    body: await file.arrayBuffer(),
+    headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': uploadName },
+    body: uploadBuffer,
   });
   if (res.status === 401) { window.location.replace('/login'); return; }
   input.value = '';
