@@ -8,6 +8,7 @@ const express = require('express');
 const { getDb, getSetting, setSetting, getAllSettings } = require('./db');
 const calc = require('./calc');
 const { parse3mf, extractThumbnails } = require('./parse3mf');
+const sharedAuth = require('./shared-auth');
 
 const UPLOADS_DIR = path.join(__dirname, 'data', 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -29,11 +30,13 @@ function parseCookie(req) {
 
 function requireAuth(req, res, next) {
   // Public paths
-  const pub = ['/login', '/favicon.svg', '/favicon.ico', '/manifest.json', '/sw.js'];
+  const pub = ['/login', '/favicon.svg', '/favicon.ico', '/manifest.json', '/sw.js', '/api/config'];
   if (pub.includes(req.path)) return next();
 
   const token = parseCookie(req);
   if (!token) {
+    // Also accept shared JWT if enabled
+    if (sharedAuth.validateSharedToken(req)) return next();
     if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
     return res.redirect('/login');
   }
@@ -66,8 +69,10 @@ app.post('/login', (req, res) => {
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = Date.now() + SESSION_TTL;
     getDb().prepare('INSERT INTO sessions (token, expires_at) VALUES (?, ?)').run(token, expiresAt);
-    res.setHeader('Set-Cookie',
-      `${COOKIE_NAME}=${token}; Path=/; Max-Age=${SESSION_TTL / 1000}; HttpOnly`);
+    const cookies = [`${COOKIE_NAME}=${token}; Path=/; Max-Age=${SESSION_TTL / 1000}; HttpOnly`];
+    const sharedCookie = sharedAuth.createSharedCookie(username);
+    if (sharedCookie) cookies.push(sharedCookie);
+    res.setHeader('Set-Cookie', cookies);
     return res.json({ ok: true });
   }
   res.status(401).json({ error: 'Invalid credentials' });
@@ -76,7 +81,10 @@ app.post('/login', (req, res) => {
 app.post('/logout', (_req, res) => {
   const token = parseCookie({ headers: { cookie: _req.headers.cookie } });
   if (token) getDb().prepare('DELETE FROM sessions WHERE token = ?').run(token);
-  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly`);
+  const cookies = [`${COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly`];
+  const clearShared = sharedAuth.clearSharedCookie();
+  if (clearShared) cookies.push(clearShared);
+  res.setHeader('Set-Cookie', cookies);
   res.json({ ok: true });
 });
 
@@ -865,7 +873,21 @@ app.get('/api/export', (_req, res) => {
 /*  Config endpoint                                                    */
 /* ------------------------------------------------------------------ */
 app.get('/api/config', (_req, res) => {
-  res.json({ version: require('./package.json').version });
+  res.json({
+    version: require('./package.json').version,
+    appName: '3D Project Calculator',
+    appId: 'project-calculator',
+    sharedAuth: sharedAuth.isEnabled(),
+  });
+});
+
+app.get('/api/discover', async (_req, res) => {
+  const apps = {};
+  const plannerUrl = process.env.PLANNER_URL || '';
+  const filamentUrl = process.env.FILAMENT_URL || '';
+  if (plannerUrl) apps.planner = await sharedAuth.discoverApp(plannerUrl);
+  if (filamentUrl) apps.filament = await sharedAuth.discoverApp(filamentUrl);
+  res.json({ sharedAuth: sharedAuth.isEnabled(), apps });
 });
 
 /* ------------------------------------------------------------------ */
