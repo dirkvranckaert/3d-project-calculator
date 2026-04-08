@@ -1246,6 +1246,7 @@ function renderSettingsTab(tab) {
     case 'extras': el.innerHTML = renderExtrasSettings(); break;
     case 'margins': el.innerHTML = renderMarginsSettings(); break;
     case 'theme': el.innerHTML = renderThemeSettings(); break;
+    case 'apps': el.innerHTML = '<p style="color:var(--text-muted)">Loading...</p>'; renderConnectedApps(el); break;
   }
 }
 
@@ -1452,6 +1453,56 @@ window.saveExtraCost = async function(id) {
   closeModal('edit-dialog'); extraCostItems = await GET('/api/extra-costs'); renderSettingsTab('extras');
 };
 window.deleteExtraCostItem = async function(id, e) { const a = e?.currentTarget||e?.target||document.body; if (!await inlineConfirm('Delete this item?', a)) return; await DEL(`/api/extra-costs/${id}`); extraCostItems = await GET('/api/extra-costs'); renderSettingsTab('extras'); };
+
+/* ================================================================== */
+/*  Connected Apps                                                     */
+/* ================================================================== */
+async function renderConnectedApps(el) {
+  try {
+    const data = await GET('/api/discover');
+    const config = await GET('/api/config');
+    let html = '';
+
+    if (!config.sharedAuth) {
+      html += `<div style="padding:12px;background:var(--warning-tint);border:1px solid var(--warning);border-radius:6px;margin-bottom:12px">
+        <strong>Shared auth not configured</strong>
+        <p style="font-size:13px;color:var(--text-muted);margin-top:4px">Set <code>SHARED_AUTH_SECRET</code> in your .env file to enable SSO and app discovery.</p>
+      </div>`;
+    } else {
+      html += `<div style="padding:8px 12px;background:var(--success-tint);border:1px solid var(--success);border-radius:6px;margin-bottom:12px;font-size:13px">
+        Shared authentication is <strong>enabled</strong>
+      </div>`;
+    }
+
+    const appNames = { planner: 'PrintFarm Planner', calculator: '3D Project Calculator', filament: 'Filament Manager' };
+    const appIcons = { planner: '\ud83d\udcc5', calculator: '\ud83e\uddee', filament: '\ud83e\uddf5' };
+    const apps = data.apps || {};
+    const keys = Object.keys(apps);
+
+    if (!keys.length) {
+      html += `<p style="color:var(--text-muted)">No sibling app URLs configured. Set <code>PLANNER_URL</code>, <code>FILAMENT_URL</code>, etc. in .env.</p>`;
+    } else {
+      for (const key of keys) {
+        const app = apps[key];
+        const name = appNames[key] || key;
+        const icon = appIcons[key] || '\ud83d\udce6';
+        const dot = app.available ? '\ud83d\udfe2' : '\ud83d\udd34';
+        const status = app.available ? `v${app.version || '?'}` : 'Unreachable';
+        const url = app.url || '';
+        html += `<div class="settings-list-item">
+          <div>
+            <div class="name">${dot} ${icon} ${esc(name)}</div>
+            <div class="meta">${esc(status)}${url ? ` \u2014 ${esc(url)}` : ''}</div>
+          </div>
+        </div>`;
+      }
+    }
+
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = `<p style="color:var(--danger)">Failed to load: ${esc(e.message)}</p>`;
+  }
+}
 
 /* ================================================================== */
 /*  Settings save helpers                                              */
