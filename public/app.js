@@ -103,12 +103,19 @@ window.addEventListener('hashchange', () => render());
 /* ================================================================== */
 /*  Data loading                                                       */
 /* ================================================================== */
+let plannerAvailable = false;
+let plannerUrl = '';
+
 async function loadAll() {
   const projUrl = '/api/projects?lite=1' + (showArchived ? '&archived=1' : '');
   [projects, printers, materials, extraCostItems, settings] = await Promise.all([
     GET(projUrl), GET('/api/printers'), GET('/api/materials'),
     GET('/api/extra-costs'), GET('/api/settings'),
   ]);
+  // Discover planner
+  GET('/api/discover').then(d => {
+    if (d?.apps?.planner?.available) { plannerAvailable = true; plannerUrl = d.apps.planner.url; }
+  }).catch(() => {});
   applyTheme(settings.theme || 'system');
   GET('/api/projects/archived-count').then(r => { archivedCountCache = r.count; });
   render();
@@ -516,6 +523,7 @@ function renderFilesSection(p) {
       <svg class="file-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       <a href="/api/files/${f.id}/download" class="file-name">${esc(f.filename)}</a>
       <span class="file-size">${fmtFileSize(f.size_bytes)}</span>
+      ${plannerAvailable && f.filename?.toLowerCase().endsWith('.3mf') ? `<button class="btn btn-sm" style="flex-shrink:0" onclick="schedulePrint(${p.id}, ${f.id})">Schedule Print</button>` : ''}
       <button class="btn-icon" title="Delete" onclick="deleteFile(${f.id}, ${p.id})">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
@@ -1611,6 +1619,228 @@ function renderTagsPills(tags) {
   const list = tags.split(',').map(t => t.trim()).filter(Boolean);
   if (!list.length) return '';
   return `<div class="tags-list">${list.map(t => `<span class="tag-pill">${esc(t)}</span>`).join('')}</div>`;
+}
+
+/* ================================================================== */
+/*  Schedule Print to Planner (cross-app)                              */
+/* ================================================================== */
+async function schedulePrint(projectId, fileId) {
+  if (!plannerAvailable || !plannerUrl) { alert('PrintFarm Planner not available'); return; }
+
+  const project = projects.find(p => p.id === projectId);
+  document.getElementById('edit-dialog-title').textContent = 'Schedule Print...';
+  document.getElementById('edit-dialog-body').innerHTML = `<div style="text-align:center;padding:24px"><p>Fetching 3MF file...</p></div>`;
+  document.getElementById('btn-edit-dialog-save').style.display = 'none';
+  openModal('edit-dialog');
+
+  try {
+    // 1. Fetch the 3MF file from our own server
+    const fileRes = await fetch(`/api/files/${fileId}/download`);
+    if (!fileRes.ok) throw new Error('Failed to fetch 3MF file');
+    const fileBuffer = await fileRes.arrayBuffer();
+
+    document.getElementById('edit-dialog-body').innerHTML = `<div style="text-align:center;padding:24px"><p>Parsing 3MF...</p></div>`;
+
+    // 2. Send to planner for parsing
+    const parseRes = await fetch(`${plannerUrl}/api/parse-3mf`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: fileBuffer,
+    });
+    if (!parseRes.ok) throw new Error('Planner could not parse 3MF (is it sliced?)');
+    const parsed = await parseRes.json();
+    if (!parsed.sliced || !parsed.plates?.length) throw new Error('3MF must be sliced with print data');
+
+    // 3. Fetch printers from planner
+    const printersRes = await fetch(`${plannerUrl}/api/printers`, { credentials: 'include' });
+    if (!printersRes.ok) throw new Error('Could not fetch printers from planner');
+    const plannerPrinters = await printersRes.json();
+
+    // 4. Show preview dialog
+    showSchedulePreview(parsed, plannerPrinters, fileBuffer, project);
+  } catch (e) {
+    document.getElementById('edit-dialog-body').innerHTML = `<p style="color:var(--danger);padding:12px">${esc(e.message)}</p>`;
+    document.getElementById('btn-edit-dialog-save').style.display = '';
+    document.getElementById('btn-edit-dialog-save').textContent = 'Close';
+    document.getElementById('btn-edit-dialog-save').onclick = () => closeModal('edit-dialog');
+  }
+}
+
+function showSchedulePreview(parsed, plannerPrinters, fileBuffer, project) {
+  const printerLabel = parsed.printerName ? ` (${parsed.printerName})` : '';
+  document.getElementById('edit-dialog-title').textContent = `Schedule Print${printerLabel} — ${parsed.plates.length} plate${parsed.plates.length > 1 ? 's' : ''}`;
+
+  // Fuzzy match printer
+  const norm = s => s.toLowerCase().replace(/[\s\-_]+/g, '').replace('lab', '');
+  let matchedPrinterId = '';
+  if (parsed.printerName) {
+    const pNorm = norm(parsed.printerName);
+    const match = plannerPrinters.find(pr => { const n = norm(pr.name); return pNorm.includes(n) || n.includes(pNorm); });
+    if (match) matchedPrinterId = match.id;
+  }
+
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+  const totalMins = parsed.plates.reduce((s, pl) => s + (pl.printTimeMinutes || 0), 0);
+
+  const rows = parsed.plates.map((pl, i) => {
+    const thumb = parsed.thumbnails?.[pl.index];
+    const nameDefault = pl.plateName || pl.objects?.join(', ') || `Plate ${pl.index}`;
+    const typeInfo = pl.filamentType || '';
+    const colorDots = (pl.filaments || []).map(f =>
+      f.color ? `<span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${f.color};border:1px solid rgba(0,0,0,.15)" title="${hexToName(f.color)}"></span>` : ''
+    ).join(' ');
+
+    return `<div style="display:flex;gap:12px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:6px">
+      ${thumb ? `<img src="${thumb}" style="width:64px;height:64px;object-fit:cover;border-radius:4px;border:1px solid var(--border);flex-shrink:0" alt="">` : ''}
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin:0"><input type="checkbox" checked data-sp-check="${i}" style="width:auto"> <strong>Plate ${pl.index}</strong></label>
+          <span style="color:var(--text-muted);font-size:12px">${typeInfo}${pl.bedType ? ` / ${pl.bedType.replace(/_/g,' ')}` : ''}</span>
+          ${colorDots}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:13px">
+          <div><label style="font-size:11px;color:var(--text-muted)">Name</label><input type="text" value="${esc(nameDefault)}" data-sp-name="${i}" style="width:100%;padding:4px 8px;font-size:13px"></div>
+          <div><label style="font-size:11px;color:var(--text-muted)">Duration</label><div style="font-weight:600;padding:4px 0">${Math.floor(pl.printTimeMinutes/60)}h ${Math.round(pl.printTimeMinutes%60)}m</div></div>
+          <div><label style="font-size:11px;color:var(--text-muted)">Plastic</label><div style="padding:4px 0">${(pl.weightGrams||0).toFixed(1)}g</div></div>
+          <div><label style="font-size:11px;color:var(--text-muted)">Objects</label><div style="padding:4px 0">${pl.objectCount || pl.objects?.length || 1}</div></div>
+          <div style="grid-column:1/-1"><label style="font-size:11px;color:var(--text-muted)">Printer</label><select data-sp-printer="${i}" style="width:100%;padding:4px 8px;font-size:13px">
+            <option value="">-- Select --</option>
+            ${plannerPrinters.map(pr => `<option value="${pr.id}" ${pr.id == matchedPrinterId ? 'selected' : ''}>${esc(pr.name)}</option>`).join('')}
+          </select></div>
+          <div><label style="font-size:11px;color:var(--text-muted)">Customer</label><input type="text" value="${esc(project?.customer_name || '')}" data-sp-customer="${i}" style="width:100%;padding:4px 8px;font-size:13px"></div>
+          <div><label style="font-size:11px;color:var(--text-muted)">Order #</label><input type="text" value="" data-sp-ordernr="${i}" style="width:100%;padding:4px 8px;font-size:13px"></div>
+        </div>
+      </div>
+    </div>`;
+  });
+
+  document.getElementById('edit-dialog-body').innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="padding:8px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;gap:16px;align-items:center;margin-bottom:8px">
+          <label style="font-size:13px;cursor:pointer;margin:0"><input type="radio" name="sp-mode" value="manual" checked style="margin-right:4px"> Pick date/time</label>
+          <label style="font-size:13px;cursor:pointer;margin:0"><input type="radio" name="sp-mode" value="first-available" style="margin-right:4px"> First available slot</label>
+          <div style="flex:1;text-align:right;font-size:13px;color:var(--text-muted)" id="sp-total">Total: ${Math.floor(totalMins/60)}h ${Math.round(totalMins%60)}m — ${parsed.plates.length} plate${parsed.plates.length > 1 ? 's' : ''}</div>
+        </div>
+        <div id="sp-manual" style="display:flex;gap:12px;align-items:end">
+          <div><label style="font-size:12px;font-weight:600;color:var(--text-muted)">Start Date</label><input type="date" id="sp-date" value="${todayStr}" style="padding:6px 10px;font-size:14px"></div>
+          <div><label style="font-size:12px;font-weight:600;color:var(--text-muted)">Start Time</label><input type="time" id="sp-time" value="08:00" style="padding:6px 10px;font-size:14px"></div>
+        </div>
+        <div id="sp-auto" style="display:none;font-size:13px;color:var(--text-muted);padding:6px 0">
+          Jobs will be scheduled at the first available moment per printer.
+        </div>
+      </div>
+      ${rows.join('')}
+    </div>`;
+
+  // Store data for confirm
+  window._spParsed = parsed;
+  window._spBuffer = fileBuffer;
+  window._spProject = project;
+
+  // Wire up mode toggle + total update
+  document.querySelectorAll('input[name="sp-mode"]').forEach(r => {
+    r.addEventListener('change', () => {
+      const auto = r.value === 'first-available' && r.checked;
+      document.getElementById('sp-manual').style.display = auto ? 'none' : 'flex';
+      document.getElementById('sp-auto').style.display = auto ? '' : 'none';
+    });
+  });
+  document.querySelectorAll('[data-sp-check]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      let mins = 0, cnt = 0;
+      parsed.plates.forEach((pl, i) => { if (document.querySelector(`[data-sp-check="${i}"]`)?.checked) { mins += pl.printTimeMinutes || 0; cnt++; } });
+      document.getElementById('sp-total').textContent = `Total: ${Math.floor(mins/60)}h ${Math.round(mins%60)}m — ${cnt} plate${cnt !== 1 ? 's' : ''}`;
+    });
+  });
+
+  document.getElementById('btn-edit-dialog-save').style.display = '';
+  document.getElementById('btn-edit-dialog-save').textContent = 'Schedule Jobs';
+  document.getElementById('btn-edit-dialog-save').onclick = () => confirmSchedulePrint();
+}
+
+async function confirmSchedulePrint() {
+  const parsed = window._spParsed;
+  const fileBuffer = window._spBuffer;
+  if (!parsed || !fileBuffer) return;
+
+  const btn = document.getElementById('btn-edit-dialog-save');
+  btn.disabled = true;
+  btn.textContent = 'Scheduling...';
+
+  try {
+    const mode = document.querySelector('input[name="sp-mode"]:checked')?.value || 'manual';
+    let startISO = null;
+    if (mode !== 'first-available') {
+      const d = document.getElementById('sp-date').value;
+      const t = document.getElementById('sp-time').value;
+      if (!d) { alert('Start date required'); return; }
+      startISO = new Date(`${d}T${t || '08:00'}:00`).toISOString();
+    }
+
+    const plates = parsed.plates.map((pl, i) => {
+      if (!document.querySelector(`[data-sp-check="${i}"]`)?.checked) return null;
+      const colors = (pl.filaments || []).map(f => {
+        const profile = parsed.filamentProfiles?.[f.id - 1];
+        return {
+          color: f.color || '#888888',
+          name: hexToName(f.color || '#888888'),
+          brand: profile?.vendor && profile.vendor !== 'Generic' ? profile.vendor : '',
+        };
+      });
+      return {
+        plateIndex: pl.index,
+        name: document.querySelector(`[data-sp-name="${i}"]`)?.value || `Plate ${pl.index}`,
+        printerId: parseInt(document.querySelector(`[data-sp-printer="${i}"]`)?.value) || null,
+        customerName: document.querySelector(`[data-sp-customer="${i}"]`)?.value || null,
+        orderNr: document.querySelector(`[data-sp-ordernr="${i}"]`)?.value || null,
+        durationMins: Math.round(pl.printTimeMinutes || 0),
+        bedType: pl.bedType || null,
+        colors,
+      };
+    }).filter(Boolean);
+
+    if (!plates.length) { alert('No plates selected'); return; }
+
+    const res = await fetch(`${plannerUrl}/api/import-3mf-schedule`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Schedule': JSON.stringify({ plates, startISO, mode: mode === 'first-available' ? 'first-available' : 'manual' }),
+      },
+      body: fileBuffer,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Scheduling failed');
+    }
+
+    const result = await res.json();
+    closeModal('edit-dialog');
+
+    // Show success with link to planner
+    const plannerLink = plannerUrl.replace('localhost:', window.location.hostname + ':');
+    document.getElementById('edit-dialog-title').textContent = 'Print Scheduled!';
+    document.getElementById('edit-dialog-body').innerHTML = `
+      <div style="text-align:center;padding:20px">
+        <p style="font-size:16px;margin-bottom:12px">${result.jobs?.length || plates.length} job${(result.jobs?.length || plates.length) > 1 ? 's' : ''} scheduled successfully</p>
+        <a href="${esc(plannerUrl)}" target="_blank" class="btn btn-primary" style="text-decoration:none">Open PrintFarm Planner</a>
+      </div>`;
+    document.getElementById('btn-edit-dialog-save').textContent = 'Close';
+    document.getElementById('btn-edit-dialog-save').onclick = () => closeModal('edit-dialog');
+    openModal('edit-dialog');
+  } catch (e) {
+    alert('Schedule failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Schedule Jobs';
+    window._spParsed = null;
+    window._spBuffer = null;
+  }
 }
 
 /* ================================================================== */
