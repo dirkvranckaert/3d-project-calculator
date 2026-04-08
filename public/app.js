@@ -1686,7 +1686,8 @@ function showSchedulePreview(parsed, plannerPrinters, fileBuffer, project) {
 
   const rows = parsed.plates.map((pl, i) => {
     const thumb = parsed.thumbnails?.[pl.index];
-    const nameDefault = pl.plateName || pl.objects?.join(', ') || `Plate ${pl.index}`;
+    const plateName = pl.plateName || pl.objects?.join(', ') || `Plate ${pl.index}`;
+    const nameDefault = project?.name ? `${project.name} — ${plateName}` : plateName;
     const typeInfo = pl.filamentType || '';
     const colorDots = (pl.filaments || []).map(f =>
       f.color ? `<span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${f.color};border:1px solid rgba(0,0,0,.15)" title="${hexToName(f.color)}"></span>` : ''
