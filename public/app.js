@@ -1686,7 +1686,9 @@ function showSchedulePreview(parsed, plannerPrinters, fileBuffer, project) {
 
   const rows = parsed.plates.map((pl, i) => {
     const thumb = parsed.thumbnails?.[pl.index];
-    const plateName = pl.plateName || pl.objects?.join(', ') || `Plate ${pl.index}`;
+    // Use project plate name if available, fall back to 3MF plate name
+    const projectPlate = project?.plates?.[i];
+    const plateName = projectPlate?.name || pl.plateName || pl.objects?.join(', ') || `Plate ${pl.index}`;
     const nameDefault = project?.name ? `${project.name} — ${plateName}` : plateName;
     const typeInfo = pl.filamentType || '';
     const colorDots = (pl.filaments || []).map(f =>
