@@ -65,6 +65,38 @@ Default login: `admin` / `changeme`
 | `ADMIN_USER` | `admin` | Login username |
 | `ADMIN_PASS` | `changeme` | Login password |
 | `PORT` | `3003` | HTTP port |
+| `SHARED_AUTH_SECRET` | *(empty)* | JWT secret for cross-app SSO (optional) |
+| `SHARED_AUTH_DOMAIN` | *(empty)* | Cookie domain for SSO, e.g. `.app3.be` (optional) |
+| `PLANNER_URL` | *(empty)* | PrintFarm Planner URL for discovery (optional) |
+| `FILAMENT_URL` | *(empty)* | Filament Manager URL for discovery (optional) |
+
+## Shared Authentication (Optional)
+
+This app can participate in single sign-on (SSO) with other Printseed tools (PrintFarm Planner, Filament Manager). This is **entirely optional** — without configuration, the app works fully standalone.
+
+### How it works
+
+1. Set the same `SHARED_AUTH_SECRET` in all Printseed apps' `.env` files
+2. Set `SHARED_AUTH_DOMAIN=.yourdomain.com` if apps are on subdomains
+3. Set sibling app URLs (`PLANNER_URL`, `FILAMENT_URL`) for discovery
+
+When enabled:
+- **Login to any app** → sets a shared JWT cookie (`shared_session`) alongside the app's own session cookie
+- **Visit another app** → the shared JWT is automatically accepted, no re-login needed
+- **Logout from any app** → clears both the app session and the shared JWT
+- **`GET /api/discover`** → returns which sibling apps are reachable and their versions
+
+### Discovery
+
+Each app exposes `GET /api/config` (public, no auth) returning:
+```json
+{ "version": "1.0.0", "appName": "3D Project Calculator", "appId": "project-calculator", "sharedAuth": true }
+```
+
+And `GET /api/discover` (requires auth) returning:
+```json
+{ "sharedAuth": true, "apps": { "planner": { "available": true, "version": "1.0.0", "url": "..." } } }
+```
 
 ## PM2 (Production)
 
