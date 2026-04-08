@@ -1817,7 +1817,7 @@ async function confirmSchedulePrint() {
       credentials: 'include',
       headers: {
         'Content-Type': 'application/octet-stream',
-        'X-Schedule': JSON.stringify({ plates, startISO, mode: mode === 'first-available' ? 'first-available' : 'manual' }),
+        'X-Schedule': encodeURIComponent(JSON.stringify({ plates, startISO, mode: mode === 'first-available' ? 'first-available' : 'manual' })),
       },
       body: fileBuffer,
     });
