@@ -749,8 +749,8 @@ app.post('/api/projects/:projectId/import-3mf', (req, res) => {
   const ins = db.prepare(`INSERT INTO project_plates
     (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
      risk_multiplier, pre_processing_minutes, post_processing_minutes,
-     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order, source_plate_index, source_file_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
 
   for (let i = 0; i < plates.length; i++) {
     const pl = plates[i];
@@ -760,7 +760,8 @@ app.post('/api/projects/:projectId/import-3mf', (req, res) => {
       pl.pre_processing_minutes || 0, pl.post_processing_minutes || 2,
       pl.printer_id || null, pl.material_id || null,
       pl.material_waste_grams || 0, pl.notes || null,
-      pl.colors ? JSON.stringify(pl.colors) : null, 1, maxOrder + i + 1);
+      pl.colors ? JSON.stringify(pl.colors) : null, 1, maxOrder + i + 1,
+      pl.source_plate_index || null, pl.source_file_id || null);
   }
 
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);

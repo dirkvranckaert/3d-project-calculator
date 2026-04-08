@@ -1084,6 +1084,8 @@ async function confirm3mfImport() {
       items_per_plate: parseInt(document.querySelector(`[data-import-items="${i}"]`)?.value) || 1,
       printer_id: parseInt(document.querySelector(`[data-import-printer="${i}"]`)?.value) || null,
       material_id: parseInt(document.querySelector(`[data-import-material="${i}"]`)?.value) || null,
+      source_plate_index: pl.index,
+      source_file_id: import3mfFile?.name || null,
       colors,
     });
   }
@@ -1658,7 +1660,8 @@ async function schedulePrint(projectId, fileId) {
     const plannerPrinters = await printersRes.json();
 
     // 4. Show preview dialog
-    showSchedulePreview(parsed, plannerPrinters, fileBuffer, project);
+    const fileRecord = (project?.files || []).find(f => f.id === fileId);
+    showSchedulePreview(parsed, plannerPrinters, fileBuffer, project, fileRecord?.filename);
   } catch (e) {
     document.getElementById('edit-dialog-body').innerHTML = `<p style="color:var(--danger);padding:12px">${esc(e.message)}</p>`;
     document.getElementById('btn-edit-dialog-save').style.display = '';
@@ -1667,7 +1670,7 @@ async function schedulePrint(projectId, fileId) {
   }
 }
 
-function showSchedulePreview(parsed, plannerPrinters, fileBuffer, project) {
+function showSchedulePreview(parsed, plannerPrinters, fileBuffer, project, sourceFilename) {
   const printerLabel = parsed.printerName ? ` (${parsed.printerName})` : '';
   document.getElementById('edit-dialog-title').textContent = `Schedule Print${printerLabel} — ${parsed.plates.length} plate${parsed.plates.length > 1 ? 's' : ''}`;
 
@@ -1686,8 +1689,10 @@ function showSchedulePreview(parsed, plannerPrinters, fileBuffer, project) {
 
   const rows = parsed.plates.map((pl, i) => {
     const thumb = parsed.thumbnails?.[pl.index];
-    // Use project plate name if available, fall back to 3MF plate name
-    const projectPlate = project?.plates?.[i];
+    // Match project plate by source_file_id + source_plate_index, fall back to index match
+    const projectPlate = (project?.plates || []).find(pp =>
+      pp.source_plate_index === pl.index && (!pp.source_file_id || pp.source_file_id === sourceFilename)
+    ) || (project?.plates || []).find(pp => pp.source_plate_index === pl.index) || project?.plates?.[i];
     const plateName = projectPlate?.name || pl.plateName || pl.objects?.join(', ') || `Plate ${pl.index}`;
     const nameDefault = project?.name ? `${project.name} — ${plateName}` : plateName;
     const typeInfo = pl.filamentType || '';

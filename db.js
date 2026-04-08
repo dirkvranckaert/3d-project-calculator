@@ -156,6 +156,8 @@ function migrate(db) {
   addCol('project_plates', 'enabled', 'INTEGER NOT NULL DEFAULT 1');
   addCol('projects', 'notes', 'TEXT');
   addCol('project_plates', 'colors', 'TEXT');
+  addCol('project_plates', 'source_plate_index', 'INTEGER');
+  addCol('project_plates', 'source_file_id', 'TEXT');
   addCol('projects', 'archived', 'INTEGER NOT NULL DEFAULT 0');
 }
 
