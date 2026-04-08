@@ -681,7 +681,7 @@ body {
   flex-direction: column;
   box-shadow: var(--shadow-lg);
 }
-.modal-wide { max-width: 640px; }
+.modal-wide { max-width: 720px; }
 .modal-header {
   display: flex;
   align-items: center;
@@ -794,11 +794,11 @@ input:focus, select:focus, textarea:focus {
   overflow-x: auto;
 }
 .tab {
-  padding: 8px 14px;
+  padding: 8px 10px;
   border: none;
   background: none;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   border-bottom: 2px solid transparent;
