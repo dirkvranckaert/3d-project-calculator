@@ -681,7 +681,7 @@ body {
   flex-direction: column;
   box-shadow: var(--shadow-lg);
 }
-.modal-wide { max-width: 720px; }
+.modal-wide { width: 900px; max-width: 95vw; }
 .modal-header {
   display: flex;
   align-items: center;
