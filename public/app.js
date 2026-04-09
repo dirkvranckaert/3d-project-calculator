@@ -73,7 +73,11 @@ function applyTheme(mode) {
 /*  Modal helpers                                                      */
 /* ================================================================== */
 function openModal(id) { document.getElementById(id).classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+  // Abort any in-flight map/parse requests when edit-dialog is closed
+  if (id === 'edit-dialog' && mapAbortController) { mapAbortController.abort(); mapAbortController = null; }
+}
 document.addEventListener('click', e => {
   const closeBtn = e.target.closest('[data-close]');
   if (closeBtn) closeModal(closeBtn.dataset.close);
@@ -1630,10 +1634,16 @@ function renderTagsPills(tags) {
 /* ================================================================== */
 /*  Map Plates to 3MF File                                             */
 /* ================================================================== */
+let mapAbortController = null;
+
 async function mapPlatesToFile(projectId, fileId, filename) {
+  // Cancel any previous in-flight mapping request
+  if (mapAbortController) { mapAbortController.abort(); mapAbortController = null; }
+  mapAbortController = new AbortController();
+  const signal = mapAbortController.signal;
+
   const project = projects.find(p => p.id === projectId);
   if (!project?._full) {
-    // Need full project data
     const full = await GET(`/api/projects/${projectId}`);
     full._full = true;
     const idx = projects.findIndex(x => x.id === full.id);
@@ -1641,33 +1651,85 @@ async function mapPlatesToFile(projectId, fileId, filename) {
     Object.assign(project, full);
   }
 
-  document.getElementById('edit-dialog-title').textContent = 'Map Plates to 3MF...';
-  document.getElementById('edit-dialog-body').innerHTML = '<div style="text-align:center;padding:24px">Parsing 3MF file...</div>';
+  document.getElementById('edit-dialog-title').textContent = `Map Plates — ${esc(filename)}`;
+  document.getElementById('edit-dialog-body').innerHTML = `
+    <div style="text-align:center;padding:24px">
+      <p>Loading 3MF file...</p>
+      <div class="file-progress" style="width:100%;height:8px;margin:12px 0"><div class="file-progress-bar" id="map-progress-bar"></div></div>
+      <span id="map-progress-label" style="font-size:13px;color:var(--text-muted)">Downloading... 0%</span>
+    </div>`;
   document.getElementById('btn-edit-dialog-save').style.display = 'none';
   openModal('edit-dialog');
 
   try {
-    // Fetch and parse the 3MF
-    const fileRes = await fetch(`/api/files/${fileId}/download`);
-    if (!fileRes.ok) throw new Error('Failed to fetch file');
-    const buf = await fileRes.arrayBuffer();
-
-    const parseRes = await fetch('/api/parse-3mf', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream' },
-      body: buf,
+    // Fetch the 3MF with progress via XHR
+    const buf = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', `/api/files/${fileId}/download`);
+      xhr.responseType = 'arraybuffer';
+      xhr.onprogress = e => {
+        if (signal.aborted) { xhr.abort(); return; }
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          const bar = document.getElementById('map-progress-bar');
+          const label = document.getElementById('map-progress-label');
+          if (bar) bar.style.width = pct + '%';
+          if (label) label.textContent = `Downloading... ${pct}%`;
+        }
+      };
+      xhr.onload = () => {
+        if (signal.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+        if (xhr.status !== 200) return reject(new Error('Failed to fetch file'));
+        resolve(xhr.response);
+      };
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.onabort = () => reject(new DOMException('Aborted', 'AbortError'));
+      signal.addEventListener('abort', () => xhr.abort());
+      xhr.send();
     });
-    if (!parseRes.ok) throw new Error('Failed to parse 3MF');
-    const parsed = await parseRes.json();
+
+    if (signal.aborted) return;
+    const label = document.getElementById('map-progress-label');
+    if (label) label.textContent = 'Parsing 3MF...';
+    const bar = document.getElementById('map-progress-bar');
+    if (bar) bar.style.width = '100%';
+
+    // Upload to parse endpoint with progress
+    const parsed = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/parse-3mf');
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.upload.onprogress = e => {
+        if (signal.aborted) { xhr.abort(); return; }
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          if (label) label.textContent = pct < 100 ? `Uploading for parsing... ${pct}%` : 'Parsing...';
+        }
+      };
+      xhr.onload = () => {
+        if (signal.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+        if (xhr.status !== 200) return reject(new Error('Failed to parse 3MF'));
+        try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error('Invalid response')); }
+      };
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.onabort = () => reject(new DOMException('Aborted', 'AbortError'));
+      signal.addEventListener('abort', () => xhr.abort());
+      xhr.send(buf);
+    });
+
+    if (signal.aborted) return;
 
     if (!parsed.plates?.length) throw new Error('No plates found in 3MF');
 
     showPlateMapping(project, parsed, filename);
   } catch (e) {
+    if (e.name === 'AbortError') return; // user cancelled
     document.getElementById('edit-dialog-body').innerHTML = `<p style="color:var(--danger);padding:12px">${esc(e.message)}</p>`;
     document.getElementById('btn-edit-dialog-save').style.display = '';
     document.getElementById('btn-edit-dialog-save').textContent = 'Close';
     document.getElementById('btn-edit-dialog-save').onclick = () => closeModal('edit-dialog');
+  } finally {
+    mapAbortController = null;
   }
 }
 
