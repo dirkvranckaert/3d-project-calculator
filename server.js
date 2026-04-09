@@ -301,8 +301,8 @@ app.get('/api/projects', (req, res) => {
   const db = getDb();
   const includeArchived = req.query.archived === '1';
   const sql = includeArchived
-    ? 'SELECT * FROM projects ORDER BY archived ASC, updated_at DESC'
-    : 'SELECT * FROM projects WHERE archived = 0 ORDER BY updated_at DESC';
+    ? 'SELECT * FROM projects ORDER BY archived ASC, name COLLATE NOCASE ASC'
+    : 'SELECT * FROM projects WHERE archived = 0 ORDER BY name COLLATE NOCASE ASC';
   const projects = db.prepare(sql).all();
   const lite = req.query.lite === '1';
   const result = projects.map(p => lite ? enrichProjectLite(db, p) : enrichProject(db, p));
