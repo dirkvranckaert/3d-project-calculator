@@ -717,6 +717,26 @@ app.patch('/api/images/:imageId/primary', (req, res) => {
 /* ------------------------------------------------------------------ */
 
 // Parse a 3MF and return extracted plate data (no persistence)
+// Parse an already-uploaded file by its ID (no re-upload needed)
+app.get('/api/files/:fileId/parse-3mf', (req, res) => {
+  try {
+    const db = getDb();
+    const file = db.prepare('SELECT * FROM project_files WHERE id = ?').get(req.params.fileId);
+    if (!file) return res.status(404).json({ error: 'File not found' });
+    const filepath = path.join(UPLOADS_DIR, file.filepath);
+    if (!fs.existsSync(filepath)) return res.status(404).json({ error: 'File missing from disk' });
+    const buf = fs.readFileSync(filepath);
+    const result = parse3mf(buf);
+    const thumbs = extractThumbnails(buf);
+    result.thumbnails = {};
+    for (const t of thumbs) result.thumbnails[t.plateIndex] = 'data:image/png;base64,' + t.buffer.toString('base64');
+    res.json(result);
+  } catch (err) {
+    console.error('3MF parse error:', err.message);
+    res.status(400).json({ error: 'Failed to parse 3MF: ' + err.message });
+  }
+});
+
 app.post('/api/parse-3mf', express.raw({ type: '*/*', limit: '500mb' }), (req, res) => {
   try {
     if (!req.body || !req.body.length) {

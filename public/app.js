@@ -1654,70 +1654,18 @@ async function mapPlatesToFile(projectId, fileId, filename) {
   document.getElementById('edit-dialog-title').textContent = `Map Plates — ${esc(filename)}`;
   document.getElementById('edit-dialog-body').innerHTML = `
     <div style="text-align:center;padding:24px">
-      <p>Loading 3MF file...</p>
-      <div class="file-progress" style="width:100%;height:8px;margin:12px 0"><div class="file-progress-bar" id="map-progress-bar"></div></div>
-      <span id="map-progress-label" style="font-size:13px;color:var(--text-muted)">Downloading... 0%</span>
+      <p>Parsing 3MF file on server...</p>
+      <div class="image-upload-spinner" style="margin:12px auto"></div>
     </div>`;
   document.getElementById('btn-edit-dialog-save').style.display = 'none';
   openModal('edit-dialog');
 
   try {
-    // Fetch the 3MF with progress via XHR
-    const buf = await new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('GET', `/api/files/${fileId}/download`);
-      xhr.responseType = 'arraybuffer';
-      xhr.onprogress = e => {
-        if (signal.aborted) { xhr.abort(); return; }
-        if (e.lengthComputable) {
-          const pct = Math.round((e.loaded / e.total) * 100);
-          const bar = document.getElementById('map-progress-bar');
-          const label = document.getElementById('map-progress-label');
-          if (bar) bar.style.width = pct + '%';
-          if (label) label.textContent = `Downloading... ${pct}%`;
-        }
-      };
-      xhr.onload = () => {
-        if (signal.aborted) return reject(new DOMException('Aborted', 'AbortError'));
-        if (xhr.status !== 200) return reject(new Error('Failed to fetch file'));
-        resolve(xhr.response);
-      };
-      xhr.onerror = () => reject(new Error('Network error'));
-      xhr.onabort = () => reject(new DOMException('Aborted', 'AbortError'));
-      signal.addEventListener('abort', () => xhr.abort());
-      xhr.send();
-    });
-
+    // Parse server-side — no download/re-upload needed
+    const res = await fetch(`/api/files/${fileId}/parse-3mf`, { signal });
     if (signal.aborted) return;
-    const label = document.getElementById('map-progress-label');
-    if (label) label.textContent = 'Parsing 3MF...';
-    const bar = document.getElementById('map-progress-bar');
-    if (bar) bar.style.width = '100%';
-
-    // Upload to parse endpoint with progress
-    const parsed = await new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/parse-3mf');
-      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-      xhr.upload.onprogress = e => {
-        if (signal.aborted) { xhr.abort(); return; }
-        if (e.lengthComputable) {
-          const pct = Math.round((e.loaded / e.total) * 100);
-          if (label) label.textContent = pct < 100 ? `Uploading for parsing... ${pct}%` : 'Parsing...';
-        }
-      };
-      xhr.onload = () => {
-        if (signal.aborted) return reject(new DOMException('Aborted', 'AbortError'));
-        if (xhr.status !== 200) return reject(new Error('Failed to parse 3MF'));
-        try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error('Invalid response')); }
-      };
-      xhr.onerror = () => reject(new Error('Network error'));
-      xhr.onabort = () => reject(new DOMException('Aborted', 'AbortError'));
-      signal.addEventListener('abort', () => xhr.abort());
-      xhr.send(buf);
-    });
-
-    if (signal.aborted) return;
+    if (!res.ok) throw new Error('Failed to parse 3MF');
+    const parsed = await res.json();
 
     if (!parsed.plates?.length) throw new Error('No plates found in 3MF');
 
