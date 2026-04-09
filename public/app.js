@@ -1048,6 +1048,8 @@ function show3mfPreview(parsed) {
     }
   }
 
+  document.getElementById('btn-edit-dialog-save').style.display = '';
+  document.getElementById('btn-edit-dialog-save').textContent = 'Import Plates';
   document.getElementById('btn-edit-dialog-save').onclick = () => confirm3mfImport();
   openModal('edit-dialog');
 }
