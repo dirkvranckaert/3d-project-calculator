@@ -105,6 +105,7 @@ window.addEventListener('hashchange', () => render());
 /* ================================================================== */
 let plannerAvailable = false;
 let plannerUrl = '';
+let plannerPublicUrl = '';
 
 async function loadAll() {
   const projUrl = '/api/projects?lite=1' + (showArchived ? '&archived=1' : '');
@@ -114,7 +115,7 @@ async function loadAll() {
   ]);
   // Discover planner
   GET('/api/discover').then(d => {
-    if (d?.apps?.planner?.available) { plannerAvailable = true; plannerUrl = d.apps.planner.url; }
+    if (d?.apps?.planner?.available) { plannerAvailable = true; plannerUrl = d.apps.planner.url; plannerPublicUrl = d.apps.planner.publicUrl || plannerUrl; }
   }).catch(() => {});
   applyTheme(settings.theme || 'system');
   GET('/api/projects/archived-count').then(r => { archivedCountCache = r.count; });
@@ -1830,19 +1831,15 @@ async function confirmSchedulePrint() {
     }
 
     const result = await res.json();
-    closeModal('edit-dialog');
-
-    // Show success with link to planner
-    const plannerLink = plannerUrl.replace('localhost:', window.location.hostname + ':');
+    // Show success dialog — replace body, hide save button, set cancel to "Close"
     document.getElementById('edit-dialog-title').textContent = 'Print Scheduled!';
     document.getElementById('edit-dialog-body').innerHTML = `
       <div style="text-align:center;padding:20px">
         <p style="font-size:16px;margin-bottom:12px">${result.jobs?.length || plates.length} job${(result.jobs?.length || plates.length) > 1 ? 's' : ''} scheduled successfully</p>
-        <a href="${esc(plannerUrl)}" target="_blank" class="btn btn-primary" style="text-decoration:none">Open PrintFarm Planner</a>
+        <button class="btn btn-primary" onclick="window.open('${esc(plannerPublicUrl || plannerUrl)}', 'printfarm-planner'); closeModal('edit-dialog');">Open PrintFarm Planner</button>
       </div>`;
-    document.getElementById('btn-edit-dialog-save').textContent = 'Close';
-    document.getElementById('btn-edit-dialog-save').onclick = () => closeModal('edit-dialog');
-    openModal('edit-dialog');
+    document.getElementById('btn-edit-dialog-save').style.display = 'none';
+    document.querySelector('#edit-dialog [data-close]').textContent = 'Close';
   } catch (e) {
     alert('Schedule failed: ' + e.message);
   } finally {

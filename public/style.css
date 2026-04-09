@@ -788,10 +788,9 @@ input:focus, select:focus, textarea:focus {
 /* ================================================================== */
 .settings-tabs {
   display: flex;
-  gap: 4px;
+  gap: 0;
   margin-bottom: 16px;
   border-bottom: 2px solid var(--border);
-  overflow-x: auto;
 }
 .tab {
   padding: 8px 10px;
