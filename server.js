@@ -515,7 +515,8 @@ app.patch('/api/projects/:projectId/plates/:plateId', (req, res) => {
   if (!plate) return res.status(404).json({ error: 'Not found' });
   const allowed = ['name', 'print_time_minutes', 'plastic_grams', 'items_per_plate',
     'risk_multiplier', 'pre_processing_minutes', 'post_processing_minutes',
-    'printer_id', 'material_id', 'material_waste_grams', 'notes', 'colors', 'enabled'];
+    'printer_id', 'material_id', 'material_waste_grams', 'notes', 'colors', 'enabled',
+    'source_plate_index', 'source_file_id'];
   const updates = [];
   const values = [];
   for (const [k, v] of Object.entries(req.body)) {

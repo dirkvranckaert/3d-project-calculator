@@ -524,6 +524,7 @@ function renderFilesSection(p) {
       <svg class="file-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       <a href="/api/files/${f.id}/download" class="file-name">${esc(f.filename)}</a>
       <span class="file-size">${fmtFileSize(f.size_bytes)}</span>
+      ${f.filename?.toLowerCase().endsWith('.3mf') ? `<button class="btn btn-sm" style="flex-shrink:0" onclick="mapPlatesToFile(${p.id}, ${f.id}, '${esc(f.filename)}')">Map Plates</button>` : ''}
       ${plannerAvailable && f.filename?.toLowerCase().endsWith('.3mf') ? `<button class="btn btn-sm" style="flex-shrink:0" onclick="schedulePrint(${p.id}, ${f.id})">Schedule Print</button>` : ''}
       <button class="btn-icon" title="Delete" onclick="deleteFile(${f.id}, ${p.id})">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -1624,6 +1625,135 @@ function renderTagsPills(tags) {
   const list = tags.split(',').map(t => t.trim()).filter(Boolean);
   if (!list.length) return '';
   return `<div class="tags-list">${list.map(t => `<span class="tag-pill">${esc(t)}</span>`).join('')}</div>`;
+}
+
+/* ================================================================== */
+/*  Map Plates to 3MF File                                             */
+/* ================================================================== */
+async function mapPlatesToFile(projectId, fileId, filename) {
+  const project = projects.find(p => p.id === projectId);
+  if (!project?._full) {
+    // Need full project data
+    const full = await GET(`/api/projects/${projectId}`);
+    full._full = true;
+    const idx = projects.findIndex(x => x.id === full.id);
+    if (idx >= 0) projects[idx] = full;
+    Object.assign(project, full);
+  }
+
+  document.getElementById('edit-dialog-title').textContent = 'Map Plates to 3MF...';
+  document.getElementById('edit-dialog-body').innerHTML = '<div style="text-align:center;padding:24px">Parsing 3MF file...</div>';
+  document.getElementById('btn-edit-dialog-save').style.display = 'none';
+  openModal('edit-dialog');
+
+  try {
+    // Fetch and parse the 3MF
+    const fileRes = await fetch(`/api/files/${fileId}/download`);
+    if (!fileRes.ok) throw new Error('Failed to fetch file');
+    const buf = await fileRes.arrayBuffer();
+
+    const parseRes = await fetch('/api/parse-3mf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: buf,
+    });
+    if (!parseRes.ok) throw new Error('Failed to parse 3MF');
+    const parsed = await parseRes.json();
+
+    if (!parsed.plates?.length) throw new Error('No plates found in 3MF');
+
+    showPlateMapping(project, parsed, filename);
+  } catch (e) {
+    document.getElementById('edit-dialog-body').innerHTML = `<p style="color:var(--danger);padding:12px">${esc(e.message)}</p>`;
+    document.getElementById('btn-edit-dialog-save').style.display = '';
+    document.getElementById('btn-edit-dialog-save').textContent = 'Close';
+    document.getElementById('btn-edit-dialog-save').onclick = () => closeModal('edit-dialog');
+  }
+}
+
+function showPlateMapping(project, parsed, filename) {
+  document.getElementById('edit-dialog-title').textContent = `Map Plates — ${esc(filename)}`;
+
+  const plates = project.plates || [];
+  const threeMfPlates = parsed.plates || [];
+
+  // Build rows: one per project plate, each with a dropdown to select a 3MF plate
+  const rows = plates.map((pl, i) => {
+    const currentMatch = pl.source_file_id === filename ? pl.source_plate_index : null;
+    const thumb3mf = currentMatch ? parsed.thumbnails?.[currentMatch] : null;
+
+    return `<div style="display:flex;gap:12px;align-items:center;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600">${esc(pl.name || `Plate ${i + 1}`)}</div>
+        <div style="font-size:12px;color:var(--text-muted)">${fmtTime(pl.print_time_minutes)} — ${fmtGrams(pl.plastic_grams)}</div>
+      </div>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" style="flex-shrink:0"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      <select data-map-plate="${pl.id}" style="width:200px;padding:6px 8px;font-size:13px">
+        <option value="">— Not mapped —</option>
+        ${threeMfPlates.map(tp => {
+          const tpName = tp.plateName || tp.objects?.join(', ') || `Plate ${tp.index}`;
+          const selected = currentMatch === tp.index ? 'selected' : '';
+          return `<option value="${tp.index}" ${selected}>${esc(`Plate ${tp.index}: ${tpName}`)} (${fmtTime(tp.printTimeMinutes)})</option>`;
+        }).join('')}
+      </select>
+      <div id="map-thumb-${pl.id}" style="width:48px;height:48px;flex-shrink:0;border-radius:4px;overflow:hidden;background:var(--border)">
+        ${thumb3mf ? `<img src="${thumb3mf}" style="width:100%;height:100%;object-fit:cover">` : ''}
+      </div>
+    </div>`;
+  });
+
+  document.getElementById('edit-dialog-body').innerHTML = `
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">Link each project plate to a plate in the 3MF file. This enables correct name and data matching when scheduling prints.</p>
+    <div style="display:flex;flex-direction:column;gap:8px">${rows.join('')}</div>`;
+
+  // Update thumbnail preview on select change
+  document.querySelectorAll('[data-map-plate]').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const thumbEl = document.getElementById(`map-thumb-${sel.dataset.mapPlate}`);
+      const idx = parseInt(sel.value);
+      const thumb = idx ? parsed.thumbnails?.[idx] : null;
+      thumbEl.innerHTML = thumb ? `<img src="${thumb}" style="width:100%;height:100%;object-fit:cover">` : '';
+    });
+  });
+
+  // Store for confirm
+  window._mapFilename = filename;
+  window._mapProjectId = project.id;
+
+  document.getElementById('btn-edit-dialog-save').style.display = '';
+  document.getElementById('btn-edit-dialog-save').textContent = 'Save Mapping';
+  document.getElementById('btn-edit-dialog-save').onclick = () => confirmPlateMapping();
+}
+
+async function confirmPlateMapping() {
+  const btn = document.getElementById('btn-edit-dialog-save');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  try {
+    const mappings = [];
+    document.querySelectorAll('[data-map-plate]').forEach(sel => {
+      const plateId = parseInt(sel.dataset.mapPlate);
+      const plateIndex = sel.value ? parseInt(sel.value) : null;
+      mappings.push({ plateId, source_plate_index: plateIndex, source_file_id: plateIndex ? window._mapFilename : null });
+    });
+
+    // PATCH each plate
+    for (const m of mappings) {
+      await PATCH(`/api/projects/${window._mapProjectId}/plates/${m.plateId}`, {
+        source_plate_index: m.source_plate_index,
+        source_file_id: m.source_file_id,
+      });
+    }
+
+    closeModal('edit-dialog');
+    await reloadSingleProject(window._mapProjectId);
+  } catch (e) {
+    alert('Failed to save: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save Mapping';
+  }
 }
 
 /* ================================================================== */
