@@ -1497,15 +1497,15 @@ async function renderConnectedApps(el) {
     } else {
       for (const key of keys) {
         const app = apps[key];
-        const name = appNames[key] || key;
+        const name = app.appName || appNames[key] || key;
         const icon = appIcons[key] || '\ud83d\udce6';
         const dot = app.available ? '\ud83d\udfe2' : '\ud83d\udd34';
         const status = app.available ? `v${app.version || '?'}` : 'Unreachable';
-        const url = app.url || '';
+        const displayUrl = app.publicUrl || app.url || '';
         html += `<div class="settings-list-item">
           <div>
             <div class="name">${dot} ${icon} ${esc(name)}</div>
-            <div class="meta">${esc(status)}${url ? ` \u2014 ${esc(url)}` : ''}</div>
+            <div class="meta">${esc(status)}${displayUrl ? ` \u2014 <a href="${esc(displayUrl)}" target="_blank" style="color:var(--primary)">${esc(displayUrl)}</a>` : ''}</div>
           </div>
         </div>`;
       }

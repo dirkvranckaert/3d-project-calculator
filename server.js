@@ -878,6 +878,7 @@ app.get('/api/config', (_req, res) => {
     version: require('./package.json').version,
     appName: '3D Project Calculator',
     appId: 'project-calculator',
+    publicUrl: process.env.PUBLIC_URL || null,
     sharedAuth: sharedAuth.isEnabled(),
   });
 });
