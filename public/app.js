@@ -119,7 +119,10 @@ async function loadAll() {
   ]);
   // Discover planner
   GET('/api/discover').then(d => {
-    if (d?.apps?.planner?.available) { plannerAvailable = true; plannerUrl = d.apps.planner.url; plannerPublicUrl = d.apps.planner.publicUrl || plannerUrl; }
+    if (d?.apps?.planner?.available) {
+      plannerAvailable = true; plannerUrl = d.apps.planner.url; plannerPublicUrl = d.apps.planner.publicUrl || plannerUrl;
+      render(); // re-render to show Schedule Print buttons
+    }
   }).catch(() => {});
   applyTheme(settings.theme || 'system');
   GET('/api/projects/archived-count').then(r => { archivedCountCache = r.count; });
