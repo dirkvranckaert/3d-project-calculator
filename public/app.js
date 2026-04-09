@@ -1770,7 +1770,7 @@ async function confirmPlateMapping() {
 /*  Schedule Print to Planner (cross-app)                              */
 /* ================================================================== */
 async function schedulePrint(projectId, fileId) {
-  if (!plannerAvailable || !plannerUrl) { alert('PrintFarm Planner not available'); return; }
+  if (!plannerAvailable || !plannerPublicUrl) { alert('PrintFarm Planner not available'); return; }
 
   const project = projects.find(p => p.id === projectId);
   document.getElementById('edit-dialog-title').textContent = 'Schedule Print...';
@@ -1779,32 +1779,20 @@ async function schedulePrint(projectId, fileId) {
   openModal('edit-dialog');
 
   try {
-    // 1. Fetch the 3MF file from our own server
-    const fileRes = await fetch(`/api/files/${fileId}/download`);
-    if (!fileRes.ok) throw new Error('Failed to fetch 3MF file');
-    const fileBuffer = await fileRes.arrayBuffer();
-
-    document.getElementById('edit-dialog-body').innerHTML = `<div style="text-align:center;padding:24px"><p>Parsing 3MF...</p></div>`;
-
-    // 2. Send to planner for parsing
-    const parseRes = await fetch(`${plannerUrl}/api/parse-3mf`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/octet-stream' },
-      body: fileBuffer,
-    });
-    if (!parseRes.ok) throw new Error('Planner could not parse 3MF (is it sliced?)');
+    // 1. Parse 3MF server-side (no download needed for parsing)
+    const parseRes = await fetch(`/api/files/${fileId}/parse-3mf`);
+    if (!parseRes.ok) throw new Error('Could not parse 3MF (is it sliced?)');
     const parsed = await parseRes.json();
     if (!parsed.sliced || !parsed.plates?.length) throw new Error('3MF must be sliced with print data');
 
-    // 3. Fetch printers from planner
-    const printersRes = await fetch(`${plannerUrl}/api/printers`, { credentials: 'include' });
+    // 2. Fetch printers from planner
+    const printersRes = await fetch(`${plannerPublicUrl}/api/printers`, { credentials: 'include' });
     if (!printersRes.ok) throw new Error('Could not fetch printers from planner');
     const plannerPrinters = await printersRes.json();
 
     // 4. Show preview dialog
     const fileRecord = (project?.files || []).find(f => f.id === fileId);
-    showSchedulePreview(parsed, plannerPrinters, fileBuffer, project, fileRecord?.filename);
+    showSchedulePreview(parsed, plannerPrinters, fileId, project, fileRecord?.filename);
   } catch (e) {
     document.getElementById('edit-dialog-body').innerHTML = `<p style="color:var(--danger);padding:12px">${esc(e.message)}</p>`;
     document.getElementById('btn-edit-dialog-save').style.display = '';
@@ -1813,7 +1801,7 @@ async function schedulePrint(projectId, fileId) {
   }
 }
 
-function showSchedulePreview(parsed, plannerPrinters, fileBuffer, project, sourceFilename) {
+function showSchedulePreview(parsed, plannerPrinters, fileId, project, sourceFilename) {
   const printerLabel = parsed.printerName ? ` (${parsed.printerName})` : '';
   document.getElementById('edit-dialog-title').textContent = `Schedule Print${printerLabel} — ${parsed.plates.length} plate${parsed.plates.length > 1 ? 's' : ''}`;
 
@@ -1888,7 +1876,7 @@ function showSchedulePreview(parsed, plannerPrinters, fileBuffer, project, sourc
 
   // Store data for confirm
   window._spParsed = parsed;
-  window._spBuffer = fileBuffer;
+  window._spFileId = fileId;
   window._spProject = project;
 
   // Wire up mode toggle + total update
@@ -1914,8 +1902,7 @@ function showSchedulePreview(parsed, plannerPrinters, fileBuffer, project, sourc
 
 async function confirmSchedulePrint() {
   const parsed = window._spParsed;
-  const fileBuffer = window._spBuffer;
-  if (!parsed || !fileBuffer) return;
+  if (!parsed) return;
 
   const btn = document.getElementById('btn-edit-dialog-save');
   btn.disabled = true;
@@ -1955,7 +1942,14 @@ async function confirmSchedulePrint() {
 
     if (!plates.length) { alert('No plates selected'); return; }
 
-    const res = await fetch(`${plannerUrl}/api/import-3mf-schedule`, {
+    // Download the 3MF file now for sending to the planner
+    btn.textContent = 'Downloading 3MF...';
+    const fileRes = await fetch(`/api/files/${window._spFileId}/download`);
+    if (!fileRes.ok) throw new Error('Failed to fetch 3MF file');
+    const fileBuffer = await fileRes.arrayBuffer();
+
+    btn.textContent = 'Sending to planner...';
+    const res = await fetch(`${plannerPublicUrl}/api/import-3mf-schedule`, {
       method: 'POST',
       credentials: 'include',
       headers: {
@@ -1986,7 +1980,7 @@ async function confirmSchedulePrint() {
     btn.disabled = false;
     btn.textContent = 'Schedule Jobs';
     window._spParsed = null;
-    window._spBuffer = null;
+    window._spFileId = null;
   }
 }
 
