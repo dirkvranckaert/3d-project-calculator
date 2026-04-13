@@ -30,7 +30,7 @@ function parseCookie(req) {
 
 function requireAuth(req, res, next) {
   // Public paths
-  const pub = ['/login', '/favicon.svg', '/favicon.ico', '/manifest.json', '/sw.js', '/api/config'];
+  const pub = ['/login', '/favicon.svg', '/favicon.ico', '/manifest.json', '/sw.js', '/apple-touch-icon.png', '/api/config'];
   if (pub.includes(req.path)) return next();
 
   const token = parseCookie(req);
