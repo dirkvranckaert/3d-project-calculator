@@ -1923,12 +1923,14 @@ async function confirmSchedulePrint() {
 
     const plates = parsed.plates.map((pl, i) => {
       if (!document.querySelector(`[data-sp-check="${i}"]`)?.checked) return null;
+      const isDual = pl.isDualExtruder || (pl.nozzleCount || 1) >= 2;
       const colors = (pl.filaments || []).map(f => {
         const profile = parsed.filamentProfiles?.[f.id - 1];
         return {
           color: f.color || '#888888',
           name: hexToName(f.color || '#888888'),
           brand: profile?.vendor && profile.vendor !== 'Generic' ? profile.vendor : '',
+          extruder: isDual && f.extruder ? (f.extruder === 1 ? 'L' : 'R') : null,
         };
       });
       return {
