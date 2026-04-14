@@ -110,6 +110,8 @@ window.addEventListener('hashchange', () => render());
 let plannerAvailable = false;
 let plannerUrl = '';
 let plannerPublicUrl = '';
+let filamentAvailable = false;
+let filamentPublicUrl = '';
 
 async function loadAll() {
   const projUrl = '/api/projects?lite=1' + (showArchived ? '&archived=1' : '');
@@ -117,11 +119,15 @@ async function loadAll() {
     GET(projUrl), GET('/api/printers'), GET('/api/materials'),
     GET('/api/extra-costs'), GET('/api/settings'),
   ]);
-  // Discover planner
+  // Discover sibling apps
   GET('/api/discover').then(d => {
     if (d?.apps?.planner?.available) {
       plannerAvailable = true; plannerUrl = d.apps.planner.url; plannerPublicUrl = d.apps.planner.publicUrl || plannerUrl;
       render(); // re-render to show Schedule Print buttons
+    }
+    if (d?.apps?.filament?.available) {
+      filamentAvailable = true;
+      filamentPublicUrl = d.apps.filament.publicUrl || d.apps.filament.url || '';
     }
   }).catch(() => {});
   applyTheme(settings.theme || 'system');
@@ -1627,6 +1633,70 @@ function hexToName(hex) {
   } catch { return hex; }
 }
 
+// =============================================================================
+// Filament-manager catalog lookup (best-effort cross-app)
+// =============================================================================
+// Mirrors filament-match.js (server-side) on the planner. When the
+// filament-manager sibling app is reachable we use its catalog to translate
+// each printed hex into the matching brand-named filament. Falls back
+// silently to hexToName when the sibling is unreachable or has no match.
+
+let _filamentCatalogCache = null;
+let _filamentCatalogTime = 0;
+const FILAMENT_CATALOG_TTL_MS = 5 * 60 * 1000;
+
+async function fetchFilamentCatalog() {
+  const now = Date.now();
+  if (_filamentCatalogCache && (now - _filamentCatalogTime) < FILAMENT_CATALOG_TTL_MS) {
+    return _filamentCatalogCache;
+  }
+  try {
+    if (!filamentAvailable || !filamentPublicUrl) return [];
+    const res = await fetch(`${filamentPublicUrl}/api/filaments`, { credentials: 'include' });
+    if (!res.ok) return [];
+    const list = await res.json();
+    _filamentCatalogCache = Array.isArray(list) ? list : [];
+    _filamentCatalogTime  = now;
+    return _filamentCatalogCache;
+  } catch { return []; }
+}
+
+function _normHex(s) {
+  if (!s) return null;
+  let h = String(s).trim().toLowerCase();
+  if (!h.startsWith('#')) h = '#' + h;
+  if (h.length === 4) h = '#' + h[1] + h[1] + h[2] + h[2] + h[3] + h[3];
+  return /^#[0-9a-f]{6}$/.test(h) ? h : null;
+}
+function _normKey(s) {
+  return String(s || '').toLowerCase().replace(/[\s_\-]+/g, '');
+}
+// Tie-break: (brand+type) discriminator count → in-stock → lowest id.
+function matchFilamentInCatalog(query, catalog) {
+  const target = _normHex(query?.color);
+  if (!target || !Array.isArray(catalog)) return null;
+  const candidates = catalog.filter(f => _normHex(f.colorHex) === target);
+  if (!candidates.length) return null;
+  if (candidates.length === 1) return candidates[0];
+  const qBrand = _normKey(query.brand);
+  const qType  = _normKey(query.type);
+  function score(f) {
+    const bm = qBrand && _normKey(f.brand) === qBrand;
+    const tm = qType  && _normKey(f.type)  === qType;
+    return [(bm ? 1 : 0) + (tm ? 1 : 0), f.inStock ? 1 : 0, -f.id];
+  }
+  let best = candidates[0], bs = score(best);
+  for (let i = 1; i < candidates.length; i++) {
+    const s = score(candidates[i]);
+    if (s[0] > bs[0] ||
+        (s[0] === bs[0] && s[1] > bs[1]) ||
+        (s[0] === bs[0] && s[1] === bs[1] && s[2] > bs[2])) {
+      best = candidates[i]; bs = s;
+    }
+  }
+  return best;
+}
+
 function renderTagsPills(tags) {
   if (!tags) return '';
   const list = tags.split(',').map(t => t.trim()).filter(Boolean);
@@ -1921,15 +1991,22 @@ async function confirmSchedulePrint() {
       startISO = new Date(`${d}T${t || '08:00'}:00`).toISOString();
     }
 
+    // Best-effort: enrich color names from filament-manager. Falls back to
+    // hexToName when the sibling app is unreachable or has no matching hex.
+    const filamentCatalog = await fetchFilamentCatalog().catch(() => []);
+
     const plates = parsed.plates.map((pl, i) => {
       if (!document.querySelector(`[data-sp-check="${i}"]`)?.checked) return null;
       const isDual = pl.isDualExtruder || (pl.nozzleCount || 1) >= 2;
       const colors = (pl.filaments || []).map(f => {
         const profile = parsed.filamentProfiles?.[f.id - 1];
+        const hex   = f.color || '#888888';
+        const brand = profile?.vendor && profile.vendor !== 'Generic' ? profile.vendor : '';
+        const fmMatch = matchFilamentInCatalog({ color: hex, brand, type: f.type }, filamentCatalog);
         return {
-          color: f.color || '#888888',
-          name: hexToName(f.color || '#888888'),
-          brand: profile?.vendor && profile.vendor !== 'Generic' ? profile.vendor : '',
+          color: hex,
+          name: fmMatch?.colorName || hexToName(hex),
+          brand: fmMatch?.brand || brand,
           extruder: isDual && f.extruder ? (f.extruder === 1 ? 'L' : 'R') : null,
         };
       });
