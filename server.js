@@ -9,6 +9,9 @@ const { getDb, getSetting, setSetting, getAllSettings } = require('./db');
 const calc = require('./calc');
 const { parse3mf, extractThumbnails } = require('./parse3mf');
 const sharedAuth = require('./shared-auth');
+const { readReleaseInfo } = require('./lib/release-info');
+
+const deployInfo = readReleaseInfo(__dirname);
 
 const UPLOADS_DIR = path.join(__dirname, 'data', 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -901,6 +904,7 @@ app.get('/api/config', (_req, res) => {
     appId: 'project-calculator',
     publicUrl: process.env.PUBLIC_URL || null,
     sharedAuth: sharedAuth.isEnabled(),
+    deploy: deployInfo,
   });
 });
 

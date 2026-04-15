@@ -720,6 +720,11 @@ body {
   justify-content: flex-end;
   gap: 8px;
 }
+.modal-footer.settings-footer { justify-content: space-between; align-items: center; }
+.app-version-block { display: flex; flex-direction: column; gap: 2px; }
+.app-version { font-size: 11px; color: var(--text-muted); }
+.app-deploy { font-size: 11px; color: var(--text-muted); font-family: monospace; }
+.app-deploy:empty { display: none; }
 
 /* ================================================================== */
 /*  Form elements                                                      */

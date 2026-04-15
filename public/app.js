@@ -2179,3 +2179,15 @@ document.addEventListener('drop', e => {
 /*  Init                                                               */
 /* ================================================================== */
 loadAll();
+
+(async () => {
+  try {
+    const config = await GET('/api/config');
+    const v = document.getElementById('app-version');
+    if (v && config.version) v.textContent = `v${config.version}`;
+    const d = document.getElementById('app-deploy');
+    if (d && config.deploy) {
+      d.textContent = `${config.deploy.branch}.${config.deploy.sha} (${config.deploy.timestamp})`;
+    }
+  } catch (_) { /* ignore */ }
+})();
