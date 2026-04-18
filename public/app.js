@@ -1651,10 +1651,10 @@ async function fetchFilamentCatalog() {
     return _filamentCatalogCache;
   }
   try {
-    if (!filamentAvailable || !filamentPublicUrl) return [];
-    const res = await fetch(`${filamentPublicUrl}/api/filaments`, { credentials: 'include' });
-    if (!res.ok) return [];
-    const list = await res.json();
+    // Use the server-side proxy which fetches from the filament-manager via
+    // shared-auth. Direct browser-to-filament-manager requests fail because
+    // of cross-origin restrictions (no CORS, auth cookies don't travel).
+    const list = await GET('/api/filament-catalog');
     _filamentCatalogCache = Array.isArray(list) ? list : [];
     _filamentCatalogTime  = now;
     return _filamentCatalogCache;

@@ -917,6 +917,24 @@ app.get('/api/discover', async (_req, res) => {
   res.json({ sharedAuth: sharedAuth.isEnabled(), apps });
 });
 
+// Server-side proxy for the filament-manager catalog. The browser cannot fetch
+// the sibling app directly (cross-origin, no CORS, auth cookies don't travel).
+app.get('/api/filament-catalog', async (req, res) => {
+  const filamentUrl = process.env.FILAMENT_URL || '';
+  if (!filamentUrl) return res.json([]);
+  try {
+    const headers = {};
+    const setCookie = sharedAuth.createSharedCookie('catalog-proxy');
+    if (setCookie) headers.Cookie = setCookie.split(';')[0];
+    const r = await fetch(`${filamentUrl}/api/filaments`, { headers });
+    if (!r.ok) return res.json([]);
+    const list = await r.json();
+    res.json(Array.isArray(list) ? list : []);
+  } catch {
+    res.json([]);
+  }
+});
+
 /* ------------------------------------------------------------------ */
 /*  Start server                                                       */
 /* ------------------------------------------------------------------ */
