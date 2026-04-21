@@ -1080,18 +1080,27 @@ async function confirm3mfImport() {
   saveBtn.disabled = true;
   saveBtn.textContent = 'Importing...';
 
+  // Best-effort: enrich color names from filament-manager. Falls back to
+  // hexToName when the sibling app is unreachable or has no matching hex.
+  const filamentCatalog = await fetchFilamentCatalog().catch(() => []);
+
   const platesToImport = [];
   for (let i = 0; i < import3mfData.plates.length; i++) {
     const check = document.querySelector(`[data-import-check="${i}"]`);
     if (!check?.checked) continue;
     const pl = import3mfData.plates[i];
-    // Build colors from filament data
+    // Build colors from filament data — same catalog-match pattern as
+    // the planner-dispatch path below so imported plates carry the
+    // branded name/brand instead of a raw ntc fallback.
     const colors = pl.filaments.map(f => {
       const profile = import3mfData.filamentProfiles?.[f.id - 1];
+      const hex   = f.color || '#888888';
+      const brand = profile?.vendor && profile.vendor !== 'Generic' ? profile.vendor : '';
+      const fmMatch = matchFilamentInCatalog({ color: hex, brand, type: f.type }, filamentCatalog);
       return {
-        color: f.color || '#888888',
-        name: hexToName(f.color || '#888888'),
-        brand: profile?.vendor && profile.vendor !== 'Generic' ? profile.vendor : '',
+        color: hex,
+        name: fmMatch?.colorName || hexToName(hex),
+        brand: fmMatch?.brand || brand,
       };
     });
     platesToImport.push({
