@@ -67,6 +67,27 @@
     </div>
   </div>
 
+  <!-- Generic dialog modal (alert / confirm / prompt) -->
+  <div class="modal-overlay" id="dialog-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="dialog-modal-title">Notice</h2>
+      </div>
+      <div class="modal-body">
+        <p id="dialog-modal-message" class="dialog-message"></p>
+        <div id="dialog-modal-input-wrap" hidden>
+          <label id="dialog-modal-input-label" for="dialog-modal-input">Value</label>
+          <input type="text" id="dialog-modal-input">
+          <div id="dialog-modal-input-error" class="dialog-input-error" hidden></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="dialog-modal-cancel" type="button">Cancel</button>
+        <button class="btn btn-primary" id="dialog-modal-ok" type="button">OK</button>
+      </div>
+    </div>
+  </div>
+
   <!-- New/Edit Project Modal -->
   <div class="modal-overlay" id="project-modal">
     <div class="modal">

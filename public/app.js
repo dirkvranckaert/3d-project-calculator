@@ -89,6 +89,118 @@ document.addEventListener('keydown', e => {
 });
 
 /* ================================================================== */
+/*  Centered dialogs — showAlert / showConfirm / showPrompt            */
+/* ================================================================== */
+//
+// Reuse the single #dialog-modal shell in index.html. The three helpers
+// inject title/message/buttons/input and resolve on OK / Cancel / Esc /
+// overlay-click (alert-only).  Replaces native alert() / confirm() /
+// prompt() so the page doesn't break PWA/mobile flows.
+
+function _dialogEls() {
+  return {
+    overlay: document.getElementById('dialog-modal'),
+    title:   document.getElementById('dialog-modal-title'),
+    msg:     document.getElementById('dialog-modal-message'),
+    wrap:    document.getElementById('dialog-modal-input-wrap'),
+    input:   document.getElementById('dialog-modal-input'),
+    err:     document.getElementById('dialog-modal-input-error'),
+    cancel:  document.getElementById('dialog-modal-cancel'),
+    ok:      document.getElementById('dialog-modal-ok'),
+  };
+}
+
+// Shared runner — variant is one of 'alert' | 'confirm' | 'prompt'.
+function _runDialog({ variant, title, message, okText, cancelText, label, placeholder, initialValue, validate }) {
+  return new Promise(resolve => {
+    const e = _dialogEls();
+    e.title.textContent   = title   || (variant === 'alert' ? 'Notice' : variant === 'confirm' ? 'Confirm' : 'Enter value');
+    e.msg.textContent     = message || '';
+    e.ok.textContent      = okText  || 'OK';
+    e.cancel.textContent  = cancelText || 'Cancel';
+    e.cancel.style.display = variant === 'alert' ? 'none' : '';
+    if (variant === 'prompt') {
+      e.wrap.hidden = false;
+      e.err.hidden = true;
+      e.err.textContent = '';
+      if (label) {
+        document.getElementById('dialog-modal-input-label').textContent = label;
+        document.getElementById('dialog-modal-input-label').style.display = '';
+      } else {
+        document.getElementById('dialog-modal-input-label').style.display = 'none';
+      }
+      e.input.value = initialValue != null ? String(initialValue) : '';
+      e.input.placeholder = placeholder || '';
+      setTimeout(() => { e.input.focus(); e.input.select(); }, 0);
+    } else {
+      e.wrap.hidden = true;
+    }
+
+    function cleanup() {
+      e.ok.removeEventListener('click', onOk);
+      e.cancel.removeEventListener('click', onCancel);
+      e.overlay.removeEventListener('click', onOverlay);
+      document.removeEventListener('keydown', onKey);
+      e.input.removeEventListener('keydown', onInputKey);
+      closeModal('dialog-modal');
+    }
+    function resolveWith(v) { cleanup(); resolve(v); }
+
+    function onOk() {
+      if (variant === 'prompt') {
+        const v = e.input.value;
+        if (validate) {
+          const err = validate(v);
+          if (err) { e.err.hidden = false; e.err.textContent = err; return; }
+        }
+        resolveWith(v);
+      } else if (variant === 'confirm') {
+        resolveWith(true);
+      } else {
+        resolveWith();
+      }
+    }
+    function onCancel() {
+      if (variant === 'confirm') resolveWith(false);
+      else if (variant === 'prompt') resolveWith(null);
+      else resolveWith();
+    }
+    function onOverlay(ev) {
+      if (ev.target !== e.overlay) return;
+      // Alert-only: overlay click dismisses. Confirm/prompt require an
+      // explicit button press so an accidental click doesn't lose data.
+      if (variant === 'alert') { ev.stopPropagation(); resolveWith(); }
+    }
+    function onKey(ev) {
+      if (ev.key === 'Escape') { ev.stopPropagation(); onCancel(); }
+    }
+    function onInputKey(ev) {
+      if (ev.key === 'Enter') { ev.preventDefault(); onOk(); }
+    }
+
+    e.ok.addEventListener('click', onOk);
+    e.cancel.addEventListener('click', onCancel);
+    e.overlay.addEventListener('click', onOverlay);
+    document.addEventListener('keydown', onKey);
+    if (variant === 'prompt') e.input.addEventListener('keydown', onInputKey);
+    openModal('dialog-modal');
+    if (variant !== 'prompt') setTimeout(() => e.ok.focus(), 0);
+  });
+}
+
+async function showAlert({ title, message }) {
+  return _runDialog({ variant: 'alert', title, message });
+}
+async function showConfirm({ title, message, okText, cancelText }) {
+  return _runDialog({ variant: 'confirm', title, message, okText, cancelText });
+}
+async function showPrompt({ title, message, label, initialValue, placeholder, okText, cancelText, validate }) {
+  return _runDialog({ variant: 'prompt', title, message, label, initialValue, placeholder, okText, cancelText, validate });
+}
+
+
+
+/* ================================================================== */
 /*  Routing (hash-based)                                               */
 /* ================================================================== */
 function navigate(hash) {
@@ -1017,8 +1129,8 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
 });
 
 async function deleteProject(id, e) {
-  // Use native confirm — inline popover doesn't work well from context menus
-  if (!confirm('Delete this project and all its plates?')) return;
+  // Centered dialog — inline popover isn't reliable from context menus.
+  if (!await showConfirm({ title: 'Delete project?', message: 'This will remove the project and all its plates. This cannot be undone.', okText: 'Delete' })) return;
   // Remove from UI immediately
   projects = projects.filter(p => p.id !== id);
   archivedCountCache = projects.filter(p => p.archived).length;
@@ -1039,8 +1151,21 @@ async function updateActualPrice(projectId, value) {
   await reloadSingleProject(projectId);
 }
 
-function promptActualPrice(projectId, current) {
-  const val = prompt('Enter actual sales price (incl. VAT):', current || '');
+async function promptActualPrice(projectId, current) {
+  const val = await showPrompt({
+    title: 'Actual sales price',
+    message: 'Enter the sales price (incl. VAT) you actually charged.',
+    label: 'Sales price (incl. VAT)',
+    placeholder: '0.00',
+    initialValue: current != null ? String(current) : '',
+    validate: v => {
+      const t = String(v || '').trim();
+      if (!t) return 'Price is required';
+      const n = parseFloat(t.replace(',', '.'));
+      if (!isFinite(n) || n < 0) return 'Enter a valid non-negative number';
+      return null;
+    },
+  });
   if (val !== null) updateActualPrice(projectId, val);
 }
 
@@ -1172,10 +1297,10 @@ function import3mf(projectId, input) {
     document.getElementById('btn-edit-dialog-save').style.display = '';
     if (xhr.status === 401) { import3mfBusy = false; window.location.replace('/login'); return; }
     let parsed;
-    try { parsed = JSON.parse(xhr.responseText); } catch { import3mfBusy = false; alert('Failed to parse server response'); closeModal('edit-dialog'); return; }
-    if (xhr.status >= 400) { import3mfBusy = false; alert('Failed to parse 3MF: ' + (parsed.error || '')); closeModal('edit-dialog'); return; }
-    if (!parsed.plates?.length) { import3mfBusy = false; alert('No plates found in this 3MF file.'); closeModal('edit-dialog'); return; }
-    if (!parsed.sliced) { import3mfBusy = false; alert('This 3MF is not sliced. Please slice it first.'); closeModal('edit-dialog'); return; }
+    try { parsed = JSON.parse(xhr.responseText); } catch { import3mfBusy = false; closeModal('edit-dialog'); showAlert({ title: 'Parse failed', message: 'Failed to parse server response.' }); return; }
+    if (xhr.status >= 400) { import3mfBusy = false; closeModal('edit-dialog'); showAlert({ title: 'Parse failed', message: 'Failed to parse 3MF: ' + (parsed.error || '') }); return; }
+    if (!parsed.plates?.length) { import3mfBusy = false; closeModal('edit-dialog'); showAlert({ title: 'Import 3MF', message: 'No plates found in this 3MF file.' }); return; }
+    if (!parsed.sliced) { import3mfBusy = false; closeModal('edit-dialog'); showAlert({ title: 'Import 3MF', message: 'This 3MF is not sliced. Please slice it first.' }); return; }
 
     // Store raw buffer for later file upload
     import3mfFile.buffer = await file.arrayBuffer();
@@ -1187,7 +1312,7 @@ function import3mf(projectId, input) {
 
   xhr.addEventListener('error', () => {
     import3mfBusy = false;
-    alert('Upload failed — network error');
+    showAlert({ title: 'Upload failed', message: 'Network error while uploading.' });
     closeModal('edit-dialog');
   });
 
@@ -1316,7 +1441,7 @@ async function confirm3mfImport() {
     });
   }
 
-  if (!platesToImport.length) { alert('No plates selected'); saveBtn.disabled = false; saveBtn.textContent = origText; importSaving = false; return; }
+  if (!platesToImport.length) { saveBtn.disabled = false; saveBtn.textContent = origText; importSaving = false; await showAlert({ title: 'Import 3MF', message: 'No plates selected.' }); return; }
 
   try {
     saveBtn.textContent = 'Creating plates...';
@@ -1336,7 +1461,7 @@ async function confirm3mfImport() {
     closeModal('edit-dialog');
     await reloadSingleProject(import3mfProjectId);
   } catch (err) {
-    alert('Import failed: ' + err.message);
+    await showAlert({ title: 'Import failed', message: err.message });
   } finally {
     importSaving = false;
     saveBtn.disabled = false;
@@ -2041,7 +2166,7 @@ async function confirmPlateMapping() {
     closeModal('edit-dialog');
     await reloadSingleProject(window._mapProjectId);
   } catch (e) {
-    alert('Failed to save: ' + e.message);
+    await showAlert({ title: 'Save failed', message: e.message });
   } finally {
     btn.disabled = false;
     btn.textContent = 'Save Mapping';
@@ -2052,7 +2177,7 @@ async function confirmPlateMapping() {
 /*  Schedule Print to Planner (cross-app)                              */
 /* ================================================================== */
 async function schedulePrint(projectId, fileId) {
-  if (!plannerAvailable || !plannerPublicUrl) { alert('PrintFarm Planner not available'); return; }
+  if (!plannerAvailable || !plannerPublicUrl) { await showAlert({ title: 'Scheduler', message: 'PrintFarm Planner not available.' }); return; }
 
   const project = projects.find(p => p.id === projectId);
   document.getElementById('edit-dialog-title').textContent = 'Schedule Print...';
@@ -2196,7 +2321,7 @@ async function confirmSchedulePrint() {
     if (mode !== 'first-available') {
       const d = document.getElementById('sp-date').value;
       const t = document.getElementById('sp-time').value;
-      if (!d) { alert('Start date required'); return; }
+      if (!d) { await showAlert({ title: 'Scheduler', message: 'Start date required.' }); return; }
       startISO = new Date(`${d}T${t || '08:00'}:00`).toISOString();
     }
 
@@ -2231,7 +2356,7 @@ async function confirmSchedulePrint() {
       };
     }).filter(Boolean);
 
-    if (!plates.length) { alert('No plates selected'); return; }
+    if (!plates.length) { await showAlert({ title: 'Scheduler', message: 'No plates selected.' }); return; }
 
     // Download the 3MF file now for sending to the planner
     btn.textContent = 'Downloading 3MF...';
@@ -2266,7 +2391,7 @@ async function confirmSchedulePrint() {
     document.getElementById('btn-edit-dialog-save').style.display = 'none';
     document.querySelector('#edit-dialog [data-close]').textContent = 'Close';
   } catch (e) {
-    alert('Schedule failed: ' + e.message);
+    await showAlert({ title: 'Scheduler', message: 'Schedule failed: ' + e.message });
   } finally {
     btn.disabled = false;
     btn.textContent = 'Schedule Jobs';
