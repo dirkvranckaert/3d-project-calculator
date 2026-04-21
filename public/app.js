@@ -463,6 +463,37 @@ function renderImagesSection(p) {
   </div>`;
 }
 
+async function extractAndUploadThumbnails(projectId, file3mfBlob) {
+  const gallery = document.getElementById(`image-gallery-${projectId}`);
+  const placeholderId = 'img-upload-' + Math.random().toString(36).slice(2, 8);
+  if (gallery) {
+    const ph = document.createElement('div');
+    ph.className = 'image-thumb image-thumb-uploading';
+    ph.id = placeholderId;
+    ph.innerHTML = `<div class="image-upload-spinner"></div><span class="image-upload-label">Extracting 3MF thumbnails...</span>`;
+    gallery.appendChild(ph);
+  }
+  try {
+    const buf = await file3mfBlob.arrayBuffer();
+    const res = await fetch(`/api/projects/${projectId}/images-from-3mf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file3mfBlob.name || '3mf.3mf' },
+      body: buf,
+    });
+    if (res.status === 401) { window.location.replace('/login'); return; }
+    if (!res.ok) {
+      const ph = document.getElementById(placeholderId);
+      if (ph) ph.innerHTML = `<span style="color:var(--danger);font-size:10px">Failed</span>`;
+      return;
+    }
+  } catch {
+    const ph = document.getElementById(placeholderId);
+    if (ph) ph.innerHTML = `<span style="color:var(--danger);font-size:10px">Failed</span>`;
+    return;
+  }
+  await reloadSingleProject(projectId);
+}
+
 async function uploadImage(projectId, input) {
   const files = input.files ? Array.from(input.files) : (input._files || []);
   if (!files.length) return;
@@ -2169,7 +2200,15 @@ document.addEventListener('drop', e => {
   if (!files?.length || !projectId) return;
 
   if (type === 'image') {
-    const fakeInput = { files, value: '', _files: Array.from(files) };
+    // Pre-check: a .3mf dropped onto the photo strip means "use the
+    // slicer thumbnails as reference images" — not an image upload.
+    const fileArr = Array.from(files);
+    const threeMf = fileArr.find(f => f.name.toLowerCase().endsWith('.3mf'));
+    if (threeMf) {
+      extractAndUploadThumbnails(projectId, threeMf);
+      return;
+    }
+    const fakeInput = { files, value: '', _files: fileArr };
     uploadImage(projectId, fakeInput);
   } else if (type === 'file') {
     const fakeInput = { files, value: '' };

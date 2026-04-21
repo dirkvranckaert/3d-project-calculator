@@ -2,7 +2,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const { parse3mf } = require('../parse3mf');
+const { parse3mf, extractThumbnails } = require('../parse3mf');
 
 const FIXTURES = path.join(__dirname, 'fixtures');
 const SLICED_3MF = path.join(FIXTURES, 'sliced_multiplate.3mf');
@@ -123,5 +123,28 @@ describe('parse3mf', () => {
     test('filament profiles extracted from project_settings', () => {
       expect(result.filamentProfiles.length).toBeGreaterThanOrEqual(2);
     });
+  });
+});
+
+
+describe('extractThumbnails', () => {
+  (hasSliced ? test : test.skip)('extracts one PNG buffer per plate from a sliced 3MF', () => {
+    const buf = fs.readFileSync(SLICED_3MF);
+    const thumbs = extractThumbnails(buf);
+    // Sliced fixture has 4 plates, each with a plate_N.png thumbnail.
+    expect(thumbs.length).toBeGreaterThanOrEqual(1);
+    expect(thumbs.length).toBeLessThanOrEqual(4);
+    for (const t of thumbs) {
+      expect(Buffer.isBuffer(t.buffer)).toBe(true);
+      expect(t.buffer.length).toBeGreaterThan(100);
+      expect(t.filename).toMatch(/^plate_\d+\.png$/);
+      expect(typeof t.plateIndex).toBe('number');
+    }
+  });
+
+  (hasSliced ? test : test.skip)('accepts a file path as well as a Buffer', () => {
+    const a = extractThumbnails(SLICED_3MF);
+    const b = extractThumbnails(fs.readFileSync(SLICED_3MF));
+    expect(a.length).toBe(b.length);
   });
 });

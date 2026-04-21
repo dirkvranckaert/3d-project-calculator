@@ -793,6 +793,44 @@ app.post('/api/projects/:projectId/import-3mf', (req, res) => {
   res.status(201).json(enrichProject(db, updated));
 });
 
+// Extract 3MF thumbnails and insert them as project images. Does NOT create
+// a project_files row and does NOT parse plates — this is the "drag a 3MF
+// into the photos strip" shortcut for visual reference.
+app.post('/api/projects/:projectId/images-from-3mf', express.raw({ type: 'application/octet-stream', limit: '500mb' }), async (req, res) => {
+  const db = getDb();
+  const pid = req.params.projectId;
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!req.body || !req.body.length) return res.status(400).json({ error: 'Empty body — no 3MF received' });
+
+  let thumbs;
+  try {
+    thumbs = extractThumbnails(req.body);
+  } catch (err) {
+    return res.status(400).json({ error: 'Failed to extract thumbnails: ' + err.message });
+  }
+  if (!thumbs.length) return res.json({ count: 0 });
+
+  const hasImages = db.prepare('SELECT COUNT(*) as c FROM project_images WHERE project_id = ?').get(pid).c;
+  const insImg = db.prepare('INSERT INTO project_images (project_id, filename, filepath, is_primary) VALUES (?,?,?,?)');
+  let sharp;
+  try { sharp = require('sharp'); } catch { sharp = null; }
+
+  let count = 0;
+  for (let i = 0; i < thumbs.length; i++) {
+    const imgId = crypto.randomBytes(8).toString('hex');
+    const storedName = `${imgId}.jpg`;
+    let imageBuffer = thumbs[i].buffer;
+    try {
+      if (sharp) imageBuffer = await sharp(thumbs[i].buffer).jpeg({ quality: 85 }).toBuffer();
+    } catch { /* fall back to raw PNG bytes if sharp chokes on the thumbnail */ }
+    fs.writeFileSync(path.join(UPLOADS_DIR, storedName), imageBuffer);
+    insImg.run(pid, thumbs[i].filename, storedName, (!hasImages && i === 0) ? 1 : 0);
+    count++;
+  }
+  res.status(201).json({ count });
+});
+
 /* ------------------------------------------------------------------ */
 /*  Price impact simulation                                            */
 /* ------------------------------------------------------------------ */

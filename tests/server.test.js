@@ -389,6 +389,62 @@ describe('Calculate API', () => {
   });
 });
 
+/* ================================================================== */
+/*  Images-from-3MF (thumbnails-only drop path)                        */
+/* ================================================================== */
+describe('POST /api/projects/:projectId/images-from-3mf', () => {
+  const SLICED_3MF = path.join(__dirname, 'fixtures', 'sliced_multiplate.3mf');
+  const hasFixture = fs.existsSync(SLICED_3MF);
+  let pid;
+
+  beforeAll(async () => {
+    const res = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'Thumb Test', customer_name: null, items_per_set: 1 });
+    pid = res.body.id;
+  });
+
+  (hasFixture ? test : test.skip)('creates project_images rows and zero file/plate rows', async () => {
+    const buf = fs.readFileSync(SLICED_3MF);
+    const res = await request(app)
+      .post(`/api/projects/${pid}/images-from-3mf`)
+      .set('Cookie', cookie)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Filename', 'sliced_multiplate.3mf')
+      .send(buf);
+    expect(res.status).toBe(201);
+    expect(res.body.count).toBeGreaterThan(0);
+
+    // Project should now carry images but NO files and NO plates.
+    const full = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    expect(full.status).toBe(200);
+    expect(Array.isArray(full.body.images)).toBe(true);
+    expect(full.body.images.length).toBe(res.body.count);
+    expect(full.body.plates || []).toHaveLength(0);
+
+    const files = await request(app).get(`/api/projects/${pid}/files`).set('Cookie', cookie);
+    expect(files.status).toBe(200);
+    expect(files.body).toHaveLength(0);
+  });
+
+  test('rejects empty body with 400', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${pid}/images-from-3mf`)
+      .set('Cookie', cookie)
+      .set('Content-Type', 'application/octet-stream')
+      .send(Buffer.alloc(0));
+    expect(res.status).toBe(400);
+  });
+
+  test('returns 404 for missing project', async () => {
+    const res = await request(app)
+      .post('/api/projects/999999/images-from-3mf')
+      .set('Cookie', cookie)
+      .set('Content-Type', 'application/octet-stream')
+      .send(Buffer.from('x'));
+    expect(res.status).toBe(404);
+  });
+});
+
 // Clean up
 afterAll(() => {
   if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
