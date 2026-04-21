@@ -935,6 +935,23 @@ app.get('/api/export', (_req, res) => {
 /* ------------------------------------------------------------------ */
 /*  Config endpoint                                                    */
 /* ------------------------------------------------------------------ */
+// Union of all tags across all projects — powers the autocomplete widget
+// on the project create/edit modal. Sorted case-insensitive, dedup is
+// case-sensitive (so "Gift" + "gift" both surface — operator can decide).
+app.get('/api/tags', (_req, res) => {
+  const db = getDb();
+  const rows = db.prepare("SELECT tags FROM projects WHERE tags IS NOT NULL AND tags != ''").all();
+  const set = new Set();
+  for (const r of rows) {
+    for (const raw of String(r.tags).split(',')) {
+      const t = raw.trim();
+      if (t) set.add(t);
+    }
+  }
+  const list = Array.from(set).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+  res.json(list);
+});
+
 app.get('/api/config', (_req, res) => {
   res.json({
     version: require('./package.json').version,

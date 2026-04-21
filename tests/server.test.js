@@ -390,6 +390,53 @@ describe('Calculate API', () => {
 });
 
 /* ================================================================== */
+/*  Tags API                                                           */
+/* ================================================================== */
+describe('GET /api/tags', () => {
+  let idsToClean = [];
+
+  beforeAll(async () => {
+    const seeds = [
+      { tags: 'gift, keychain' },
+      { tags: 'Gift, prototype,' },      // comma trailer + case variant
+      { tags: '  keychain ,  custom ' },  // whitespace
+      { tags: '' },                       // empty
+    ];
+    for (let i = 0; i < seeds.length; i++) {
+      const r = await request(app).post('/api/projects').set('Cookie', cookie)
+        .send({ name: 'Tag seed ' + i, items_per_set: 1, tags: seeds[i].tags });
+      idsToClean.push(r.body.id);
+    }
+  });
+
+  test('returns a deduped + case-insensitive sorted list', async () => {
+    const res = await request(app).get('/api/tags').set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    // "Gift" + "gift" should both survive (case-sensitive dedup); order is
+    // case-insensitive alphabetical so they sit next to each other.
+    expect(res.body).toEqual(expect.arrayContaining(['custom', 'keychain', 'prototype']));
+    // "keychain" must only appear once even though two projects seeded it.
+    expect(res.body.filter(t => t === 'keychain')).toHaveLength(1);
+    // Check case-insensitive sort: lowercase 'custom' before 'gift' before 'keychain' before 'prototype'.
+    const lower = res.body.map(t => t.toLowerCase());
+    const sorted = lower.slice().sort();
+    expect(lower).toEqual(sorted);
+  });
+
+  test('requires auth', async () => {
+    const res = await request(app).get('/api/tags');
+    expect(res.status).toBe(401);
+  });
+
+  afterAll(async () => {
+    for (const id of idsToClean) {
+      await request(app).delete('/api/projects/' + id).set('Cookie', cookie);
+    }
+  });
+});
+
+/* ================================================================== */
 /*  Images-from-3MF (thumbnails-only drop path)                        */
 /* ================================================================== */
 describe('POST /api/projects/:projectId/images-from-3mf', () => {

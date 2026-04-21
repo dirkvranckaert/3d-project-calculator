@@ -82,7 +82,11 @@
         <label>Items per Set</label>
         <input type="number" id="proj-items-per-set" min="1" value="1">
         <label>Tags</label>
-        <input type="text" id="proj-tags" placeholder="e.g. keychain, gift, custom (comma separated)">
+        <div class="tags-input" id="proj-tags-widget">
+          <div class="tags-pills" id="proj-tags-pills"></div>
+          <input type="text" id="proj-tags-entry" class="tags-entry" placeholder="Add tag...">
+          <ul class="tags-suggestions" id="proj-tags-suggestions" hidden></ul>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn" data-close="project-modal">Cancel</button>

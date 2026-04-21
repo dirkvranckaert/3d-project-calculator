@@ -808,6 +808,174 @@ async function patchPlateField(projectId, plateId, field, value) {
 }
 
 /* ================================================================== */
+/*  Tags widget — pure helpers + DOM controller                        */
+/* ================================================================== */
+
+// Pure helpers — DOM-free so they can be unit-tested in Node.
+function parseTagsString(str) {
+  return String(str || '').split(',').map(t => t.trim()).filter(Boolean);
+}
+function serializePills(pills) {
+  return (pills || []).map(t => t.trim()).filter(Boolean).join(', ');
+}
+function commitPill(pills, raw) {
+  const t = String(raw || '').trim();
+  if (!t) return pills.slice();
+  // Case-insensitive dedupe.
+  const lower = t.toLowerCase();
+  if (pills.some(p => p.toLowerCase() === lower)) return pills.slice();
+  return pills.concat([t]);
+}
+function removePill(pills, index) {
+  if (index < 0 || index >= pills.length) return pills.slice();
+  const copy = pills.slice();
+  copy.splice(index, 1);
+  return copy;
+}
+function filterSuggestions(allTags, pills, query) {
+  const q = String(query || '').toLowerCase().trim();
+  const used = new Set((pills || []).map(p => p.toLowerCase()));
+  const base = (allTags || []).filter(t => !used.has(t.toLowerCase()));
+  if (!q) return base;
+  return base.filter(t => t.toLowerCase().includes(q));
+}
+
+// DOM controller. Wraps the widget at #proj-tags-widget and exposes get/set.
+const tagsWidget = (function createTagsWidget() {
+  let pills = [];
+  let allTags = [];
+  let highlightedIdx = 0;
+
+  function container()   { return document.getElementById('proj-tags-widget'); }
+  function pillsEl()     { return document.getElementById('proj-tags-pills'); }
+  function entryEl()     { return document.getElementById('proj-tags-entry'); }
+  function suggestEl()   { return document.getElementById('proj-tags-suggestions'); }
+
+  function renderPills() {
+    const el = pillsEl();
+    if (!el) return;
+    el.innerHTML = pills.map((t, i) =>
+      `<span class="tag-pill-edit" data-pill-idx="${i}">${esc(t)}<button type="button" aria-label="Remove" data-pill-remove="${i}">&times;</button></span>`
+    ).join('');
+  }
+
+  function renderSuggestions() {
+    const el = suggestEl();
+    const entry = entryEl();
+    if (!el || !entry) return;
+    const list = filterSuggestions(allTags, pills, entry.value);
+    if (!list.length) { el.hidden = true; el.innerHTML = ''; return; }
+    if (highlightedIdx >= list.length) highlightedIdx = 0;
+    el.innerHTML = list.map((t, i) =>
+      `<li data-suggest-idx="${i}" class="${i === highlightedIdx ? 'active' : ''}">${esc(t)}</li>`
+    ).join('');
+    el.hidden = false;
+  }
+
+  async function refreshCatalog() {
+    try { allTags = await GET('/api/tags'); }
+    catch { allTags = []; }
+  }
+
+  function currentSuggestionList() {
+    const entry = entryEl();
+    return filterSuggestions(allTags, pills, entry ? entry.value : '');
+  }
+
+  function commitFromEntry(value) {
+    pills = commitPill(pills, value);
+    const entry = entryEl();
+    if (entry) entry.value = '';
+    highlightedIdx = 0;
+    renderPills();
+    renderSuggestions();
+  }
+
+  function bind() {
+    const c = container();
+    if (!c || c.dataset.bound === '1') return;
+    c.dataset.bound = '1';
+
+    c.addEventListener('click', e => {
+      const rm = e.target.closest('[data-pill-remove]');
+      if (rm) {
+        const idx = parseInt(rm.dataset.pillRemove, 10);
+        pills = removePill(pills, idx);
+        renderPills();
+        renderSuggestions();
+        const entry = entryEl();
+        if (entry) entry.focus();
+        return;
+      }
+      const sug = e.target.closest('[data-suggest-idx]');
+      if (sug) {
+        const list = currentSuggestionList();
+        const idx = parseInt(sug.dataset.suggestIdx, 10);
+        if (list[idx]) commitFromEntry(list[idx]);
+        const entry = entryEl();
+        if (entry) entry.focus();
+        return;
+      }
+      // Click anywhere inside the widget focuses the entry input.
+      if (e.target === c || e.target === pillsEl()) {
+        const entry = entryEl();
+        if (entry) entry.focus();
+      }
+    });
+
+    const entry = entryEl();
+    if (!entry) return;
+
+    entry.addEventListener('input', () => {
+      highlightedIdx = 0;
+      renderSuggestions();
+    });
+    entry.addEventListener('focus', renderSuggestions);
+    entry.addEventListener('blur', () => {
+      // Delay so suggestion clicks register before we hide the list.
+      setTimeout(() => { const el = suggestEl(); if (el) el.hidden = true; }, 150);
+    });
+    entry.addEventListener('keydown', e => {
+      const list = currentSuggestionList();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (list.length && entry.value) {
+          commitFromEntry(list[highlightedIdx] || entry.value);
+        } else if (entry.value.trim()) {
+          commitFromEntry(entry.value);
+        }
+      } else if (e.key === ',') {
+        e.preventDefault();
+        if (entry.value.trim()) commitFromEntry(entry.value);
+      } else if (e.key === 'Backspace' && entry.value === '' && pills.length) {
+        e.preventDefault();
+        pills = removePill(pills, pills.length - 1);
+        renderPills();
+        renderSuggestions();
+      } else if (e.key === 'ArrowDown') {
+        if (list.length) { e.preventDefault(); highlightedIdx = Math.min(highlightedIdx + 1, list.length - 1); renderSuggestions(); }
+      } else if (e.key === 'ArrowUp') {
+        if (list.length) { e.preventDefault(); highlightedIdx = Math.max(highlightedIdx - 1, 0); renderSuggestions(); }
+      } else if (e.key === 'Escape') {
+        const el = suggestEl(); if (el) el.hidden = true;
+      }
+    });
+  }
+
+  return {
+    get() { return pills.slice(); },
+    set(next) {
+      pills = Array.isArray(next) ? next.slice() : [];
+      highlightedIdx = 0;
+      bind();
+      refreshCatalog().then(() => { renderPills(); renderSuggestions(); });
+      renderPills();
+      renderSuggestions();
+    },
+  };
+})();
+
+/* ================================================================== */
 /*  Project actions                                                    */
 /* ================================================================== */
 function openProjectModal(id = null) {
@@ -817,7 +985,8 @@ function openProjectModal(id = null) {
   document.getElementById('proj-name').value = p?.name || '';
   document.getElementById('proj-customer').value = p?.customer_name || '';
   document.getElementById('proj-items-per-set').value = p?.items_per_set || 1;
-  document.getElementById('proj-tags').value = p?.tags || '';
+  // Seed the tags widget with the project's existing tags (if any).
+  tagsWidget.set(parseTagsString(p?.tags || ''));
   openModal('project-modal');
   document.getElementById('proj-name').focus();
 }
@@ -827,7 +996,7 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
     name: document.getElementById('proj-name').value.trim(),
     customer_name: document.getElementById('proj-customer').value.trim() || null,
     items_per_set: parseInt(document.getElementById('proj-items-per-set').value) || 1,
-    tags: document.getElementById('proj-tags').value.trim(),
+    tags: serializePills(tagsWidget.get()),
   };
   if (!data.name) return;
   if (editingProjectId) {

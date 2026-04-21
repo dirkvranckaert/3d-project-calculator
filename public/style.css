@@ -1459,3 +1459,84 @@ select.inline-input { width: auto !important; max-width: 160px; text-align: left
   font-weight: 600; font-size: 13px;
   color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px;
 }
+
+/* ================================================================== */
+/*  Tags input (smart autocomplete widget)                             */
+/* ================================================================== */
+.tags-input {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.tags-input:focus-within {
+  border-color: var(--primary, #0f766e);
+  box-shadow: 0 0 0 2px rgba(15,118,110,.15);
+}
+.tags-pills {
+  display: contents;
+}
+.tags-input .tag-pill-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text);
+}
+.tags-input .tag-pill-edit button {
+  all: unset;
+  cursor: pointer;
+  padding: 0 6px;
+  font-size: 14px;
+  color: var(--text-muted);
+  line-height: 1;
+}
+.tags-input .tag-pill-edit button:hover { color: var(--danger, #dc2626); }
+.tags-entry {
+  flex: 1 1 120px;
+  min-width: 100px;
+  border: none;
+  outline: none;
+  padding: 4px;
+  font: inherit;
+  background: transparent;
+  color: var(--text);
+}
+.tags-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin: 4px 0 0;
+  padding: 4px 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 250;
+}
+.tags-suggestions[hidden] { display: none; }
+.tags-suggestions li {
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+.tags-suggestions li.active,
+.tags-suggestions li:hover {
+  background: var(--bg);
+}
