@@ -203,6 +203,22 @@ describe('applyProfitMargins', () => {
     const result = calc.applyProfitMargins(perItem, margins);
     expect(result.totalProfit).toBe(0);
   });
+
+  test('regression fence: processing margin still flows through pre/post processing as before', () => {
+    // Per Dirk's 2026-05-05 override: keep processing margin behaviour untouched.
+    // The settings-over-hardcoding decision means processingProfit MUST be a pure
+    // function of processing_profit_pct × processingCost — nothing forces it to 0.
+    const perItem = { materialCost: 0, processingCost: 2, electricityCost: 0, printerUsageCost: 0 };
+    const margins = { material_profit_pct: 0, processing_profit_pct: 100, electricity_profit_pct: 0, printer_cost_profit_pct: 0 };
+    const result = calc.applyProfitMargins(perItem, margins);
+    // 100% margin on €2 processing cost → €2 profit. NOT zero.
+    expect(result.processingProfit).toBeCloseTo(2, 6);
+    expect(result.totalProfit).toBeCloseTo(2, 6);
+
+    // And at 0% the user can dial it down themselves.
+    const zero = calc.applyProfitMargins(perItem, { ...margins, processing_profit_pct: 0 });
+    expect(zero.processingProfit).toBe(0);
+  });
 });
 
 /* ================================================================== */
@@ -228,6 +244,45 @@ describe('calculateExtraCosts', () => {
       { price_excl_vat: 1.00, quantity: 2 },
     ];
     expect(calc.calculateExtraCosts(extras)).toBeCloseTo(3.50, 2);
+  });
+});
+
+/* ================================================================== */
+/*  calculateExtraHoursCost                                            */
+/* ================================================================== */
+describe('calculateExtraHoursCost', () => {
+  test('empty list returns 0', () => {
+    expect(calc.calculateExtraHoursCost([])).toBe(0);
+  });
+
+  test('null/undefined returns 0', () => {
+    expect(calc.calculateExtraHoursCost(null)).toBe(0);
+    expect(calc.calculateExtraHoursCost(undefined)).toBe(0);
+  });
+
+  test('two rows summed: 2h*60 + 1h*40 = 160', () => {
+    const rows = [
+      { hours: 2, hourly_rate: 60 },
+      { hours: 1, hourly_rate: 40 },
+    ];
+    expect(calc.calculateExtraHoursCost(rows)).toBeCloseTo(160, 4);
+  });
+
+  test('non-numeric inputs are treated as 0 / skipped', () => {
+    const rows = [
+      { hours: 'oops', hourly_rate: 60 },
+      { hours: 1.5, hourly_rate: 'meh' },
+      { hours: 2, hourly_rate: 50 },
+    ];
+    // Only the third row contributes: 2 * 50 = 100
+    expect(calc.calculateExtraHoursCost(rows)).toBeCloseTo(100, 4);
+  });
+
+  test('per-project flat: result is independent of items_per_set caller', () => {
+    // The function itself does not see itemsPerSet — it returns a flat sum.
+    // This is the regression fence for the per-project-flat decision.
+    const rows = [{ hours: 3, hourly_rate: 60 }];
+    expect(calc.calculateExtraHoursCost(rows)).toBeCloseTo(180, 4);
   });
 });
 
@@ -327,6 +382,46 @@ describe('calculateFinalPricing', () => {
     // margin = 2.2975 / 3.99 * 100 = 57.58%
     expect(result.suggestedMarginPct).toBeGreaterThan(55);
     expect(result.suggestedMarginPct).toBeLessThan(60);
+  });
+
+  test('extraHoursCost adds to productionCost AND totalExclVat — no margin', () => {
+    const perItemCosts = { materialCost: 1, processingCost: 0.5, electricityCost: 0.2, printerUsageCost: 0.1, totalPerItem: 1.8 };
+    const profits = { totalProfit: 1 };
+    const baseOpts = {
+      perItemCosts,
+      profits,
+      extraCostsTotal: 0,
+      itemsPerSet: 1,
+      vatRate: 21,
+      priceRounding: 0.99,
+    };
+    const without = calc.calculateFinalPricing(baseOpts);
+    const withHours = calc.calculateFinalPricing({ ...baseOpts, extraHoursCost: 50 });
+
+    // Production cost picks up the full €50.
+    expect(withHours.productionCost - without.productionCost).toBeCloseTo(50, 6);
+    // Total excl. VAT picks up exactly €50 too — no margin applied on top.
+    expect(withHours.totalExclVat - without.totalExclVat).toBeCloseTo(50, 6);
+    // Returned breakdown carries the value through.
+    expect(withHours.extraHoursCost).toBeCloseTo(50, 6);
+    // Suggested-profit math reflects "no margin on the 50":
+    //   suggestedProfitAmount = suggestedExclVat - productionCost
+    expect(withHours.suggestedProfitAmount)
+      .toBeCloseTo(withHours.suggestedExclVat - withHours.productionCost, 6);
+  });
+
+  test('extraHoursCost defaults to 0 when not provided (back-compat)', () => {
+    const perItemCosts = { materialCost: 1, processingCost: 0, electricityCost: 0, printerUsageCost: 0, totalPerItem: 1 };
+    const profits = { totalProfit: 0 };
+    const result = calc.calculateFinalPricing({
+      perItemCosts, profits,
+      extraCostsTotal: 0,
+      itemsPerSet: 1,
+      vatRate: 21,
+      priceRounding: 0.99,
+    });
+    expect(result.extraHoursCost).toBe(0);
+    expect(result.productionCost).toBeCloseTo(1, 6);
   });
 });
 
@@ -431,6 +526,69 @@ describe('calculateProject', () => {
     const result = calc.calculateProject({ plates: [], extras: [], settings: defaultSettings, itemsPerSet: 1 });
     expect(result.perItemCosts.totalPerItem).toBe(0);
     expect(result.pricing.suggestedPrice).toBe(0);
+    expect(result.extraHoursCost).toBe(0);
+  });
+
+  test('calculateProject — extra hours add at cost, processing margin unchanged', () => {
+    const plates = [{
+      id: 1, name: 'Base',
+      print_time_minutes: 120, plastic_grams: 50,
+      items_per_plate: 1, risk_multiplier: 1,
+      pre_processing_minutes: 0, post_processing_minutes: 2,
+      printer_purchase_price: 812.43, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
+      material_price_per_kg: 17.38,
+    }];
+
+    const without = calc.calculateProject({
+      plates, extras: [], extraHours: [],
+      settings: defaultSettings, itemsPerSet: 1,
+    });
+    const withHours = calc.calculateProject({
+      plates, extras: [],
+      extraHours: [{ hours: 2, hourly_rate: 60 }],
+      settings: defaultSettings, itemsPerSet: 1,
+    });
+
+    // Extra-hours total surfaces in the breakdown.
+    expect(withHours.extraHoursCost).toBeCloseTo(120, 6);
+    expect(withHours.pricing.extraHoursCost).toBeCloseTo(120, 6);
+
+    // Production cost grew by exactly €120 (no scaling by items_per_set, no margin).
+    expect(withHours.pricing.productionCost - without.pricing.productionCost).toBeCloseTo(120, 6);
+    expect(withHours.pricing.totalExclVat - without.pricing.totalExclVat).toBeCloseTo(120, 6);
+
+    // Regression fence: processing margin still flows through the existing path.
+    // perItemCosts.processingCost > 0 (post=2min @ €40/h), and processing_profit_pct=100,
+    // so the processingProfit must be > 0 — proves the pre/post path is unchanged.
+    expect(without.perItemCosts.processingCost).toBeGreaterThan(0);
+    expect(without.profits.processingProfit).toBeCloseTo(without.perItemCosts.processingCost, 6);
+  });
+
+  test('calculateProject — extra hours are flat per project, NOT scaled by items_per_set', () => {
+    // Confirms Dirk's 2026-05-05 override #2: hours × price, not hours × price × items_per_set.
+    const plates = [{
+      id: 1, name: 'Base',
+      print_time_minutes: 60, plastic_grams: 20,
+      items_per_plate: 1, risk_multiplier: 1,
+      pre_processing_minutes: 0, post_processing_minutes: 0,
+      printer_purchase_price: 812.43, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
+      material_price_per_kg: 17.38,
+    }];
+
+    const single = calc.calculateProject({
+      plates, extras: [],
+      extraHours: [{ hours: 1, hourly_rate: 60 }],
+      settings: defaultSettings, itemsPerSet: 1,
+    });
+    const set5 = calc.calculateProject({
+      plates, extras: [],
+      extraHours: [{ hours: 1, hourly_rate: 60 }],
+      settings: defaultSettings, itemsPerSet: 5,
+    });
+
+    // The contribution from extra hours is identical in both — €60, not €60 × 5.
+    expect(single.extraHoursCost).toBeCloseTo(60, 6);
+    expect(set5.extraHoursCost).toBeCloseTo(60, 6);
   });
 });
 

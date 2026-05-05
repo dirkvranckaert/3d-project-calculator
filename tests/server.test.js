@@ -67,6 +67,8 @@ describe('Settings API', () => {
     expect(res.body.hourly_rate).toBe(40);
     expect(res.body.vat_rate).toBe(21);
     expect(res.body.electricity_price_kwh).toBe(0.40);
+    // New default: extra-uren default rate (Dirk's 2026-05-05 override = 60).
+    expect(res.body.extra_uren_default_rate).toBe(60);
   });
 
   test('PUT /api/settings/:key updates value', async () => {
@@ -230,6 +232,9 @@ describe('Projects API', () => {
     expect(res.body.extras.length).toBeGreaterThanOrEqual(1);
     // Should have calculation even with no plates
     expect(res.body.calculation).toBeDefined();
+    // New: extra_hours array shipped (empty by default).
+    expect(Array.isArray(res.body.extra_hours)).toBe(true);
+    expect(res.body.extra_hours).toHaveLength(0);
     projectId = res.body.id;
   });
 
@@ -357,6 +362,148 @@ describe('Export API', () => {
     expect(res.body).toHaveProperty('extra_cost_items');
     expect(res.body).toHaveProperty('projects');
     expect(res.body).toHaveProperty('exported_at');
+  });
+});
+
+/* ================================================================== */
+/*  Project Extra Hours API                                            */
+/* ================================================================== */
+describe('Project Extra Hours API', () => {
+  let pid;
+
+  beforeAll(async () => {
+    const res = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'Extra-Hours Test', items_per_set: 1 });
+    pid = res.body.id;
+  });
+
+  afterAll(async () => {
+    await request(app).delete(`/api/projects/${pid}`).set('Cookie', cookie);
+  });
+
+  test('PUT empty list returns 200 with zero rows', async () => {
+    const res = await request(app).put(`/api/projects/${pid}/extra-hours`).set('Cookie', cookie).send([]);
+    expect(res.status).toBe(200);
+    expect(res.body.extra_hours).toEqual([]);
+    expect(res.body.calculation.extraHoursCost).toBe(0);
+  });
+
+  test('PUT 2 rows persists, ordered, and surfaces in calculation at cost', async () => {
+    const res = await request(app).put(`/api/projects/${pid}/extra-hours`).set('Cookie', cookie).send([
+      { description: 'Design', hours: 2, hourly_rate: 60 },
+      { description: 'Consultation', hours: 1, hourly_rate: 80 },
+    ]);
+    expect(res.status).toBe(200);
+    expect(res.body.extra_hours).toHaveLength(2);
+    expect(res.body.extra_hours[0].description).toBe('Design');
+    expect(res.body.extra_hours[0].sort_order).toBe(0);
+    expect(res.body.extra_hours[1].sort_order).toBe(1);
+    // €60 * 2 + €80 * 1 = €200, no margin.
+    expect(res.body.calculation.extraHoursCost).toBeCloseTo(200, 4);
+    expect(res.body.calculation.pricing.extraHoursCost).toBeCloseTo(200, 4);
+  });
+
+  test('PUT replaces (not appends): 2 rows -> 1 row leaves only the new one', async () => {
+    const res = await request(app).put(`/api/projects/${pid}/extra-hours`).set('Cookie', cookie).send([
+      { description: 'Hand-finishing', hours: 0.5, hourly_rate: 60 },
+    ]);
+    expect(res.status).toBe(200);
+    expect(res.body.extra_hours).toHaveLength(1);
+    expect(res.body.extra_hours[0].description).toBe('Hand-finishing');
+    expect(res.body.calculation.extraHoursCost).toBeCloseTo(30, 4);
+  });
+
+  test('PUT drops rows with empty description (mirrors qty=0 skip on /extras)', async () => {
+    const res = await request(app).put(`/api/projects/${pid}/extra-hours`).set('Cookie', cookie).send([
+      { description: 'Real work', hours: 1, hourly_rate: 60 },
+      { description: '', hours: 5, hourly_rate: 999 },         // dropped
+      { description: '   ', hours: 5, hourly_rate: 999 },      // dropped (whitespace-only)
+    ]);
+    expect(res.status).toBe(200);
+    expect(res.body.extra_hours).toHaveLength(1);
+    expect(res.body.calculation.extraHoursCost).toBeCloseTo(60, 4);
+  });
+
+  test('PUT clamps negative hours/rate to zero', async () => {
+    const res = await request(app).put(`/api/projects/${pid}/extra-hours`).set('Cookie', cookie).send([
+      { description: 'Bad hours', hours: -3, hourly_rate: 60 },
+      { description: 'Bad rate', hours: 2, hourly_rate: -10 },
+    ]);
+    expect(res.status).toBe(200);
+    expect(res.body.extra_hours[0].hours).toBe(0);
+    expect(res.body.extra_hours[1].hourly_rate).toBe(0);
+    expect(res.body.calculation.extraHoursCost).toBe(0);
+  });
+
+  test('PUT truncates description to 200 chars', async () => {
+    const longDesc = 'x'.repeat(500);
+    const res = await request(app).put(`/api/projects/${pid}/extra-hours`).set('Cookie', cookie).send([
+      { description: longDesc, hours: 1, hourly_rate: 60 },
+    ]);
+    expect(res.status).toBe(200);
+    expect(res.body.extra_hours[0].description.length).toBe(200);
+  });
+
+  test('GET /api/projects/:id reflects the persisted extra-hours list', async () => {
+    // Seed a known list, then GET fresh
+    await request(app).put(`/api/projects/${pid}/extra-hours`).set('Cookie', cookie).send([
+      { description: 'A', hours: 1, hourly_rate: 60 },
+      { description: 'B', hours: 2, hourly_rate: 50 },
+    ]);
+    const res = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.body.extra_hours).toHaveLength(2);
+    expect(res.body.extra_hours.map(r => r.description)).toEqual(['A', 'B']);
+    expect(res.body.calculation.extraHoursCost).toBeCloseTo(160, 4);
+  });
+
+  test('PUT on a non-existent project returns 404', async () => {
+    const res = await request(app).put('/api/projects/9999999/extra-hours').set('Cookie', cookie).send([]);
+    expect(res.status).toBe(404);
+  });
+
+  test('PUT requires auth', async () => {
+    const res = await request(app).put(`/api/projects/${pid}/extra-hours`).send([]);
+    expect(res.status).toBe(401);
+  });
+
+  test('regression: extra-hours pricing does NOT scale by items_per_set', async () => {
+    // Set items_per_set to 5, add €60 of extra hours → contribution stays €60, not €300.
+    await request(app).put(`/api/projects/${pid}`).set('Cookie', cookie).send({
+      name: 'Extra-Hours Test', customer_name: null, items_per_set: 5,
+      tags: '', notes: null, actual_sales_price: null,
+    });
+    const res = await request(app).put(`/api/projects/${pid}/extra-hours`).set('Cookie', cookie).send([
+      { description: 'Flat', hours: 1, hourly_rate: 60 },
+    ]);
+    expect(res.body.calculation.extraHoursCost).toBeCloseTo(60, 4);
+    expect(res.body.calculation.pricing.extraHoursCost).toBeCloseTo(60, 4);
+  });
+
+  // Round 2: the front-end converts H:MM strings to decimal hours BEFORE
+  // hitting the API. The DB schema stays decimal — we verify the contract.
+  test('PUT decimal 0.75 (front-end converts "0:45") round-trips at €60/h = €45', async () => {
+    const res = await request(app).put(`/api/projects/${pid}/extra-hours`).set('Cookie', cookie).send([
+      { description: '45-min hand-finishing', hours: 0.75, hourly_rate: 60 },
+    ]);
+    expect(res.status).toBe(200);
+    expect(res.body.extra_hours).toHaveLength(1);
+    expect(res.body.extra_hours[0].hours).toBeCloseTo(0.75, 6);
+    expect(res.body.calculation.extraHoursCost).toBeCloseTo(45, 4);
+  });
+
+  // Round 2: addExtraHourRow defaults new row to 1 hour. The PUT carrying that
+  // default must round-trip cleanly (acts as the front-end-to-back-end contract
+  // test for the new default; addExtraHourRow itself is DOM-bound).
+  test('PUT decimal 1 (default new-row hours) round-trips and applies default rate', async () => {
+    const res = await request(app).put(`/api/projects/${pid}/extra-hours`).set('Cookie', cookie).send([
+      { description: 'New hours', hours: 1, hourly_rate: 60 },
+    ]);
+    expect(res.status).toBe(200);
+    expect(res.body.extra_hours).toHaveLength(1);
+    expect(res.body.extra_hours[0].hours).toBe(1);
+    expect(res.body.extra_hours[0].hourly_rate).toBe(60);
+    expect(res.body.calculation.extraHoursCost).toBeCloseTo(60, 4);
   });
 });
 

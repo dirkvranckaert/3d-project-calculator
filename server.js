@@ -278,6 +278,11 @@ function enrichProject(db, project) {
     ORDER BY eci.name
   `).all(project.id);
 
+  // Project extra hours (design / consultation / hand-finishing)
+  const extraHours = db.prepare(
+    'SELECT * FROM project_extra_hours WHERE project_id = ? ORDER BY sort_order, id'
+  ).all(project.id);
+
   // Files & images
   const files = db.prepare('SELECT * FROM project_files WHERE project_id = ? ORDER BY uploaded_at DESC').all(project.id);
   const images = db.prepare('SELECT * FROM project_images WHERE project_id = ? ORDER BY is_primary DESC, uploaded_at ASC').all(project.id);
@@ -287,12 +292,13 @@ function enrichProject(db, project) {
   const calculation = calc.calculateProject({
     plates,
     extras,
+    extraHours,
     settings,
     itemsPerSet: project.items_per_set,
     actualSalesPrice: project.actual_sales_price,
   });
 
-  return { ...project, plates, extras, files, images, calculation };
+  return { ...project, plates, extras, extra_hours: extraHours, files, images, calculation };
 }
 
 app.get('/api/projects/archived-count', (_req, res) => {
@@ -343,11 +349,15 @@ function enrichProjectLite(db, project) {
     JOIN extra_cost_items eci ON pec.extra_cost_id = eci.id WHERE pec.project_id = ?
   `).all(project.id);
 
+  const extraHours = db.prepare(
+    'SELECT * FROM project_extra_hours WHERE project_id = ? ORDER BY sort_order, id'
+  ).all(project.id);
+
   const images = db.prepare('SELECT id, is_primary FROM project_images WHERE project_id = ? ORDER BY is_primary DESC LIMIT 1').all(project.id);
 
   const settings = getAllSettings(db);
   const calculation = calc.calculateProject({
-    plates, extras, settings,
+    plates, extras, extraHours, settings,
     itemsPerSet: project.items_per_set,
     actualSalesPrice: project.actual_sales_price,
   });
@@ -355,6 +365,12 @@ function enrichProjectLite(db, project) {
   return {
     ...project,
     plates: plates.map(p => ({ id: p.id, name: p.name, enabled: p.enabled })),
+    extra_hours: extraHours.map(e => ({
+      id: e.id,
+      description: e.description,
+      hours: e.hours,
+      hourly_rate: e.hourly_rate,
+    })),
     images,
     calculation,
   };
@@ -576,6 +592,38 @@ app.put('/api/projects/:projectId/extras', (req, res) => {
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
   if (!project) return res.status(404).json({ error: 'Not found' });
   res.json(enrichProject(db, project));
+});
+
+/* ------------------------------------------------------------------ */
+/*  Project Extra Hours API                                            */
+/* ------------------------------------------------------------------ */
+app.put('/api/projects/:projectId/extra-hours', (req, res) => {
+  const db = getDb();
+  const pid = req.params.projectId;
+  const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(pid);
+  if (!project) return res.status(404).json({ error: 'Not found' });
+
+  const items = Array.isArray(req.body) ? req.body : [];
+
+  db.prepare('DELETE FROM project_extra_hours WHERE project_id = ?').run(pid);
+  const ins = db.prepare(
+    'INSERT INTO project_extra_hours (project_id, description, hours, hourly_rate, sort_order) VALUES (?,?,?,?,?)'
+  );
+  let order = 0;
+  for (const it of items) {
+    const desc = String(it.description || '').trim();
+    if (!desc) continue;                     // skip empty-description rows
+    const hours = Math.max(0, Number(it.hours) || 0);
+    const rate  = Math.max(0, Number(it.hourly_rate) || 0);
+    if (!Number.isFinite(hours) || !Number.isFinite(rate)) continue;
+    const sortOrder = Number.isFinite(Number(it.sort_order)) ? Number(it.sort_order) : order;
+    ins.run(pid, desc.slice(0, 200), hours, rate, sortOrder);
+    order++;
+  }
+
+  db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
+  const fullProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  res.json(enrichProject(db, fullProject));
 });
 
 /* ------------------------------------------------------------------ */

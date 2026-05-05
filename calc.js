@@ -163,17 +163,42 @@ function calculateExtraCosts(extras) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Extra hours (project-level human-time, NO margin)                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Project-level extra hours (design, consultation, hand-finishing).
+ * Each row contributes `hours * hourly_rate` to the project total.
+ * Per-project flat — does NOT scale by items_per_set.
+ * No profit margin is applied — billed at cost.
+ *
+ * @param {Array<{hours: number, hourly_rate: number}>} extraHours
+ * @returns {number} total extra-hours cost in EUR
+ */
+function calculateExtraHoursCost(extraHours) {
+  let total = 0;
+  for (const e of extraHours || []) {
+    const h = Number(e.hours);
+    const r = Number(e.hourly_rate);
+    if (!Number.isFinite(h) || !Number.isFinite(r)) continue;
+    total += h * r;
+  }
+  return total;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Final pricing                                                      */
 /* ------------------------------------------------------------------ */
 
 /**
  * @param {object} opts
- *   - perItemCosts   {object}
- *   - profits        {object}  output of applyProfitMargins
+ *   - perItemCosts    {object}
+ *   - profits         {object}  output of applyProfitMargins
  *   - extraCostsTotal {number}
- *   - itemsPerSet    {number}
- *   - vatRate        {number}  e.g. 21
- *   - priceRounding  {number}  e.g. 0.99 or 0.95
+ *   - extraHoursCost  {number}  project-level extra hours, billed at cost (no margin)
+ *   - itemsPerSet     {number}
+ *   - vatRate         {number}  e.g. 21
+ *   - priceRounding   {number}  e.g. 0.99 or 0.95
  * @returns {object}
  */
 function calculateFinalPricing(opts) {
@@ -181,6 +206,7 @@ function calculateFinalPricing(opts) {
     perItemCosts,
     profits,
     extraCostsTotal,
+    extraHoursCost = 0,
     itemsPerSet = 1,
     vatRate = 21,
     priceRounding = 0.99,
@@ -190,11 +216,11 @@ function calculateFinalPricing(opts) {
   const baseCostPerSet = perItemCosts.totalPerItem * itemsPerSet;
   const profitPerSet = profits.totalProfit * itemsPerSet;
 
-  // Production cost (all base costs + extras, no margins)
-  const productionCost = baseCostPerSet + extraCostsTotal;
+  // Production cost (all base costs + extras + extra hours, no margins)
+  const productionCost = baseCostPerSet + extraCostsTotal + extraHoursCost;
 
-  // Total excl VAT = base costs + profits + extras
-  const totalExclVat = baseCostPerSet + profitPerSet + extraCostsTotal;
+  // Total excl VAT = base costs + profits + extras + extra hours (no margin on hours)
+  const totalExclVat = baseCostPerSet + profitPerSet + extraCostsTotal + extraHoursCost;
 
   // VAT amount
   const vatAmount = totalExclVat * (vatRate / 100);
@@ -232,6 +258,7 @@ function calculateFinalPricing(opts) {
     profitPerSet,
     productionCost,
     extraCostsTotal,
+    extraHoursCost,
     totalExclVat,
     vatAmount,
     totalInclVat,
@@ -282,6 +309,7 @@ function calculateProject(opts) {
   const {
     plates = [],
     extras = [],
+    extraHours = [],
     settings = {},
     itemsPerSet = 1,
     actualSalesPrice = null,
@@ -329,11 +357,15 @@ function calculateProject(opts) {
   // Extra costs
   const extraCostsTotal = calculateExtraCosts(extras);
 
+  // Extra hours (project-level human-time, no margin)
+  const extraHoursCost = calculateExtraHoursCost(extraHours);
+
   // Final pricing
   const pricing = calculateFinalPricing({
     perItemCosts,
     profits,
     extraCostsTotal,
+    extraHoursCost,
     itemsPerSet,
     vatRate: s.vat_rate,
     priceRounding: s.price_rounding,
@@ -361,6 +393,7 @@ function calculateProject(opts) {
     perItemCosts,
     profits,
     extraCostsTotal,
+    extraHoursCost,
     pricing,
     suggestedIndicator,
     actualMargin,
@@ -374,6 +407,7 @@ module.exports = {
   calculatePerItemCosts,
   applyProfitMargins,
   calculateExtraCosts,
+  calculateExtraHoursCost,
   calculateFinalPricing,
   calculateActualMargin,
   marginIndicator,

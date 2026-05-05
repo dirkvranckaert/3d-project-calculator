@@ -49,6 +49,69 @@ function fmtTime(minutes) {
   const m = Math.round(minutes % 60);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
+
+/**
+ * Parse an "H:MM" / decimal / bare-integer hours string into decimal hours.
+ *
+ * Accepts:
+ *   - "0:45"  -> 0.75       (H:MM canonical form)
+ *   - "1:30"  -> 1.5
+ *   - "2"     -> 2          (bare integer hours)
+ *   - "0.5"   -> 0.5        (decimal — power-user fallback)
+ *   - ""      -> 0          (empty -> zero, mirrors current "drop empty desc" semantics)
+ *   - 0.75    -> 0.75       (numeric pass-through, used when re-formatting from DB)
+ *
+ * Rejects (returns NaN — caller clamps to 0):
+ *   - "1:60"   minutes >= 60 -> NaN  (we don't auto-roll: surfaces typos to the user)
+ *   - "-1:30"  negative      -> NaN  (caller clamps)
+ *   - "abc"    garbage       -> NaN
+ *
+ * Negative auto-clamp + minutes>=60 reject is intentional: users want typos
+ * visible, not silently rolled over (simpler than auto-roll, easier to debug).
+ *
+ * @param {string|number} value
+ * @returns {number} decimal hours, or NaN on garbage input
+ */
+function parseHoursMinutes(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : NaN;
+  const s = String(value).trim();
+  if (s === '') return 0;
+  if (s.includes(':')) {
+    const parts = s.split(':');
+    if (parts.length !== 2) return NaN;
+    const h = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return NaN;
+    if (h < 0 || m < 0) return NaN;
+    if (m >= 60) return NaN;          // reject, don't auto-roll
+    return h + m / 60;
+  }
+  const n = Number(s);
+  if (!Number.isFinite(n)) return NaN;
+  if (n < 0) return NaN;
+  return n;
+}
+
+/**
+ * Format decimal hours as "H:MM" for display.
+ *   formatHoursMinutes(0.75) -> "0:45"
+ *   formatHoursMinutes(1)    -> "1:00"
+ *   formatHoursMinutes(2.5)  -> "2:30"
+ *   formatHoursMinutes(NaN)  -> "0:00"
+ *   formatHoursMinutes(-1)   -> "0:00"  (clamped)
+ *
+ * @param {number} hours decimal hours
+ * @returns {string} "H:MM"
+ */
+function formatHoursMinutes(hours) {
+  const n = Number(hours);
+  if (!Number.isFinite(n) || n < 0) return '0:00';
+  const totalMinutes = Math.round(n * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${h}:${String(m).padStart(2, '0')}`;
+}
 function fmtGrams(g) { return `${Number(g || 0).toFixed(2)}g`; }
 function fmtWeight(g) {
   if (g >= 1000) return `${(g / 1000).toFixed(g % 1000 === 0 ? 0 : 1)}kg`;
@@ -412,6 +475,7 @@ function renderDetailView(p) {
   ${renderProjectNotes(p)}
   ${renderPlatesSection(p)}
   ${renderCostSection(p)}
+  ${renderExtraHoursSection(p)}
   ${renderExtrasSection(p)}
   ${renderImagesSection(p)}
   ${renderFilesSection(p)}
@@ -497,6 +561,119 @@ function renderCostSection(p) {
     <div class="cost-card"><h4>Printer Usage Cost</h4><div class="value">${fmt(pi.printerUsageCost * p.items_per_set)}</div>
       <div class="detail">+ ${fmtPct(settings.printer_cost_profit_pct)} profit: ${fmt(pr.printerCostProfit * p.items_per_set)}</div></div>
   </div></div>`;
+}
+
+/* ================================================================== */
+/*  Extra hours table (project-level human-time, no margin)           */
+/* ================================================================== */
+function renderExtraHoursSection(p) {
+  const items = (p.extra_hours || []).slice().sort((a, b) => {
+    const ao = a.sort_order ?? 0;
+    const bo = b.sort_order ?? 0;
+    if (ao !== bo) return ao - bo;
+    return (a.id || 0) - (b.id || 0);
+  });
+  const total = items.reduce((s, e) => s + (Number(e.hours) || 0) * (Number(e.hourly_rate) || 0), 0);
+  const defaultRate = Number(settings.extra_uren_default_rate);
+  const safeDefault = Number.isFinite(defaultRate) ? defaultRate : 60;
+
+  const rows = items.map((e, i) => {
+    const decHours = Number(e.hours) || 0;
+    const subtotal = decHours * (Number(e.hourly_rate) || 0);
+    return `<tr data-eh-row="${i}">
+      <td class="eh-desc"><input type="text" class="eh-input eh-input-desc" value="${esc(e.description || '')}" maxlength="200"
+        onchange="commitExtraHours(${p.id})"></td>
+      <td class="eh-hours num"><input type="text" inputmode="numeric" class="eh-input eh-input-hours num" value="${formatHoursMinutes(decHours)}"
+        title="H:MM (e.g. 0:45). Decimal (0.5) and bare integers (2) also accepted." onchange="commitExtraHours(${p.id})"></td>
+      <td class="eh-rate num"><input type="number" class="eh-input num" min="0" step="0.01" value="${Number(e.hourly_rate) || 0}"
+        onchange="commitExtraHours(${p.id})"></td>
+      <td class="eh-subtotal num">${fmt(subtotal)}</td>
+      <td class="eh-action"><button class="btn-icon" title="Remove" onclick="removeExtraHourRow(${p.id}, ${i})">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+      </button></td>
+    </tr>`;
+  }).join('');
+
+  return `<div class="extras-section" data-extra-hours-panel="${p.id}">
+    <div class="extras-section-header"><h3>Extra Hours</h3><span class="ec-total-badge">Total: ${fmt(total)}</span></div>
+    ${items.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
+      <thead><tr><th>Description</th><th>Hours</th><th>Rate (${settings.currency_symbol || '€'}/h)</th><th>Subtotal</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><td colspan="3" style="text-align:right;font-weight:600">Total excl. VAT</td><td class="num" style="font-weight:700">${fmt(total)}</td><td></td></tr></tfoot>
+    </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No extra hours added yet.</p>'}
+    <div class="ec-add-row">
+      <button class="btn btn-sm btn-primary" onclick="addExtraHourRow(${p.id}, ${safeDefault})">+ Add row</button>
+    </div>
+  </div>`;
+}
+
+// Read every input row in the panel and PUT the full list. Replace-the-list semantics.
+async function commitExtraHours(projectId) {
+  const panel = document.querySelector(`[data-extra-hours-panel="${projectId}"]`);
+  if (!panel) return;
+  const rows = panel.querySelectorAll('tbody tr[data-eh-row]');
+  const items = [];
+  let order = 0;
+  for (const row of rows) {
+    const desc = row.querySelector('.eh-input-desc')?.value || '';
+    const hoursStr = row.querySelector('.eh-hours .eh-input')?.value || '0';
+    const rateStr = row.querySelector('.eh-rate .eh-input')?.value || '0';
+    // parseHoursMinutes accepts H:MM, bare ints, and decimal. Garbage -> NaN -> clamp 0.
+    const parsedHours = parseHoursMinutes(hoursStr);
+    items.push({
+      description: desc,
+      hours: Number.isFinite(parsedHours) ? parsedHours : 0,
+      hourly_rate: parseFloat(rateStr) || 0,
+      sort_order: order++,
+    });
+  }
+  await PUT(`/api/projects/${projectId}/extra-hours`, items);
+  await reloadSingleProject(projectId);
+}
+
+async function addExtraHourRow(projectId, defaultRate) {
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return;
+  const existing = (p.extra_hours || []).map((e, i) => ({
+    description: e.description,
+    hours: Number(e.hours) || 0,
+    hourly_rate: Number(e.hourly_rate) || 0,
+    sort_order: e.sort_order ?? i,
+  }));
+  // Append a placeholder row. Server drops empty-description rows on PUT, so
+  // we keep the new row purely client-side until the operator types something.
+  // Default 1 hour (renders as "1:00") so the user sees a usable starting value.
+  existing.push({
+    description: 'New hours',
+    hours: 1,
+    hourly_rate: Number.isFinite(defaultRate) ? defaultRate : 60,
+    sort_order: existing.length,
+  });
+  await PUT(`/api/projects/${projectId}/extra-hours`, existing);
+  await reloadSingleProject(projectId);
+  // Focus the description of the newly added row for fast typing.
+  const panel = document.querySelector(`[data-extra-hours-panel="${projectId}"]`);
+  const rows = panel?.querySelectorAll('tbody tr[data-eh-row]') || [];
+  const last = rows[rows.length - 1];
+  const input = last?.querySelector('.eh-input-desc');
+  if (input) { input.focus(); input.select(); }
+}
+
+async function removeExtraHourRow(projectId, idx) {
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return;
+  const items = (p.extra_hours || []).map((e, i) => ({
+    description: e.description,
+    hours: Number(e.hours) || 0,
+    hourly_rate: Number(e.hourly_rate) || 0,
+    sort_order: e.sort_order ?? i,
+  }));
+  if (idx < 0 || idx >= items.length) return;
+  items.splice(idx, 1);
+  // Re-pack sort_order so the next add starts clean.
+  items.forEach((e, i) => { e.sort_order = i; });
+  await PUT(`/api/projects/${projectId}/extra-hours`, items);
+  await reloadSingleProject(projectId);
 }
 
 /* ================================================================== */
@@ -744,6 +921,7 @@ function renderPricingSection(p) {
     <div class="pricing-block">
       <h4>Total excl. VAT</h4>
       <div class="big-price">${fmt(pr.totalExclVat)}</div>
+      ${pr.extraHoursCost > 0 ? `<div class="sub">Extra hours: ${fmt(pr.extraHoursCost)}</div>` : ''}
       <div class="sub">+ VAT (${settings.vat_rate}%): ${fmt(pr.vatAmount)}</div>
       <div class="sub">Total incl. VAT: ${fmt(pr.totalInclVat)}</div>
     </div>
@@ -1613,8 +1791,10 @@ function renderSettingsTab(tab) {
 
 function renderGeneralSettings() {
   return `
-    <div class="settings-row"><label>Hourly Rate (${settings.currency_symbol || '\u20ac'})</label>
+    <div class="settings-row"><label>Hourly Processing Rate (${settings.currency_symbol || '\u20ac'})</label>
       <input type="number" value="${settings.hourly_rate || 40}" step="0.01" onchange="saveSetting('hourly_rate', this.value)"></div>
+    <div class="settings-row"><label>Default Hour Rate (${settings.currency_symbol || '\u20ac'}/h)</label>
+      <input type="number" value="${settings.extra_uren_default_rate ?? 60}" step="0.01" onchange="saveSetting('extra_uren_default_rate', this.value)"></div>
     <div class="settings-row"><label>Electricity Price (${settings.currency_symbol || '\u20ac'}/kWh)</label>
       <input type="number" value="${settings.electricity_price_kwh || 0.40}" step="0.01" onchange="saveSetting('electricity_price_kwh', this.value)"></div>
     <div class="settings-row"><label>VAT Rate (%)</label>
@@ -1869,13 +2049,18 @@ async function renderConnectedApps(el) {
 /*  Settings save helpers                                              */
 /* ================================================================== */
 async function saveSetting(key, value) {
-  const numericKeys = ['hourly_rate', 'electricity_price_kwh', 'vat_rate', 'price_rounding',
+  const numericKeys = ['hourly_rate', 'extra_uren_default_rate', 'electricity_price_kwh', 'vat_rate', 'price_rounding',
     'material_profit_pct', 'processing_profit_pct', 'electricity_profit_pct', 'printer_cost_profit_pct',
     'margin_green_pct', 'margin_orange_pct'];
   const val = numericKeys.includes(key) ? parseFloat(value) : value;
   await PUT(`/api/settings/${key}`, { value: val });
   settings[key] = val;
   await reloadProjects();
+  // currency_symbol is referenced in setting labels themselves — re-render the
+  // currently open settings tab so labels like "(€/h)" update without a reload.
+  if (key === 'currency_symbol' && typeof renderSettingsTab === 'function' && typeof activeSettingsTab !== 'undefined') {
+    try { renderSettingsTab(activeSettingsTab); } catch (_) { /* tab not open, no-op */ }
+  }
 }
 async function saveTheme(value) { await PUT(`/api/settings/theme`, { value }); settings.theme = value; applyTheme(value); }
 

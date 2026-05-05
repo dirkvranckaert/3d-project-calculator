@@ -115,6 +115,17 @@ function bootstrap(db) {
       UNIQUE(project_id, extra_cost_id)
     );
 
+    /* ---- Project extra hours (design / consultation / hand-finishing) ---- */
+    CREATE TABLE IF NOT EXISTS project_extra_hours (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id      INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      description     TEXT NOT NULL,
+      hours           REAL NOT NULL DEFAULT 0,
+      hourly_rate     REAL NOT NULL DEFAULT 0,
+      sort_order      INTEGER NOT NULL DEFAULT 0,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     /* ---- Project images ---- */
     CREATE TABLE IF NOT EXISTS project_images (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,6 +178,7 @@ function migrate(db) {
 function seedDefaults(db) {
   const defaults = {
     hourly_rate:              '40',
+    extra_uren_default_rate:  '60',
     electricity_price_kwh:    '0.40',
     vat_rate:                 '21',
     material_profit_pct:      '200',
