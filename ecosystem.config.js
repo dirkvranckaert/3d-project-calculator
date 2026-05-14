@@ -17,6 +17,7 @@ module.exports = {
       env_production: {
         NODE_ENV: 'production',
         PORT: 3459,
+        SHARED_AUTH_DOMAIN: '.app3.be',
       },
       autorestart: true,
       watch: false,
