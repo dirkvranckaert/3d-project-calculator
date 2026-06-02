@@ -351,8 +351,6 @@ function calculateProject(opts) {
     settings = {},
     itemsPerSet = 1,
     actualSalesPrice = null,
-    // design cost fields (§4c)
-    // designHours, designExtras, isCustom are destructured after s is built
   } = opts;
 
   const s = {
