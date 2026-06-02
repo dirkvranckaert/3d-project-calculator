@@ -819,8 +819,8 @@ async function commitDesignHours(projectId) {
   let order = 0;
   for (const row of rows) {
     const desc = row.querySelector('.dh-input-desc')?.value || '';
-    const hoursStr = row.querySelector('.dh-input-hours')?.value || '0';
-    const rateStr = row.querySelector('.eh-input.num')?.value || '0';
+    const hoursStr = row.querySelector('.eh-hours .eh-input')?.value || '0';
+    const rateStr  = row.querySelector('.eh-rate .eh-input')?.value || '0';
     const parsedHours = parseHoursMinutes(hoursStr);
     items.push({
       description: desc,
