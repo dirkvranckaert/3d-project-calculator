@@ -117,6 +117,7 @@ Deployed via the shared infrastructure repo: `../infrastructure/apps/project-cal
 - `project_plates.is_test_print` (INTEGER DEFAULT 0): marks a plate as a test-print (uploaded via `POST /api/projects/:id/test-print`).
 - Test-print plates are **excluded** from `enabledPlates` in `calculateProject` (don't affect unit pricing).
 - Their `totalPlateCost` feeds `designCosts.testPrintsSubtotal` when `isCustom=true`.
+- Each test-print row in the Design Costs section exposes an inline Printer and Material `<select>` (persisted via `PATCH /api/projects/:projectId/plates/:plateId`). Cost is €0 until both are set.
 - Test-print files are excluded from `GET /api/projects/:id/files` (hidden from the regular files section).
 - Test-print upload does **not** extract thumbnails or insert `project_images` rows.
 

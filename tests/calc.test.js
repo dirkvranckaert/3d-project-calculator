@@ -773,6 +773,65 @@ describe('calculateProject — design cost module', () => {
     // 3 plate breakdowns total (enabled, test-print, disabled)
     expect(result.plateBreakdowns).toHaveLength(3);
   });
+
+  test('test-print plate WITH printer+material → testPrintsSubtotal > 0', () => {
+    // testPrintPlate already has printer_purchase_price, printer_earn_back_months,
+    // printer_kwh_per_hour, and material_price_per_kg set to non-zero values.
+    const result = calc.calculateProject({
+      plates: [plates[0], testPrintPlate],
+      extras: [],
+      settings: defaultSettings,
+      itemsPerSet: 1,
+      isCustom: true,
+    });
+    expect(result.designCosts.testPrintsSubtotal).toBeGreaterThan(0);
+  });
+
+  test('test-print plate with null printer/material → testPrintsSubtotal === 0', () => {
+    const nullPrinterMaterialPlate = {
+      id: 99, name: 'NullTest',
+      print_time_minutes: 60, plastic_grams: 20,
+      items_per_plate: 1, risk_multiplier: 1,
+      pre_processing_minutes: 0, post_processing_minutes: 0,
+      printer_purchase_price: 0, printer_earn_back_months: 24, printer_kwh_per_hour: 0,
+      material_price_per_kg: 0,
+      enabled: 1,
+      is_test_print: 1,
+    };
+    const result = calc.calculateProject({
+      plates: [plates[0], nullPrinterMaterialPlate],
+      extras: [],
+      settings: defaultSettings,
+      itemsPerSet: 1,
+      isCustom: true,
+    });
+    expect(result.designCosts.testPrintsSubtotal).toBe(0);
+  });
+
+  test('test-print plates are excluded from production per-item cost', () => {
+    const result = calc.calculateProject({
+      plates: [plates[0], testPrintPlate],
+      extras: [],
+      settings: defaultSettings,
+      itemsPerSet: 1,
+      isCustom: true,
+    });
+
+    // testPrintPlate breakdown must be flagged
+    const tpBreakdown = result.plateBreakdowns.find(b => b.plateId === testPrintPlate.id);
+    expect(tpBreakdown).toBeDefined();
+    expect(tpBreakdown.isTestPrint).toBe(true);
+
+    // perItemCosts must equal the result computed without the test-print plate
+    const resultNoTestPrint = calc.calculateProject({
+      plates: [plates[0]],
+      extras: [],
+      settings: defaultSettings,
+      itemsPerSet: 1,
+      isCustom: true,
+    });
+    expect(result.perItemCosts.totalPerItem).toBeCloseTo(resultNoTestPrint.perItemCosts.totalPerItem, 6);
+  });
 });
 
 /* ================================================================== */

@@ -407,7 +407,8 @@ function onSearch(q) {
 function renderSummaryCard(p) {
   const c = p.calculation;
   const pr = c?.pricing || {};
-  const hasPlates = p.plates?.length > 0;
+  const productionPlateCount = (p.plates || []).filter(pl => !pl.is_test_print).length;
+  const hasPlates = productionPlateCount > 0;
 
   const primaryImage = (p.images || []).find(i => i.is_primary) || (p.images || [])[0] || null;
 
@@ -441,7 +442,7 @@ function renderSummaryCard(p) {
       <div class="summary-stat"><span class="summary-stat-label">Actual</span><span class="summary-stat-value">${hasActual ? fmt(p.actual_sales_price) : '<span style="opacity:.4">-</span>'}</span></div>
       <div class="summary-stat"><span class="summary-stat-label">Margin</span><span class="summary-stat-value"><span class="margin-badge ${indicator || 'green'}">${marginPct != null ? fmtPct(marginPct) : '-'}</span></span></div>
     </div>
-    <div class="summary-card-meta">${p.plates.length} plate${p.plates.length !== 1 ? 's' : ''}${p.items_per_set > 1 ? ` \u00b7 set of ${p.items_per_set}` : ''}</div>
+    <div class="summary-card-meta">${productionPlateCount} plate${productionPlateCount !== 1 ? 's' : ''}${p.items_per_set > 1 ? ` \u00b7 set of ${p.items_per_set}` : ''}</div>
     ${renderTagsPills(p.tags)}
     ` : ''}
   </div>`;
@@ -493,7 +494,8 @@ function renderDetailView(p) {
 /* ================================================================== */
 function renderPlatesSection(p) {
   const importBtn = `<button class="btn btn-sm" type="button" onclick="document.getElementById('import3mf-${p.id}').click()">Import 3MF</button><input type="file" id="import3mf-${p.id}" accept=".3mf" style="display:none" onchange="import3mf(${p.id}, this)">`;
-  if (!p.plates || p.plates.length === 0) {
+  const productionPlates = (p.plates || []).filter(pl => !pl.is_test_print);
+  if (productionPlates.length === 0) {
     return `<div class="plates-section">
       <div class="plates-section-header"><h3>Print Plates</h3>
         <div style="display:flex;gap:6px">${importBtn}<button class="btn btn-sm btn-primary" onclick="openPlateModal(${p.id})">+ Add Plate</button></div></div>
@@ -505,8 +507,8 @@ function renderPlatesSection(p) {
       </div>
     </div>`;
   }
-  const rows = p.plates.map((pl, i) => {
-    const pb = p.calculation?.plateBreakdowns?.[i];
+  const rows = productionPlates.map(pl => {
+    const pb = (p.calculation?.plateBreakdowns || []).find(b => b.plateId === pl.id);
     const disabled = !pl.enabled;
     const rowCls = disabled ? 'plate-disabled' : '';
     const disabledBadge = disabled ? '<span class="plate-disabled-badge">DISABLED</span>' : '';
@@ -515,7 +517,7 @@ function renderPlatesSection(p) {
       ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
       : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
     return `<tr class="${rowCls}">
-      <td>${esc(pl.name || `Plate ${i + 1}`)} ${disabledBadge}${renderColorSwatches(pl.colors)}${pl.notes ? `<div style="font-size:11px;color:var(--text-muted);white-space:normal">${esc(pl.notes)}</div>` : ''}</td>
+      <td>${esc(pl.name || `Plate ${pl.id}`)} ${disabledBadge}${renderColorSwatches(pl.colors)}${pl.notes ? `<div style="font-size:11px;color:var(--text-muted);white-space:normal">${esc(pl.notes)}</div>` : ''}</td>
       <td class="num editable" data-label="Time" onclick="startInlineEdit(${p.id},${pl.id},'print_time_minutes',${pl.print_time_minutes},this,'time')">${fmtTime(pl.print_time_minutes)}</td>
       <td class="num editable" data-label="Plastic" onclick="startInlineEdit(${p.id},${pl.id},'plastic_grams',${pl.plastic_grams},this,'float')">${fmtGrams(pl.plastic_grams)}</td>
       <td class="num editable" data-label="#/Plate" onclick="startInlineEdit(${p.id},${pl.id},'items_per_plate',${pl.items_per_plate},this,'int')">${pl.items_per_plate}</td>
@@ -554,7 +556,7 @@ function renderPlatesSection(p) {
 /* ================================================================== */
 function renderCostSection(p) {
   const c = p.calculation;
-  if (!c || !p.plates?.length) return '';
+  if (!c || !(p.plates || []).some(pl => !pl.is_test_print)) return '';
   const pi = c.perItemCosts;
   const pr = c.profits;
   return `<div class="cost-section"><div class="cost-grid">
@@ -731,10 +733,14 @@ function renderDesignCostSection(p) {
   const testPrintPlates = (p.plates || []).filter(pl => pl.is_test_print);
   const tpRows = testPrintPlates.map(pl => {
     const cost = testCostByPlate[pl.id] || 0;
+    const printerOpts = '<option value="">--</option>' + printers.map(pr => `<option value="${pr.id}" ${pr.id == pl.printer_id ? 'selected' : ''}>${esc(pr.name)}</option>`).join('');
+    const materialOpts = '<option value="">--</option>' + materials.map(m => `<option value="${m.id}" ${m.id == pl.material_id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
     return `<tr>
       <td>${esc(pl.name || 'Test print')}</td>
       <td class="num">${fmtTime(pl.print_time_minutes || 0)}</td>
       <td class="num">${fmtGrams(pl.plastic_grams || 0)}</td>
+      <td><select class="inline-input" onchange="patchPlateField(${p.id}, ${pl.id}, 'printer_id', parseInt(this.value) || null)">${printerOpts}</select></td>
+      <td><select class="inline-input" onchange="patchPlateField(${p.id}, ${pl.id}, 'material_id', parseInt(this.value) || null)">${materialOpts}</select></td>
       <td class="num">${fmt(cost)}</td>
       <td><button class="btn-icon" title="Delete" onclick="deleteTestPrint(${pl.id}, ${p.id})">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -772,9 +778,9 @@ function renderDesignCostSection(p) {
 
     <h4 style="font-size:13px;margin:12px 0 4px;color:var(--text-muted)">Test Prints</h4>
     ${testPrintPlates.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
-      <thead><tr><th>Filename</th><th>Time</th><th>Plastic</th><th>Cost</th><th></th></tr></thead>
+      <thead><tr><th>Filename</th><th>Time</th><th>Plastic</th><th>Printer</th><th>Material</th><th>Cost</th><th></th></tr></thead>
       <tbody>${tpRows}</tbody>
-      <tfoot><tr><td colspan="3" style="text-align:right;font-weight:600">Subtotal</td><td class="num" style="font-weight:700">${fmt(dc.testPrintsSubtotal || 0)}</td><td></td></tr></tfoot>
+      <tfoot><tr><td colspan="5" style="text-align:right;font-weight:600">Subtotal</td><td class="num" style="font-weight:700">${fmt(dc.testPrintsSubtotal || 0)}</td><td></td></tr></tfoot>
     </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No test prints uploaded yet.</p>'}
     <div class="ec-add-row">
       <label class="btn btn-sm btn-primary" style="cursor:pointer">
@@ -1153,7 +1159,7 @@ function renderFilesSection(p) {
 /* ================================================================== */
 function renderPricingSection(p) {
   const c = p.calculation;
-  if (!c || !p.plates?.length) return '';
+  if (!c || !(p.plates || []).some(pl => !pl.is_test_print)) return '';
   const pr = c.pricing;
   const itemLabel = p.items_per_set > 1 ? `set of ${p.items_per_set}` : 'item';
 
