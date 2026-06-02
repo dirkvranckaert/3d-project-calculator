@@ -16,6 +16,7 @@ let showArchived = false;
 let archivedCountCache = 0;
 let currentView = 'list'; // 'list' or 'detail'
 let currentProjectId = null;
+let currentDetailTab = 'print'; // 'print' | 'design'
 
 /* ================================================================== */
 /*  API helpers                                                        */
@@ -455,7 +456,9 @@ function renderDetailView(p) {
   const c = p.calculation;
   const pr = c?.pricing || {};
 
-  return `
+  if (!p.is_custom && currentDetailTab === 'design') currentDetailTab = 'print';
+
+  const topbar = `
   <div class="detail-topbar">
     <button class="btn btn-icon" onclick="navigate('#/')" title="Back to list">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
@@ -477,16 +480,42 @@ function renderDetailView(p) {
       <button class="btn btn-sm" onclick="openProjectModal(${p.id})">Edit</button>
       <button class="btn btn-sm btn-danger" onclick="deleteProject(${p.id},event)">Delete</button>
     </div>
-  </div>
+  </div>`;
+
+  if (!p.is_custom) {
+    return `${topbar}
   ${renderProjectNotes(p)}
   ${renderPlatesSection(p)}
   ${renderCostSection(p)}
   ${renderExtraHoursSection(p)}
-  ${p.is_custom ? renderDesignCostSection(p) : ''}
   ${renderExtrasSection(p)}
   ${renderImagesSection(p)}
   ${renderFilesSection(p)}
   ${renderPricingSection(p)}`;
+  }
+
+  return `${topbar}
+  <div class="detail-tabs" id="detail-tabs-${p.id}">
+    <button class="tab ${currentDetailTab === 'print' ? 'active' : ''}"
+            data-dtab="print" onclick="switchDetailTab('print', ${p.id})">Print Project</button>
+    <button class="tab ${currentDetailTab === 'design' ? 'active' : ''}"
+            data-dtab="design" onclick="switchDetailTab('design', ${p.id})">Setup &amp; Design</button>
+  </div>
+
+  <div class="detail-tab-pane ${currentDetailTab === 'print' ? '' : 'hidden'}" data-pane="print">
+    ${renderProjectNotes(p)}
+    ${renderPlatesSection(p)}
+    ${renderCostSection(p)}
+    ${renderExtraHoursSection(p)}
+    ${renderExtrasSection(p)}
+    ${renderImagesSection(p)}
+    ${renderFilesSection(p)}
+    ${renderPricingSection(p)}
+  </div>
+
+  <div class="detail-tab-pane ${currentDetailTab === 'design' ? '' : 'hidden'}" data-pane="design">
+    ${renderDesignCostSection(p)}
+  </div>`;
 }
 
 /* ================================================================== */
@@ -762,7 +791,7 @@ function renderDesignCostSection(p) {
   }).join('');
 
   return `<div class="extras-section" data-design-cost-panel="${p.id}">
-    <div class="extras-section-header"><h3>Design Costs (custom project)</h3></div>
+    <div class="extras-section-header"><h3>Setup &amp; Design</h3></div>
 
     <h4 style="font-size:13px;margin:8px 0 4px;color:var(--text-muted)">Design Hours</h4>
     <div data-design-hours-panel="${p.id}">
@@ -789,7 +818,7 @@ function renderDesignCostSection(p) {
       </label>
     </div>
 
-    <h4 style="font-size:13px;margin:12px 0 4px;color:var(--text-muted)">Other Design Costs</h4>
+    <h4 style="font-size:13px;margin:12px 0 4px;color:var(--text-muted)">Other Setup &amp; Design Costs</h4>
     <div data-design-extras-panel="${p.id}">
       ${designExtrasItems.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
         <thead><tr><th>Description</th><th>Amount (${settings.currency_symbol || '€'})</th><th></th></tr></thead>
@@ -803,7 +832,7 @@ function renderDesignCostSection(p) {
 
     <div style="margin-top:12px;padding:10px;background:var(--bg-card);border-radius:6px;border:1px solid var(--border)">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <span style="font-weight:600">Design Total (one-time, excl. VAT)</span>
+        <span style="font-weight:600">Setup &amp; Design Total (one-time, excl. VAT)</span>
         <span style="font-size:18px;font-weight:700">${fmt(dc.designTotal || 0)}</span>
       </div>
       <div class="sub" style="text-align:right;margin-top:4px;opacity:.6">Not included in unit price</div>
@@ -1190,13 +1219,11 @@ function renderPricingSection(p) {
   }
 
   const designCostBlock = p.is_custom && c.designCosts?.designTotal > 0 ? `
-    <div class="pricing-block">
-      <h4>Design Costs (one-time)</h4>
+    <div class="pricing-block pricing-block--summary">
+      <h4>Setup &amp; Design (one-time)</h4>
       <div class="big-price">${fmt(c.designCosts.designTotal)}</div>
-      <div class="sub">Design hours: ${fmt(c.designCosts.designHoursSubtotal)}</div>
-      <div class="sub">Test prints: ${fmt(c.designCosts.testPrintsSubtotal)}</div>
-      <div class="sub">Extras: ${fmt(c.designCosts.extrasSubtotal)}</div>
-      <div class="sub" style="margin-top:6px;opacity:.6">Not included in unit price</div>
+      <div class="sub" style="opacity:.6">Not included in unit price — <a href="javascript:void(0)"
+        onclick="switchDetailTab('design', ${p.id})" style="color:var(--primary);text-decoration:none">see Setup &amp; Design tab</a></div>
     </div>` : '';
 
   return `<div class="pricing-section"><div class="pricing-grid">
@@ -1297,8 +1324,20 @@ async function toggleArchive(id) {
 }
 
 async function toggleCustomFlag(projectId) {
+  const p = projects.find(x => x.id === projectId);
+  if (p?.is_custom && currentDetailTab === 'design') {
+    currentDetailTab = 'print';
+  }
   await PATCH(`/api/projects/${projectId}/custom`);
   await reloadSingleProject(projectId);
+}
+
+function switchDetailTab(tab, projectId) {
+  currentDetailTab = tab;
+  document.querySelectorAll(`#detail-tabs-${projectId} .tab`)
+    .forEach(btn => btn.classList.toggle('active', btn.dataset.dtab === tab));
+  document.querySelectorAll('.detail-tab-pane')
+    .forEach(pane => pane.classList.toggle('hidden', pane.dataset.pane !== tab));
 }
 
 async function toggleShowArchived(checked) {

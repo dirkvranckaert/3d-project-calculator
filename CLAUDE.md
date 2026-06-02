@@ -60,6 +60,7 @@ project-calculator/
 - **Calculation engine separated** — `calc.js` contains all cost formulas as pure functions, making them independently testable without HTTP/DB.
 - **Schema inline in db.js** — tables created via `CREATE IF NOT EXISTS` at boot.
 - **sharp for thumbnails** — `sharp` is used to process images from .3mf files. It requires native binaries (installed automatically via npm).
+- **Detail view tabs** — tab state in `currentDetailTab` module variable (`'print'`|`'design'`), default `'print'`; survives `reloadSingleProject`; non-custom projects show no tab bar; toggling Custom off while on design tab resets to `'print'`; "Setup & Design" is a UI label only, DB/routes/keys unchanged.
 
 ## Coding conventions
 
@@ -111,7 +112,7 @@ Deployed via the shared infrastructure repo: `../infrastructure/apps/project-cal
 ### Project flag — `is_custom`
 - `projects.is_custom` (INTEGER DEFAULT 0): marks a project as a custom/one-off design commission.
 - Toggled via `PATCH /api/projects/:id/custom` (same toggle pattern as archive).
-- When `is_custom=1`, a collapsible "Design Costs" section appears in the detail view between Extra Hours and Supplies.
+- When `is_custom=1`, the detail view gains a 2-tab bar: "Print Project" (default) contains all production sections; "Setup & Design" contains the design-cost module (design hours, test prints, other costs, totals). When `is_custom=0`, no tab bar is shown.
 
 ### Plate flag — `is_test_print`
 - `project_plates.is_test_print` (INTEGER DEFAULT 0): marks a plate as a test-print (uploaded via `POST /api/projects/:id/test-print`).
