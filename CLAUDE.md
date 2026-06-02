@@ -103,6 +103,37 @@ Deployed via the shared infrastructure repo: `../infrastructure/apps/project-cal
 - **sharp native binaries:** `sharp` downloads platform-specific binaries on `npm install`. If deploying from a different OS/arch than the server, run `npm install` on the target.
 - **SQLite WAL mode:** the `data/` directory must be writable and on a local filesystem.
 
+## Design cost module (added 2026-06-02)
+
+### Settings
+- `design_hourly_rate` (default 65): hourly rate for the design-hours sub-table in custom projects. Distinct from `extra_uren_default_rate` (60) which is the fallback for the production Extra Hours section.
+
+### Project flag — `is_custom`
+- `projects.is_custom` (INTEGER DEFAULT 0): marks a project as a custom/one-off design commission.
+- Toggled via `PATCH /api/projects/:id/custom` (same toggle pattern as archive).
+- When `is_custom=1`, a collapsible "Design Costs" section appears in the detail view between Extra Hours and Supplies.
+
+### Plate flag — `is_test_print`
+- `project_plates.is_test_print` (INTEGER DEFAULT 0): marks a plate as a test-print (uploaded via `POST /api/projects/:id/test-print`).
+- Test-print plates are **excluded** from `enabledPlates` in `calculateProject` (don't affect unit pricing).
+- Their `totalPlateCost` feeds `designCosts.testPrintsSubtotal` when `isCustom=true`.
+- Test-print files are excluded from `GET /api/projects/:id/files` (hidden from the regular files section).
+- Test-print upload does **not** extract thumbnails or insert `project_images` rows.
+
+### Extra hours flag — `is_design_cost`
+- `project_extra_hours.is_design_cost` (INTEGER DEFAULT 0): separates production extra hours (0) from design-cost hours (1).
+- `PUT /api/projects/:id/extra-hours` only touches `is_design_cost=0` rows.
+- `PUT /api/projects/:id/design-hours` only touches `is_design_cost=1` rows.
+
+### New table — `project_design_extras`
+- Free-form one-time cost lines (id, project_id, description, amount, sort_order, created_at).
+- Managed via `PUT /api/projects/:id/design-extras`.
+
+### Calc engine
+- `calculateDesignCosts({ designHours, testPrintPlateBreakdowns, designExtras })` — pure function, exported.
+- `calculateProject` returns `designCosts: { designHoursSubtotal, testPrintsSubtotal, extrasSubtotal, designTotal }` when `isCustom=true`, else `null`.
+- `designTotal` is **never** added to `productionCost`, `totalExclVat`, or `suggestedPrice`.
+
 ## What NOT to do
 
 - Do not remove `shared-auth.js` — other Printseed apps depend on cross-app JWT validation

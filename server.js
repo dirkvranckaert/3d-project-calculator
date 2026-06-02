@@ -278,13 +278,28 @@ function enrichProject(db, project) {
     ORDER BY eci.name
   `).all(project.id);
 
-  // Project extra hours (design / consultation / hand-finishing)
+  // Project extra hours — production only (is_design_cost=0)
   const extraHours = db.prepare(
-    'SELECT * FROM project_extra_hours WHERE project_id = ? ORDER BY sort_order, id'
+    'SELECT * FROM project_extra_hours WHERE project_id = ? AND is_design_cost = 0 ORDER BY sort_order, id'
   ).all(project.id);
 
-  // Files & images
-  const files = db.prepare('SELECT * FROM project_files WHERE project_id = ? ORDER BY uploaded_at DESC').all(project.id);
+  // Design hours (is_design_cost=1) — only used when is_custom=1
+  const designHours = db.prepare(
+    'SELECT * FROM project_extra_hours WHERE project_id = ? AND is_design_cost = 1 ORDER BY sort_order, id'
+  ).all(project.id);
+
+  // Design extras
+  const designExtras = db.prepare(
+    'SELECT * FROM project_design_extras WHERE project_id = ? ORDER BY sort_order, id'
+  ).all(project.id);
+
+  // Files & images — exclude test-print files
+  const files = db.prepare(`
+    SELECT pf.* FROM project_files pf
+    LEFT JOIN project_plates pp ON pf.plate_id = pp.id
+    WHERE pf.project_id = ? AND (pf.plate_id IS NULL OR pp.is_test_print = 0)
+    ORDER BY pf.uploaded_at DESC
+  `).all(project.id);
   const images = db.prepare('SELECT * FROM project_images WHERE project_id = ? ORDER BY is_primary DESC, uploaded_at ASC').all(project.id);
 
   // Calculate
@@ -293,12 +308,25 @@ function enrichProject(db, project) {
     plates,
     extras,
     extraHours,
+    designHours,
+    designExtras,
+    isCustom: !!project.is_custom,
     settings,
     itemsPerSet: project.items_per_set,
     actualSalesPrice: project.actual_sales_price,
   });
 
-  return { ...project, plates, extras, extra_hours: extraHours, files, images, calculation };
+  return {
+    ...project,
+    plates,
+    extras,
+    extra_hours: extraHours,
+    design_hours: designHours,
+    design_extras: designExtras,
+    files,
+    images,
+    calculation,
+  };
 }
 
 app.get('/api/projects/archived-count', (_req, res) => {
@@ -350,14 +378,28 @@ function enrichProjectLite(db, project) {
   `).all(project.id);
 
   const extraHours = db.prepare(
-    'SELECT * FROM project_extra_hours WHERE project_id = ? ORDER BY sort_order, id'
+    'SELECT * FROM project_extra_hours WHERE project_id = ? AND is_design_cost = 0 ORDER BY sort_order, id'
+  ).all(project.id);
+
+  const designHours = db.prepare(
+    'SELECT * FROM project_extra_hours WHERE project_id = ? AND is_design_cost = 1 ORDER BY sort_order, id'
+  ).all(project.id);
+
+  const designExtras = db.prepare(
+    'SELECT * FROM project_design_extras WHERE project_id = ? ORDER BY sort_order, id'
   ).all(project.id);
 
   const images = db.prepare('SELECT id, is_primary FROM project_images WHERE project_id = ? ORDER BY is_primary DESC LIMIT 1').all(project.id);
 
   const settings = getAllSettings(db);
   const calculation = calc.calculateProject({
-    plates, extras, extraHours, settings,
+    plates,
+    extras,
+    extraHours,
+    designHours,
+    designExtras,
+    isCustom: !!project.is_custom,
+    settings,
     itemsPerSet: project.items_per_set,
     actualSalesPrice: project.actual_sales_price,
   });
@@ -371,6 +413,8 @@ function enrichProjectLite(db, project) {
       hours: e.hours,
       hourly_rate: e.hourly_rate,
     })),
+    design_hours: designHours,
+    design_extras: designExtras,
     images,
     calculation,
   };
@@ -385,11 +429,11 @@ app.get('/api/projects/:id', (req, res) => {
 
 app.post('/api/projects', (req, res) => {
   const db = getDb();
-  const { name, customer_name = null, items_per_set = 1, tags = '', notes = null } = req.body;
+  const { name, customer_name = null, items_per_set = 1, tags = '', notes = null, is_custom = 0 } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
 
-  const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set, tags, notes) VALUES (?,?,?,?,?)')
-    .run(name, customer_name, items_per_set, tags, notes);
+  const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set, tags, notes, is_custom) VALUES (?,?,?,?,?,?)')
+    .run(name, customer_name, items_per_set, tags, notes, is_custom ? 1 : 0);
   const projectId = r.lastInsertRowid;
 
   // Auto-add default extra cost items
@@ -405,10 +449,14 @@ app.post('/api/projects', (req, res) => {
 
 app.put('/api/projects/:id', (req, res) => {
   const db = getDb();
-  const { name, customer_name, items_per_set, actual_sales_price, tags, notes } = req.body;
+  const { name, customer_name, items_per_set, actual_sales_price, tags, notes, is_custom } = req.body;
+  // Read current is_custom if not supplied in body, to avoid resetting it on ordinary edits
+  const existing = db.prepare('SELECT is_custom FROM projects WHERE id = ?').get(req.params.id);
+  const isCustomVal = is_custom !== undefined ? (is_custom ? 1 : 0) : (existing?.is_custom ?? 0);
   db.prepare(`UPDATE projects SET name=?, customer_name=?, items_per_set=?, actual_sales_price=?, tags=?, notes=?,
-    updated_at=datetime('now') WHERE id=?`)
-    .run(name, customer_name, items_per_set, actual_sales_price ?? null, tags ?? '', notes ?? null, req.params.id);
+    is_custom=?, updated_at=datetime('now') WHERE id=?`)
+    .run(name, customer_name, items_per_set, actual_sales_price ?? null, tags ?? '', notes ?? null,
+      isCustomVal, req.params.id);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Not found' });
   res.json(enrichProject(db, project));
@@ -419,27 +467,44 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
   const src = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
   if (!src) return res.status(404).json({ error: 'Not found' });
 
-  const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set, tags, notes) VALUES (?,?,?,?,?)')
-    .run(`${src.name} (copy)`, src.customer_name, src.items_per_set, src.tags || '', src.notes);
+  const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set, tags, notes, is_custom) VALUES (?,?,?,?,?,?)')
+    .run(`${src.name} (copy)`, src.customer_name, src.items_per_set, src.tags || '', src.notes, src.is_custom || 0);
   const newId = r.lastInsertRowid;
 
-  // Copy plates
+  // Copy plates (including test-print plates)
   const plates = db.prepare('SELECT * FROM project_plates WHERE project_id = ? ORDER BY sort_order').all(src.id);
   const insPlate = db.prepare(`INSERT INTO project_plates
     (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
      risk_multiplier, pre_processing_minutes, post_processing_minutes,
-     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order, is_test_print)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   for (const pl of plates) {
     insPlate.run(newId, pl.name, pl.print_time_minutes, pl.plastic_grams, pl.items_per_plate,
       pl.risk_multiplier, pl.pre_processing_minutes, pl.post_processing_minutes,
-      pl.printer_id, pl.material_id, pl.material_waste_grams, pl.notes, pl.colors, pl.enabled, pl.sort_order);
+      pl.printer_id, pl.material_id, pl.material_waste_grams, pl.notes, pl.colors, pl.enabled, pl.sort_order,
+      pl.is_test_print || 0);
   }
 
   // Copy extras
   const extras = db.prepare('SELECT extra_cost_id, quantity FROM project_extra_costs WHERE project_id = ?').all(src.id);
   const insEC = db.prepare('INSERT INTO project_extra_costs (project_id, extra_cost_id, quantity) VALUES (?,?,?)');
   for (const e of extras) insEC.run(newId, e.extra_cost_id, e.quantity);
+
+  // Copy design hours (is_design_cost=1)
+  const designHours = db.prepare('SELECT * FROM project_extra_hours WHERE project_id = ? AND is_design_cost = 1 ORDER BY sort_order, id').all(src.id);
+  const insDesignHour = db.prepare(
+    'INSERT INTO project_extra_hours (project_id, description, hours, hourly_rate, sort_order, is_design_cost) VALUES (?,?,?,?,?,1)'
+  );
+  for (const dh of designHours) {
+    insDesignHour.run(newId, dh.description, dh.hours, dh.hourly_rate, dh.sort_order);
+  }
+
+  // Copy design extras
+  const designExtras = db.prepare('SELECT * FROM project_design_extras WHERE project_id = ? ORDER BY sort_order, id').all(src.id);
+  const insDE = db.prepare('INSERT INTO project_design_extras (project_id, description, amount, sort_order) VALUES (?,?,?,?)');
+  for (const de of designExtras) {
+    insDE.run(newId, de.description, de.amount, de.sort_order);
+  }
 
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(newId);
   res.status(201).json(enrichProject(db, project));
@@ -451,6 +516,15 @@ app.patch('/api/projects/:id/archive', (req, res) => {
   if (!project) return res.status(404).json({ error: 'Not found' });
   db.prepare('UPDATE projects SET archived = ? WHERE id = ?').run(project.archived ? 0 : 1, req.params.id);
   res.json({ ok: true, archived: !project.archived });
+});
+
+app.patch('/api/projects/:id/custom', (req, res) => {
+  const db = getDb();
+  const project = db.prepare('SELECT is_custom FROM projects WHERE id = ?').get(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Not found' });
+  const newVal = project.is_custom ? 0 : 1;
+  db.prepare("UPDATE projects SET is_custom = ?, updated_at = datetime('now') WHERE id = ?").run(newVal, req.params.id);
+  res.json({ ok: true, is_custom: newVal });
 });
 
 app.delete('/api/projects/:id', (req, res) => {
@@ -605,9 +679,10 @@ app.put('/api/projects/:projectId/extra-hours', (req, res) => {
 
   const items = Array.isArray(req.body) ? req.body : [];
 
-  db.prepare('DELETE FROM project_extra_hours WHERE project_id = ?').run(pid);
+  // Only touch production extra-hours (is_design_cost=0); leave design-cost rows intact
+  db.prepare('DELETE FROM project_extra_hours WHERE project_id = ? AND is_design_cost = 0').run(pid);
   const ins = db.prepare(
-    'INSERT INTO project_extra_hours (project_id, description, hours, hourly_rate, sort_order) VALUES (?,?,?,?,?)'
+    'INSERT INTO project_extra_hours (project_id, description, hours, hourly_rate, sort_order, is_design_cost) VALUES (?,?,?,?,?,0)'
   );
   let order = 0;
   for (const it of items) {
@@ -624,6 +699,117 @@ app.put('/api/projects/:projectId/extra-hours', (req, res) => {
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
   const fullProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
   res.json(enrichProject(db, fullProject));
+});
+
+/* ------------------------------------------------------------------ */
+/*  Design hours API (is_design_cost=1 rows)                          */
+/* ------------------------------------------------------------------ */
+app.put('/api/projects/:projectId/design-hours', (req, res) => {
+  const db = getDb();
+  const pid = req.params.projectId;
+  const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(pid);
+  if (!project) return res.status(404).json({ error: 'Not found' });
+
+  const items = Array.isArray(req.body) ? req.body : [];
+
+  db.prepare('DELETE FROM project_extra_hours WHERE project_id = ? AND is_design_cost = 1').run(pid);
+  const ins = db.prepare(
+    'INSERT INTO project_extra_hours (project_id, description, hours, hourly_rate, sort_order, is_design_cost) VALUES (?,?,?,?,?,1)'
+  );
+  let order = 0;
+  for (const it of items) {
+    const desc = String(it.description || '').trim();
+    if (!desc) continue;
+    const hours = Math.max(0, Number(it.hours) || 0);
+    const rate = Math.max(0, Number(it.hourly_rate) || 0);
+    if (!Number.isFinite(hours) || !Number.isFinite(rate)) continue;
+    const sortOrder = Number.isFinite(Number(it.sort_order)) ? Number(it.sort_order) : order;
+    ins.run(pid, desc.slice(0, 200), hours, rate, sortOrder);
+    order++;
+  }
+
+  db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
+  const fullProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  res.json(enrichProject(db, fullProject));
+});
+
+/* ------------------------------------------------------------------ */
+/*  Design extras API                                                  */
+/* ------------------------------------------------------------------ */
+app.put('/api/projects/:projectId/design-extras', (req, res) => {
+  const db = getDb();
+  const pid = req.params.projectId;
+  const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(pid);
+  if (!project) return res.status(404).json({ error: 'Not found' });
+
+  const items = Array.isArray(req.body) ? req.body : [];
+
+  db.prepare('DELETE FROM project_design_extras WHERE project_id = ?').run(pid);
+  const ins = db.prepare(
+    'INSERT INTO project_design_extras (project_id, description, amount, sort_order) VALUES (?,?,?,?)'
+  );
+  let order = 0;
+  for (const it of items) {
+    const desc = String(it.description || '').trim();
+    if (!desc) continue;
+    const amount = Number(it.amount) || 0;
+    const sortOrder = Number.isFinite(Number(it.sort_order)) ? Number(it.sort_order) : order;
+    ins.run(pid, desc.slice(0, 200), amount, sortOrder);
+    order++;
+  }
+
+  db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
+  const fullProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  res.json(enrichProject(db, fullProject));
+});
+
+/* ------------------------------------------------------------------ */
+/*  Test-print upload                                                  */
+/* ------------------------------------------------------------------ */
+app.post('/api/projects/:projectId/test-print', express.raw({ type: 'application/octet-stream', limit: '500mb' }), (req, res) => {
+  const db = getDb();
+  const pid = req.params.projectId;
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const filename = req.headers['x-filename'] || 'test-print.3mf';
+  const ext = path.extname(filename).toLowerCase();
+  if (ext !== '.3mf') {
+    return res.status(400).json({ error: 'Only .3mf files allowed for test prints' });
+  }
+
+  const fileId = crypto.randomBytes(8).toString('hex');
+  const storedName = `${fileId}${ext}`;
+  const filepath = path.join(UPLOADS_DIR, storedName);
+  fs.writeFileSync(filepath, req.body);
+
+  const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order),0) as m FROM project_plates WHERE project_id = ?').get(pid).m;
+
+  // Create a test-print plate row
+  const plateResult = db.prepare(`INSERT INTO project_plates
+    (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
+     risk_multiplier, pre_processing_minutes, post_processing_minutes,
+     enabled, sort_order, is_test_print)
+    VALUES (?,?,0,0,1,1,0,0,1,?,1)`)
+    .run(pid, filename, maxOrder + 1);
+  const plateId = plateResult.lastInsertRowid;
+
+  // Parse the 3mf for time and plastic
+  try {
+    const result = parse3mf(req.body);
+    if (result.plates && result.plates.length > 0) {
+      const first = result.plates[0];
+      db.prepare('UPDATE project_plates SET print_time_minutes=?, plastic_grams=? WHERE id=?')
+        .run(first.printTimeMinutes || 0, first.weightGrams || 0, plateId);
+    }
+  } catch { /* parsing is best-effort */ }
+
+  // Insert file row (linked to the test-print plate) — NO thumbnail extraction
+  const fileResult = db.prepare('INSERT INTO project_files (project_id, plate_id, filename, filepath, size_bytes) VALUES (?,?,?,?,?)')
+    .run(pid, plateId, filename, storedName, req.body.length);
+
+  db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
+  res.status(201).json(db.prepare('SELECT * FROM project_files WHERE id = ?').get(fileResult.lastInsertRowid));
 });
 
 /* ------------------------------------------------------------------ */
@@ -671,7 +857,12 @@ app.post('/api/projects/:projectId/files', express.raw({ type: 'application/octe
 });
 
 app.get('/api/projects/:projectId/files', (req, res) => {
-  const files = getDb().prepare('SELECT * FROM project_files WHERE project_id = ? ORDER BY uploaded_at DESC').all(req.params.projectId);
+  const files = getDb().prepare(`
+    SELECT pf.* FROM project_files pf
+    LEFT JOIN project_plates pp ON pf.plate_id = pp.id
+    WHERE pf.project_id = ? AND (pf.plate_id IS NULL OR pp.is_test_print = 0)
+    ORDER BY pf.uploaded_at DESC
+  `).all(req.params.projectId);
   res.json(files);
 });
 

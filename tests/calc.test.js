@@ -593,6 +593,189 @@ describe('calculateProject', () => {
 });
 
 /* ================================================================== */
+/*  calculateDesignCosts                                               */
+/* ================================================================== */
+describe('calculateDesignCosts', () => {
+  test('all three populated', () => {
+    const result = calc.calculateDesignCosts({
+      designHours: [
+        { hours: 2, hourly_rate: 65 },
+        { hours: 1, hourly_rate: 50 },
+      ],
+      testPrintPlateBreakdowns: [
+        { totalPlateCost: 3.50 },
+        { totalPlateCost: 2.00 },
+      ],
+      designExtras: [
+        { amount: 10 },
+        { amount: 5.50 },
+      ],
+    });
+    // designHours: 2*65 + 1*50 = 180
+    expect(result.designHoursSubtotal).toBeCloseTo(180, 4);
+    // testPrints: 3.50 + 2.00 = 5.50
+    expect(result.testPrintsSubtotal).toBeCloseTo(5.50, 4);
+    // extras: 10 + 5.50 = 15.50
+    expect(result.extrasSubtotal).toBeCloseTo(15.50, 4);
+    // total: 180 + 5.50 + 15.50 = 201
+    expect(result.designTotal).toBeCloseTo(201, 4);
+  });
+
+  test('empty inputs return all zeros', () => {
+    const result = calc.calculateDesignCosts({});
+    expect(result.designHoursSubtotal).toBe(0);
+    expect(result.testPrintsSubtotal).toBe(0);
+    expect(result.extrasSubtotal).toBe(0);
+    expect(result.designTotal).toBe(0);
+  });
+
+  test('non-finite inputs are skipped gracefully', () => {
+    const result = calc.calculateDesignCosts({
+      designHours: [{ hours: 'bad', hourly_rate: 65 }, { hours: 1, hourly_rate: 65 }],
+      testPrintPlateBreakdowns: [{ totalPlateCost: NaN }, { totalPlateCost: 5 }],
+      designExtras: [{ amount: null }, { amount: 10 }],
+    });
+    // only the valid rows contribute
+    expect(result.designHoursSubtotal).toBeCloseTo(65, 4);
+    expect(result.testPrintsSubtotal).toBeCloseTo(5, 4);
+    expect(result.extrasSubtotal).toBeCloseTo(10, 4);
+  });
+});
+
+/* ================================================================== */
+/*  calculateProject — design cost integration                         */
+/* ================================================================== */
+describe('calculateProject — design cost module', () => {
+  const plates = [
+    {
+      id: 1, name: 'Base',
+      print_time_minutes: 120, plastic_grams: 50,
+      items_per_plate: 1, risk_multiplier: 1,
+      pre_processing_minutes: 0, post_processing_minutes: 2,
+      printer_purchase_price: 812.43, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
+      material_price_per_kg: 17.38,
+      enabled: 1,
+      is_test_print: 0,
+    },
+  ];
+
+  const testPrintPlate = {
+    id: 2, name: 'Test',
+    print_time_minutes: 60, plastic_grams: 20,
+    items_per_plate: 1, risk_multiplier: 1,
+    pre_processing_minutes: 0, post_processing_minutes: 0,
+    printer_purchase_price: 812.43, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
+    material_price_per_kg: 17.38,
+    enabled: 1,
+    is_test_print: 1,
+  };
+
+  test('isCustom:false → designCosts is null', () => {
+    const result = calc.calculateProject({
+      plates,
+      extras: [],
+      settings: defaultSettings,
+      itemsPerSet: 1,
+      isCustom: false,
+    });
+    expect(result.designCosts).toBeNull();
+  });
+
+  test('isCustom:true → designCosts is non-null object', () => {
+    const result = calc.calculateProject({
+      plates,
+      extras: [],
+      settings: defaultSettings,
+      itemsPerSet: 1,
+      isCustom: true,
+      designHours: [{ hours: 2, hourly_rate: 65 }],
+      designExtras: [{ amount: 10 }],
+    });
+    expect(result.designCosts).not.toBeNull();
+    expect(result.designCosts.designHoursSubtotal).toBeCloseTo(130, 4);
+    expect(result.designCosts.extrasSubtotal).toBeCloseTo(10, 4);
+  });
+
+  test('is_test_print:1 plates excluded from perItemCosts but their cost in designCosts.testPrintsSubtotal', () => {
+    const result = calc.calculateProject({
+      plates: [plates[0], testPrintPlate],
+      extras: [],
+      settings: defaultSettings,
+      itemsPerSet: 1,
+      isCustom: true,
+    });
+
+    // Only the non-test-print plate should contribute to per-item costs
+    const resultNoTestPrint = calc.calculateProject({
+      plates: [plates[0]],
+      extras: [],
+      settings: defaultSettings,
+      itemsPerSet: 1,
+      isCustom: true,
+    });
+    expect(result.perItemCosts.totalPerItem).toBeCloseTo(resultNoTestPrint.perItemCosts.totalPerItem, 4);
+
+    // Test-print plate cost should be in designCosts.testPrintsSubtotal
+    expect(result.designCosts.testPrintsSubtotal).toBeGreaterThan(0);
+  });
+
+  test('designTotal is NOT added to productionCost or totalExclVat', () => {
+    const withDesign = calc.calculateProject({
+      plates,
+      extras: [],
+      settings: defaultSettings,
+      itemsPerSet: 1,
+      isCustom: true,
+      designHours: [{ hours: 5, hourly_rate: 65 }],
+    });
+    const withoutDesign = calc.calculateProject({
+      plates,
+      extras: [],
+      settings: defaultSettings,
+      itemsPerSet: 1,
+      isCustom: false,
+    });
+
+    // Production cost and pricing are identical regardless of design hours
+    expect(withDesign.pricing.productionCost).toBeCloseTo(withoutDesign.pricing.productionCost, 4);
+    expect(withDesign.pricing.totalExclVat).toBeCloseTo(withoutDesign.pricing.totalExclVat, 4);
+    expect(withDesign.pricing.suggestedPrice).toBeCloseTo(withoutDesign.pricing.suggestedPrice, 4);
+  });
+
+  test('mixed enabled/disabled/test-print plates — only production-enabled count', () => {
+    const disabledPlate = {
+      id: 3, name: 'Disabled',
+      print_time_minutes: 120, plastic_grams: 50,
+      items_per_plate: 1, risk_multiplier: 1,
+      pre_processing_minutes: 0, post_processing_minutes: 0,
+      printer_purchase_price: 812.43, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
+      material_price_per_kg: 17.38,
+      enabled: 0,
+      is_test_print: 0,
+    };
+    const result = calc.calculateProject({
+      plates: [plates[0], testPrintPlate, disabledPlate],
+      extras: [],
+      settings: defaultSettings,
+      itemsPerSet: 1,
+      isCustom: true,
+    });
+
+    // Only the enabled non-test-print plate should be in perItemCosts
+    const resultSingle = calc.calculateProject({
+      plates: [plates[0]],
+      extras: [],
+      settings: defaultSettings,
+      itemsPerSet: 1,
+      isCustom: true,
+    });
+    expect(result.perItemCosts.totalPerItem).toBeCloseTo(resultSingle.perItemCosts.totalPerItem, 4);
+    // 3 plate breakdowns total (enabled, test-print, disabled)
+    expect(result.plateBreakdowns).toHaveLength(3);
+  });
+});
+
+/* ================================================================== */
 /*  Printer hourly cost verification                                   */
 /* ================================================================== */
 describe('printer hourly cost formula', () => {

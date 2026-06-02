@@ -468,6 +468,11 @@ function renderDetailView(p) {
       </div>
     </div>
     <div class="detail-topbar-actions">
+      <button class="btn btn-sm ${p.is_custom ? 'btn-active' : ''}"
+        onclick="toggleCustomFlag(${p.id})"
+        title="${p.is_custom ? 'Custom project (click to turn off)' : 'Mark as custom project'}">
+        ${p.is_custom ? 'Custom ✓' : 'Custom'}
+      </button>
       <button class="btn btn-sm" onclick="openProjectModal(${p.id})">Edit</button>
       <button class="btn btn-sm btn-danger" onclick="deleteProject(${p.id},event)">Delete</button>
     </div>
@@ -476,6 +481,7 @@ function renderDetailView(p) {
   ${renderPlatesSection(p)}
   ${renderCostSection(p)}
   ${renderExtraHoursSection(p)}
+  ${p.is_custom ? renderDesignCostSection(p) : ''}
   ${renderExtrasSection(p)}
   ${renderImagesSection(p)}
   ${renderFilesSection(p)}
@@ -673,6 +679,272 @@ async function removeExtraHourRow(projectId, idx) {
   // Re-pack sort_order so the next add starts clean.
   items.forEach((e, i) => { e.sort_order = i; });
   await PUT(`/api/projects/${projectId}/extra-hours`, items);
+  await reloadSingleProject(projectId);
+}
+
+/* ================================================================== */
+/*  Design cost section (custom projects only)                        */
+/* ================================================================== */
+function renderDesignCostSection(p) {
+  const dc = p.calculation?.designCosts || {};
+  const designHoursItems = (p.design_hours || []).slice().sort((a, b) => {
+    const ao = a.sort_order ?? 0;
+    const bo = b.sort_order ?? 0;
+    if (ao !== bo) return ao - bo;
+    return (a.id || 0) - (b.id || 0);
+  });
+  const designExtrasItems = (p.design_extras || []).slice().sort((a, b) => {
+    const ao = a.sort_order ?? 0;
+    const bo = b.sort_order ?? 0;
+    if (ao !== bo) return ao - bo;
+    return (a.id || 0) - (b.id || 0);
+  });
+
+  const defaultDesignRate = Number(settings.design_hourly_rate);
+  const safeDesignRate = Number.isFinite(defaultDesignRate) ? defaultDesignRate : 65;
+
+  // Design hours sub-table rows
+  const dhRows = designHoursItems.map((e, i) => {
+    const decHours = Number(e.hours) || 0;
+    const subtotal = decHours * (Number(e.hourly_rate) || 0);
+    return `<tr data-dh-row="${i}">
+      <td class="eh-desc"><input type="text" class="eh-input dh-input-desc" value="${esc(e.description || '')}" maxlength="200"
+        onchange="commitDesignHours(${p.id})"></td>
+      <td class="eh-hours num"><input type="text" inputmode="numeric" class="eh-input dh-input-hours num" value="${formatHoursMinutes(decHours)}"
+        title="H:MM (e.g. 0:45). Decimal (0.5) and bare integers (2) also accepted." onchange="commitDesignHours(${p.id})"></td>
+      <td class="eh-rate num"><input type="number" class="eh-input num" min="0" step="0.01" value="${Number(e.hourly_rate) || 0}"
+        onchange="commitDesignHours(${p.id})"></td>
+      <td class="eh-subtotal num">${fmt(subtotal)}</td>
+      <td class="eh-action"><button class="btn-icon" title="Remove" onclick="removeDesignHourRow(${p.id}, ${i})">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+      </button></td>
+    </tr>`;
+  }).join('');
+
+  // Test prints sub-table: find test-print plates and match file entries
+  const testPlateBds = (p.calculation?.plateBreakdowns || []).filter(pb => pb.isTestPrint);
+  // Build map of plateId -> breakdown cost
+  const testCostByPlate = {};
+  for (const pb of testPlateBds) testCostByPlate[pb.plateId] = pb.totalPlateCost;
+  // Test-print files come from all project files linked to test-print plates
+  // (not surfaced directly in p.files since those are filtered; we use p.plates to detect)
+  const testPrintPlates = (p.plates || []).filter(pl => pl.is_test_print);
+  const tpRows = testPrintPlates.map(pl => {
+    const cost = testCostByPlate[pl.id] || 0;
+    return `<tr>
+      <td>${esc(pl.name || 'Test print')}</td>
+      <td class="num">${fmtTime(pl.print_time_minutes || 0)}</td>
+      <td class="num">${fmtGrams(pl.plastic_grams || 0)}</td>
+      <td class="num">${fmt(cost)}</td>
+      <td><button class="btn-icon" title="Delete" onclick="deleteTestPrint(${pl.id}, ${p.id})">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button></td>
+    </tr>`;
+  }).join('');
+
+  // Design extras rows
+  const deRows = designExtrasItems.map((e, i) => {
+    return `<tr data-de-row="${i}">
+      <td class="eh-desc"><input type="text" class="eh-input de-input-desc" value="${esc(e.description || '')}" maxlength="200"
+        onchange="commitDesignExtras(${p.id})"></td>
+      <td class="eh-rate num"><input type="number" class="eh-input num" min="0" step="0.01" value="${Number(e.amount) || 0}"
+        onchange="commitDesignExtras(${p.id})"></td>
+      <td class="eh-action"><button class="btn-icon" title="Remove" onclick="removeDesignExtraRow(${p.id}, ${i})">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+      </button></td>
+    </tr>`;
+  }).join('');
+
+  return `<div class="extras-section" data-design-cost-panel="${p.id}">
+    <div class="extras-section-header"><h3>Design Costs (custom project)</h3></div>
+
+    <h4 style="font-size:13px;margin:8px 0 4px;color:var(--text-muted)">Design Hours</h4>
+    <div data-design-hours-panel="${p.id}">
+      ${designHoursItems.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
+        <thead><tr><th>Description</th><th>Hours</th><th>Rate (${settings.currency_symbol || '€'}/h)</th><th>Subtotal</th><th></th></tr></thead>
+        <tbody>${dhRows}</tbody>
+        <tfoot><tr><td colspan="3" style="text-align:right;font-weight:600">Subtotal</td><td class="num" style="font-weight:700">${fmt(dc.designHoursSubtotal || 0)}</td><td></td></tr></tfoot>
+      </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No design hours added yet.</p>'}
+      <div class="ec-add-row">
+        <button class="btn btn-sm btn-primary" onclick="addDesignHourRow(${p.id}, ${safeDesignRate})">+ Add row</button>
+      </div>
+    </div>
+
+    <h4 style="font-size:13px;margin:12px 0 4px;color:var(--text-muted)">Test Prints</h4>
+    ${testPrintPlates.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
+      <thead><tr><th>Filename</th><th>Time</th><th>Plastic</th><th>Cost</th><th></th></tr></thead>
+      <tbody>${tpRows}</tbody>
+      <tfoot><tr><td colspan="3" style="text-align:right;font-weight:600">Subtotal</td><td class="num" style="font-weight:700">${fmt(dc.testPrintsSubtotal || 0)}</td><td></td></tr></tfoot>
+    </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No test prints uploaded yet.</p>'}
+    <div class="ec-add-row">
+      <label class="btn btn-sm btn-primary" style="cursor:pointer">
+        + Upload test print
+        <input type="file" accept=".3mf" style="display:none" onchange="uploadTestPrint(${p.id}, this)">
+      </label>
+    </div>
+
+    <h4 style="font-size:13px;margin:12px 0 4px;color:var(--text-muted)">Other Design Costs</h4>
+    <div data-design-extras-panel="${p.id}">
+      ${designExtrasItems.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
+        <thead><tr><th>Description</th><th>Amount (${settings.currency_symbol || '€'})</th><th></th></tr></thead>
+        <tbody>${deRows}</tbody>
+        <tfoot><tr><td style="text-align:right;font-weight:600">Subtotal</td><td class="num" style="font-weight:700">${fmt(dc.extrasSubtotal || 0)}</td><td></td></tr></tfoot>
+      </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No extra design costs added yet.</p>'}
+      <div class="ec-add-row">
+        <button class="btn btn-sm btn-primary" onclick="addDesignExtraRow(${p.id})">+ Add row</button>
+      </div>
+    </div>
+
+    <div style="margin-top:12px;padding:10px;background:var(--bg-card);border-radius:6px;border:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-weight:600">Design Total (one-time, excl. VAT)</span>
+        <span style="font-size:18px;font-weight:700">${fmt(dc.designTotal || 0)}</span>
+      </div>
+      <div class="sub" style="text-align:right;margin-top:4px;opacity:.6">Not included in unit price</div>
+    </div>
+  </div>`;
+}
+
+async function commitDesignHours(projectId) {
+  const panel = document.querySelector(`[data-design-hours-panel="${projectId}"]`);
+  if (!panel) return;
+  const rows = panel.querySelectorAll('tbody tr[data-dh-row]');
+  const items = [];
+  let order = 0;
+  for (const row of rows) {
+    const desc = row.querySelector('.dh-input-desc')?.value || '';
+    const hoursStr = row.querySelector('.dh-input-hours')?.value || '0';
+    const rateStr = row.querySelector('.eh-input.num')?.value || '0';
+    const parsedHours = parseHoursMinutes(hoursStr);
+    items.push({
+      description: desc,
+      hours: Number.isFinite(parsedHours) ? parsedHours : 0,
+      hourly_rate: parseFloat(rateStr) || 0,
+      sort_order: order++,
+    });
+  }
+  await PUT(`/api/projects/${projectId}/design-hours`, items);
+  await reloadSingleProject(projectId);
+}
+
+async function addDesignHourRow(projectId, defaultRate) {
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return;
+  const existing = (p.design_hours || []).map((e, i) => ({
+    description: e.description,
+    hours: Number(e.hours) || 0,
+    hourly_rate: Number(e.hourly_rate) || 0,
+    sort_order: e.sort_order ?? i,
+  }));
+  existing.push({
+    description: 'Design work',
+    hours: 1,
+    hourly_rate: Number.isFinite(defaultRate) ? defaultRate : 65,
+    sort_order: existing.length,
+  });
+  await PUT(`/api/projects/${projectId}/design-hours`, existing);
+  await reloadSingleProject(projectId);
+  const panel = document.querySelector(`[data-design-hours-panel="${projectId}"]`);
+  const rows = panel?.querySelectorAll('tbody tr[data-dh-row]') || [];
+  const last = rows[rows.length - 1];
+  const input = last?.querySelector('.dh-input-desc');
+  if (input) { input.focus(); input.select(); }
+}
+
+async function removeDesignHourRow(projectId, idx) {
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return;
+  const items = (p.design_hours || []).map((e, i) => ({
+    description: e.description,
+    hours: Number(e.hours) || 0,
+    hourly_rate: Number(e.hourly_rate) || 0,
+    sort_order: e.sort_order ?? i,
+  }));
+  if (idx < 0 || idx >= items.length) return;
+  items.splice(idx, 1);
+  items.forEach((e, i) => { e.sort_order = i; });
+  await PUT(`/api/projects/${projectId}/design-hours`, items);
+  await reloadSingleProject(projectId);
+}
+
+async function commitDesignExtras(projectId) {
+  const panel = document.querySelector(`[data-design-extras-panel="${projectId}"]`);
+  if (!panel) return;
+  const rows = panel.querySelectorAll('tbody tr[data-de-row]');
+  const items = [];
+  let order = 0;
+  for (const row of rows) {
+    const desc = row.querySelector('.de-input-desc')?.value || '';
+    const amount = parseFloat(row.querySelector('.eh-input.num')?.value) || 0;
+    items.push({ description: desc, amount, sort_order: order++ });
+  }
+  await PUT(`/api/projects/${projectId}/design-extras`, items);
+  await reloadSingleProject(projectId);
+}
+
+async function addDesignExtraRow(projectId) {
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return;
+  const existing = (p.design_extras || []).map((e, i) => ({
+    description: e.description,
+    amount: Number(e.amount) || 0,
+    sort_order: e.sort_order ?? i,
+  }));
+  existing.push({ description: 'Extra cost', amount: 0, sort_order: existing.length });
+  await PUT(`/api/projects/${projectId}/design-extras`, existing);
+  await reloadSingleProject(projectId);
+  const panel = document.querySelector(`[data-design-extras-panel="${projectId}"]`);
+  const rows = panel?.querySelectorAll('tbody tr[data-de-row]') || [];
+  const last = rows[rows.length - 1];
+  const input = last?.querySelector('.de-input-desc');
+  if (input) { input.focus(); input.select(); }
+}
+
+async function removeDesignExtraRow(projectId, idx) {
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return;
+  const items = (p.design_extras || []).map((e, i) => ({
+    description: e.description,
+    amount: Number(e.amount) || 0,
+    sort_order: e.sort_order ?? i,
+  }));
+  if (idx < 0 || idx >= items.length) return;
+  items.splice(idx, 1);
+  items.forEach((e, i) => { e.sort_order = i; });
+  await PUT(`/api/projects/${projectId}/design-extras`, items);
+  await reloadSingleProject(projectId);
+}
+
+async function uploadTestPrint(projectId, input) {
+  const file = input?.files?.[0];
+  if (!file) return;
+  if (input.value) input.value = '';
+
+  if (!file.name.toLowerCase().endsWith('.3mf')) {
+    await showAlert({ title: 'Invalid file', message: 'Only .3mf files are allowed for test prints.' });
+    return;
+  }
+
+  const buf = await file.arrayBuffer();
+  const res = await fetch(`/api/projects/${projectId}/test-print`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name },
+    body: buf,
+  });
+  if (res.status === 401) { window.location.replace('/login'); return; }
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    await showAlert({ title: 'Upload failed', message: e.error || 'Upload failed' });
+    return;
+  }
+  await reloadSingleProject(projectId);
+}
+
+async function deleteTestPrint(plateId, projectId) {
+  // Delete the plate (cascades to project_files via ON DELETE CASCADE)
+  const confirmed = await showConfirm({ title: 'Delete test print', message: 'Remove this test print?' });
+  if (!confirmed) return;
+  await DEL(`/api/projects/${projectId}/plates/${plateId}`);
   await reloadSingleProject(projectId);
 }
 
@@ -911,6 +1183,16 @@ function renderPricingSection(p) {
     </div>`;
   }
 
+  const designCostBlock = p.is_custom && c.designCosts?.designTotal > 0 ? `
+    <div class="pricing-block">
+      <h4>Design Costs (one-time)</h4>
+      <div class="big-price">${fmt(c.designCosts.designTotal)}</div>
+      <div class="sub">Design hours: ${fmt(c.designCosts.designHoursSubtotal)}</div>
+      <div class="sub">Test prints: ${fmt(c.designCosts.testPrintsSubtotal)}</div>
+      <div class="sub">Extras: ${fmt(c.designCosts.extrasSubtotal)}</div>
+      <div class="sub" style="margin-top:6px;opacity:.6">Not included in unit price</div>
+    </div>` : '';
+
   return `<div class="pricing-section"><div class="pricing-grid">
     <div class="pricing-block">
       <h4>Production Cost (${itemLabel})</h4>
@@ -932,6 +1214,7 @@ function renderPricingSection(p) {
       <div class="sub">Profit: ${fmt(pr.suggestedProfitAmount)} <span class="margin-badge ${c.suggestedIndicator}">${fmtPct(pr.suggestedMarginPct)}</span></div>
     </div>
     ${actualBlock}
+    ${designCostBlock}
   </div>
   ${p.actual_sales_price > 0 ? `<div style="padding:8px 0 0;text-align:right">
     <button class="btn btn-sm" onclick="updateActualPrice(${p.id}, null)">Clear actual price</button>
@@ -1005,6 +1288,11 @@ async function toggleArchive(id) {
   closeContextMenu();
   await PATCH(`/api/projects/${id}/archive`);
   await reloadProjects();
+}
+
+async function toggleCustomFlag(projectId) {
+  await PATCH(`/api/projects/${projectId}/custom`);
+  await reloadSingleProject(projectId);
 }
 
 async function toggleShowArchived(checked) {
@@ -1795,6 +2083,8 @@ function renderGeneralSettings() {
       <input type="number" value="${settings.hourly_rate || 40}" step="0.01" onchange="saveSetting('hourly_rate', this.value)"></div>
     <div class="settings-row"><label>Default Hour Rate (${settings.currency_symbol || '\u20ac'}/h)</label>
       <input type="number" value="${settings.extra_uren_default_rate ?? 60}" step="0.01" onchange="saveSetting('extra_uren_default_rate', this.value)"></div>
+    <div class="settings-row"><label>Design Hourly Rate (${settings.currency_symbol || '\u20ac'}/h) \u2014 custom projects</label>
+      <input type="number" value="${settings.design_hourly_rate ?? 65}" step="0.01" onchange="saveSetting('design_hourly_rate', this.value)"></div>
     <div class="settings-row"><label>Electricity Price (${settings.currency_symbol || '\u20ac'}/kWh)</label>
       <input type="number" value="${settings.electricity_price_kwh || 0.40}" step="0.01" onchange="saveSetting('electricity_price_kwh', this.value)"></div>
     <div class="settings-row"><label>VAT Rate (%)</label>

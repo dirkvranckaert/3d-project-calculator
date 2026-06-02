@@ -146,6 +146,16 @@ function bootstrap(db) {
       size_bytes  INTEGER NOT NULL DEFAULT 0,
       uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    /* ---- Design cost free-form extras (custom projects) ---- */
+    CREATE TABLE IF NOT EXISTS project_design_extras (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      description TEXT NOT NULL,
+      amount      REAL NOT NULL DEFAULT 0,
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   migrate(db);
@@ -170,6 +180,10 @@ function migrate(db) {
   addCol('project_plates', 'source_plate_index', 'INTEGER');
   addCol('project_plates', 'source_file_id', 'TEXT');
   addCol('projects', 'archived', 'INTEGER NOT NULL DEFAULT 0');
+  // Design cost module (2026-06-02)
+  addCol('projects', 'is_custom', 'INTEGER NOT NULL DEFAULT 0');
+  addCol('project_extra_hours', 'is_design_cost', 'INTEGER NOT NULL DEFAULT 0');
+  addCol('project_plates', 'is_test_print', 'INTEGER NOT NULL DEFAULT 0');
 }
 
 /* ------------------------------------------------------------------ */
@@ -179,6 +193,7 @@ function seedDefaults(db) {
   const defaults = {
     hourly_rate:              '40',
     extra_uren_default_rate:  '60',
+    design_hourly_rate:       '65',
     electricity_price_kwh:    '0.40',
     vat_rate:                 '21',
     material_profit_pct:      '200',

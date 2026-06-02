@@ -291,6 +291,44 @@ function marginIndicator(marginPct, greenThreshold = 30, orangeThreshold = 5) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Design cost calculation (custom projects only)                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Calculate one-time design costs for a custom project.
+ * These are separate from production costs and NOT added to suggestedPrice.
+ *
+ * @param {object} opts
+ *   - designHours: Array<{hours, hourly_rate}>  (is_design_cost=1 rows)
+ *   - testPrintPlateBreakdowns: Array<{totalPlateCost}> (is_test_print=1 plates)
+ *   - designExtras: Array<{amount}>
+ * @returns {{ designHoursSubtotal, testPrintsSubtotal, extrasSubtotal, designTotal }}
+ */
+function calculateDesignCosts(opts) {
+  const { designHours = [], testPrintPlateBreakdowns = [], designExtras = [] } = opts;
+
+  let designHoursSubtotal = 0;
+  for (const h of designHours) {
+    const hrs = Number(h.hours);
+    const rate = Number(h.hourly_rate);
+    if (Number.isFinite(hrs) && Number.isFinite(rate)) designHoursSubtotal += hrs * rate;
+  }
+
+  let testPrintsSubtotal = 0;
+  for (const p of testPrintPlateBreakdowns) testPrintsSubtotal += Number(p.totalPlateCost) || 0;
+
+  let extrasSubtotal = 0;
+  for (const e of designExtras) extrasSubtotal += Number(e.amount) || 0;
+
+  return {
+    designHoursSubtotal,
+    testPrintsSubtotal,
+    extrasSubtotal,
+    designTotal: designHoursSubtotal + testPrintsSubtotal + extrasSubtotal,
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /*  Full project calculation (orchestrator)                            */
 /* ------------------------------------------------------------------ */
 
@@ -313,6 +351,8 @@ function calculateProject(opts) {
     settings = {},
     itemsPerSet = 1,
     actualSalesPrice = null,
+    // design cost fields (§4c)
+    // designHours, designExtras, isCustom are destructured after s is built
   } = opts;
 
   const s = {
@@ -327,6 +367,12 @@ function calculateProject(opts) {
     margin_green_pct: Number(settings.margin_green_pct) || 30,
     margin_orange_pct: Number(settings.margin_orange_pct) || 5,
   };
+
+  const {
+    designHours = [],
+    designExtras = [],
+    isCustom = false,
+  } = opts;
 
   // Calculate per-plate breakdowns
   const plateBreakdowns = plates.map(plate => {
@@ -344,11 +390,15 @@ function calculateProject(opts) {
       plateId: plate.id,
       plateName: plate.name || '',
       enabled: plate.enabled !== undefined ? !!plate.enabled : true,
+      isTestPrint: !!plate.is_test_print,
     };
   });
 
-  // Per-item costs (only enabled plates)
-  const enabledPlates = plateBreakdowns.filter(p => p.enabled);
+  // Test-print plates are excluded from production calc but kept for design costs
+  const testPrintBreakdowns = plateBreakdowns.filter(p => p.isTestPrint);
+
+  // Per-item costs (only enabled, non-test-print plates)
+  const enabledPlates = plateBreakdowns.filter(p => p.enabled && !p.isTestPrint);
   const perItemCosts = calculatePerItemCosts(enabledPlates);
 
   // Profit margins
@@ -359,6 +409,11 @@ function calculateProject(opts) {
 
   // Extra hours (project-level human-time, no margin)
   const extraHoursCost = calculateExtraHoursCost(extraHours);
+
+  // Design costs (only for custom projects)
+  const designCosts = isCustom
+    ? calculateDesignCosts({ designHours, testPrintPlateBreakdowns: testPrintBreakdowns, designExtras })
+    : null;
 
   // Final pricing
   const pricing = calculateFinalPricing({
@@ -394,6 +449,7 @@ function calculateProject(opts) {
     profits,
     extraCostsTotal,
     extraHoursCost,
+    designCosts,
     pricing,
     suggestedIndicator,
     actualMargin,
@@ -408,6 +464,7 @@ module.exports = {
   applyProfitMargins,
   calculateExtraCosts,
   calculateExtraHoursCost,
+  calculateDesignCosts,
   calculateFinalPricing,
   calculateActualMargin,
   marginIndicator,

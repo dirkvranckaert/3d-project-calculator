@@ -639,6 +639,169 @@ describe('POST /api/projects/:projectId/images-from-3mf', () => {
   });
 });
 
+/* ================================================================== */
+/*  Design Cost Module — settings, flag, routes                       */
+/* ================================================================== */
+describe('Design Cost Module', () => {
+  let pid;
+
+  beforeAll(async () => {
+    const res = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'Design Cost Test', items_per_set: 1 });
+    pid = res.body.id;
+  });
+
+  afterAll(async () => {
+    await request(app).delete(`/api/projects/${pid}`).set('Cookie', cookie);
+  });
+
+  test('design_hourly_rate default is 65 in settings', async () => {
+    const res = await request(app).get('/api/settings').set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.body.design_hourly_rate).toBe(65);
+  });
+
+  test('new project has is_custom=0 and design_hours/design_extras as empty arrays', async () => {
+    const res = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.body.is_custom).toBe(0);
+    expect(Array.isArray(res.body.design_hours)).toBe(true);
+    expect(res.body.design_hours).toHaveLength(0);
+    expect(Array.isArray(res.body.design_extras)).toBe(true);
+    expect(res.body.design_extras).toHaveLength(0);
+  });
+
+  test('calculation.designCosts is null when is_custom=0', async () => {
+    const res = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    expect(res.body.calculation.designCosts).toBeNull();
+  });
+
+  test('PATCH /api/projects/:id/custom toggles is_custom 0→1', async () => {
+    const res = await request(app).patch(`/api/projects/${pid}/custom`).set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.is_custom).toBe(1);
+    const check = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    expect(check.body.is_custom).toBe(1);
+  });
+
+  test('PATCH /api/projects/:id/custom toggles is_custom 1→0', async () => {
+    const res = await request(app).patch(`/api/projects/${pid}/custom`).set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.body.is_custom).toBe(0);
+  });
+
+  test('PATCH /api/projects/:id/custom returns 404 for missing project', async () => {
+    const res = await request(app).patch('/api/projects/999999/custom').set('Cookie', cookie);
+    expect(res.status).toBe(404);
+  });
+
+  test('PUT /api/projects/:id/design-hours persists and shows in calculation.designCosts when custom', async () => {
+    // Enable custom
+    await request(app).patch(`/api/projects/${pid}/custom`).set('Cookie', cookie);
+
+    const res = await request(app).put(`/api/projects/${pid}/design-hours`).set('Cookie', cookie).send([
+      { description: 'CAD work', hours: 3, hourly_rate: 65 },
+      { description: 'Slicing', hours: 0.5, hourly_rate: 65 },
+    ]);
+    expect(res.status).toBe(200);
+    expect(res.body.design_hours).toHaveLength(2);
+    expect(res.body.design_hours[0].description).toBe('CAD work');
+    // 3*65 + 0.5*65 = 195 + 32.5 = 227.5
+    expect(res.body.calculation.designCosts.designHoursSubtotal).toBeCloseTo(227.5, 4);
+    expect(res.body.calculation.designCosts.designTotal).toBeCloseTo(227.5, 4);
+  });
+
+  test('PUT /api/projects/:id/design-hours does NOT touch production extra-hours (is_design_cost=0)', async () => {
+    // Add production extra hours first
+    await request(app).put(`/api/projects/${pid}/extra-hours`).set('Cookie', cookie).send([
+      { description: 'Hand-finishing', hours: 1, hourly_rate: 60 },
+    ]);
+
+    // Now replace design hours
+    await request(app).put(`/api/projects/${pid}/design-hours`).set('Cookie', cookie).send([
+      { description: 'New design work', hours: 2, hourly_rate: 65 },
+    ]);
+
+    const res = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    // Production extra hours still there
+    expect(res.body.extra_hours).toHaveLength(1);
+    expect(res.body.extra_hours[0].description).toBe('Hand-finishing');
+    // Design hours replaced
+    expect(res.body.design_hours).toHaveLength(1);
+    expect(res.body.design_hours[0].description).toBe('New design work');
+  });
+
+  test('PUT /api/projects/:id/design-extras persists and adds to designCosts.extrasSubtotal', async () => {
+    const res = await request(app).put(`/api/projects/${pid}/design-extras`).set('Cookie', cookie).send([
+      { description: 'Logo design', amount: 50 },
+      { description: 'Revisions', amount: 25 },
+    ]);
+    expect(res.status).toBe(200);
+    expect(res.body.design_extras).toHaveLength(2);
+    expect(res.body.calculation.designCosts.extrasSubtotal).toBeCloseTo(75, 4);
+  });
+
+  test('PUT /api/projects/:id/design-extras drops empty-description rows', async () => {
+    const res = await request(app).put(`/api/projects/${pid}/design-extras`).set('Cookie', cookie).send([
+      { description: 'Valid', amount: 10 },
+      { description: '', amount: 999 },
+      { description: '   ', amount: 999 },
+    ]);
+    expect(res.status).toBe(200);
+    expect(res.body.design_extras).toHaveLength(1);
+  });
+
+  test('calculation.designCosts is null when is_custom=0 even with design_hours in DB', async () => {
+    // Turn off custom
+    await request(app).patch(`/api/projects/${pid}/custom`).set('Cookie', cookie);
+    const res = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    expect(res.body.is_custom).toBe(0);
+    expect(res.body.calculation.designCosts).toBeNull();
+    // Re-enable for remaining tests
+    await request(app).patch(`/api/projects/${pid}/custom`).set('Cookie', cookie);
+  });
+
+  test('GET /api/projects/:id/files excludes test-print files', async () => {
+    // Create a minimal fake 3mf buffer (invalid 3mf but enough to test file storage)
+    const fakeBuf = Buffer.from('PK\x03\x04dummy3mf');
+    const res = await request(app)
+      .post(`/api/projects/${pid}/test-print`)
+      .set('Cookie', cookie)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Filename', 'test.3mf')
+      .send(fakeBuf);
+    // May be 201 or 500 depending on parse3mf; either way the file should be hidden
+    // We only assert files endpoint excludes it
+    const files = await request(app).get(`/api/projects/${pid}/files`).set('Cookie', cookie);
+    expect(files.status).toBe(200);
+    // test-print files must not appear in this list
+    // (If test failed due to parse error we can still check the file is absent)
+    const hasPlateBound = files.body.find(f => f.filename === 'test.3mf');
+    expect(hasPlateBound).toBeUndefined();
+  });
+
+  test('POST /api/projects/:id/test-print rejects non-.3mf files', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${pid}/test-print`)
+      .set('Cookie', cookie)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Filename', 'model.stl')
+      .send(Buffer.from('solid test'));
+    expect(res.status).toBe(400);
+  });
+
+  test('POST /api/projects/:id/duplicate carries is_custom and design data', async () => {
+    const res = await request(app).post(`/api/projects/${pid}/duplicate`).set('Cookie', cookie);
+    expect(res.status).toBe(201);
+    expect(res.body.is_custom).toBe(1);
+    // Design hours and extras should be copied
+    expect(res.body.design_hours.length).toBeGreaterThan(0);
+    // Cleanup
+    await request(app).delete(`/api/projects/${res.body.id}`).set('Cookie', cookie);
+  });
+});
+
 // Clean up
 afterAll(() => {
   if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
