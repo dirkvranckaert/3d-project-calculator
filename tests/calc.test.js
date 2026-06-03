@@ -1143,3 +1143,83 @@ describe('calculateVerification', () => {
     expect(result.vsProductionCost.delta).toBeNull();
   });
 });
+
+/* ================================================================== */
+/*  Test-prints path parity with calculateProject                      */
+/* ================================================================== */
+describe('test-prints cost parity with calculateProject', () => {
+  // A single plate that would appear as a test-print plate
+  const testPrintPlate = {
+    print_time_minutes: 237,
+    plastic_grams: 76.35,
+    items_per_plate: 1,
+    risk_multiplier: 1,
+    pre_processing_minutes: 0,
+    post_processing_minutes: 5,
+    material_waste_grams: 1,
+    printer_purchase_price: 812.43,
+    printer_earn_back_months: 24,
+    printer_kwh_per_hour: 0.11,
+    material_price_per_kg: 17.38,
+    is_test_print: 1,
+    enabled: true,
+  };
+
+  const settings = defaultSettings;
+
+  test('computePlateCost (new: costs+profit) matches calculateProject for a single test-print plate', () => {
+    // Replicate the new computePlateCost logic from buildTestPrints after the fix
+    const printer = {
+      purchase_price: testPrintPlate.printer_purchase_price || 0,
+      earn_back_months: testPrintPlate.printer_earn_back_months || 24,
+      kwh_per_hour: testPrintPlate.printer_kwh_per_hour || 0,
+    };
+    const material = { price_per_kg: testPrintPlate.material_price_per_kg || 0 };
+
+    const costs = calc.calculatePlateCosts(testPrintPlate, printer, material, settings);
+    const profits = calc.applyProfitMargins(costs, settings);
+    const testPrintTotal = costs.totalPlateCost + profits.totalProfit;
+
+    // calculateProject treats test-print plates as non-production (isTestPrint=true),
+    // so they don't contribute to perItemCosts/profits. We compare only the raw
+    // plate-level price-with-margin, which must equal what calculateProject computes
+    // for an equivalent enabled non-test plate (same inputs, same path).
+    const projectResult = calc.calculateProject({
+      plates: [{ ...testPrintPlate, is_test_print: 0 }],
+      settings,
+      itemsPerSet: 1,
+    });
+
+    // The project's per-item production cost (before extras/design) + profit
+    // must equal testPrintTotal (both start from the same plate costs + margins).
+    const projectPlateCostWithMargin =
+      projectResult.perItemCosts.totalPerItem + projectResult.profits.totalProfit;
+
+    expect(testPrintTotal).toBeCloseTo(projectPlateCostWithMargin, 6);
+  });
+
+  test('old bare-cost logic (costs only, no margin) does NOT match calculateProject', () => {
+    // This test documents that the old path was wrong — it would fail parity.
+    const printer = {
+      purchase_price: testPrintPlate.printer_purchase_price || 0,
+      earn_back_months: testPrintPlate.printer_earn_back_months || 24,
+      kwh_per_hour: testPrintPlate.printer_kwh_per_hour || 0,
+    };
+    const material = { price_per_kg: testPrintPlate.material_price_per_kg || 0 };
+
+    // Old logic: only totalPlateCost, no margin
+    const oldTotal = calc.calculatePlateCosts(testPrintPlate, printer, material, settings).totalPlateCost;
+
+    const projectResult = calc.calculateProject({
+      plates: [{ ...testPrintPlate, is_test_print: 0 }],
+      settings,
+      itemsPerSet: 1,
+    });
+    const projectPlateCostWithMargin =
+      projectResult.perItemCosts.totalPerItem + projectResult.profits.totalProfit;
+
+    // The old bare cost is strictly less than the project price-with-margin
+    // (because margins are > 0 in defaultSettings).
+    expect(oldTotal).toBeLessThan(projectPlateCostWithMargin);
+  });
+});

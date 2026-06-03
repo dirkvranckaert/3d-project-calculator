@@ -253,11 +253,6 @@ function resolveKwh(db, printerId, materialType) {
  * plus synthetic orphan entries for is_test_print=1 plates with no test_print_id.
  */
 function buildTestPrints(db, projectId, settings) {
-  const s = {
-    hourly_rate: Number(settings.hourly_rate) || 40,
-    electricity_price_kwh: Number(settings.electricity_price_kwh) || 0.40,
-  };
-
   // Query all test-print plates for this project (for printer/material selects)
   const allTestPrintPlates = db.prepare(`
     SELECT pp.*,
@@ -275,7 +270,7 @@ function buildTestPrints(db, projectId, settings) {
     pl.printer_kwh_per_hour = resolveKwh(db, pl.printer_id, pl.material_type);
   }
 
-  // Helper: compute plate cost
+  // Helper: compute plate cost including profit margin (matches calculateProject path)
   function computePlateCost(plate) {
     const printer = {
       purchase_price: plate.printer_purchase_price || 0,
@@ -283,7 +278,9 @@ function buildTestPrints(db, projectId, settings) {
       kwh_per_hour: plate.printer_kwh_per_hour || 0,
     };
     const material = { price_per_kg: plate.material_price_per_kg || 0 };
-    return calc.calculatePlateCosts(plate, printer, material, s).totalPlateCost;
+    const costs = calc.calculatePlateCosts(plate, printer, material, settings);
+    const profits = calc.applyProfitMargins(costs, settings);
+    return costs.totalPlateCost + profits.totalProfit;
   }
 
   // Real test prints from project_test_prints
