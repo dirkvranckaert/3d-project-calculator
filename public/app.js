@@ -733,11 +733,29 @@ function renderDesignCostSection(p) {
 
   const defaultDesignRate = Number(settings.design_hourly_rate);
   const safeDesignRate = Number.isFinite(defaultDesignRate) ? defaultDesignRate : 65;
+  const currSym = settings.currency_symbol || '€';
 
-  // Design hours sub-table rows
+  // ── Setup & Design notes ────────────────────────────────────────────
+  const notesBlock = `<div class="project-notes-section">
+    <div class="project-notes-label">Setup &amp; Design notes</div>
+    <textarea class="project-notes-input" placeholder="Add setup &amp; design notes..." rows="2"
+      onblur="saveDesignNotes(${p.id}, this.value)">${esc(p.design_notes || '')}</textarea>
+  </div>`;
+
+  // ── Design hours sub-table rows ─────────────────────────────────────
   const dhRows = designHoursItems.map((e, i) => {
     const decHours = Number(e.hours) || 0;
     const subtotal = decHours * (Number(e.hourly_rate) || 0);
+    const actualDec = (e.actual_hours != null && e.actual_hours !== '') ? (Number.isFinite(Number(e.actual_hours)) ? Number(e.actual_hours) : null) : null;
+    const delta = actualDec !== null ? (decHours - actualDec) : null;
+    let deltaCell;
+    if (delta === null) {
+      deltaCell = `<span style="color:var(--text-muted)">—</span>`;
+    } else if (delta >= 0) {
+      deltaCell = `<span style="color:var(--success)">+${formatHoursMinutes(delta)}</span>`;
+    } else {
+      deltaCell = `<span style="color:var(--danger)">${formatHoursMinutes(Math.abs(delta))}</span>`;
+    }
     return `<tr data-dh-row="${i}">
       <td class="eh-desc"><input type="text" class="eh-input dh-input-desc" value="${esc(e.description || '')}" maxlength="200"
         onchange="commitDesignHours(${p.id})"></td>
@@ -746,38 +764,91 @@ function renderDesignCostSection(p) {
       <td class="eh-rate num"><input type="number" class="eh-input num" min="0" step="0.01" value="${Number(e.hourly_rate) || 0}"
         onchange="commitDesignHours(${p.id})"></td>
       <td class="eh-subtotal num">${fmt(subtotal)}</td>
+      <td class="eh-hours num"><input type="text" inputmode="numeric" class="eh-input dh-input-actual num" value="${actualDec !== null ? formatHoursMinutes(actualDec) : ''}"
+        placeholder="0:00" title="Actual hours (H:MM)" onchange="commitDesignHours(${p.id})"></td>
+      <td class="num">${deltaCell}</td>
       <td class="eh-action"><button class="btn-icon" title="Remove" onclick="removeDesignHourRow(${p.id}, ${i})">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
       </button></td>
     </tr>`;
   }).join('');
 
-  // Test prints sub-table: find test-print plates and match file entries
-  const testPlateBds = (p.calculation?.plateBreakdowns || []).filter(pb => pb.isTestPrint);
-  // Build map of plateId -> breakdown cost
-  const testCostByPlate = {};
-  for (const pb of testPlateBds) testCostByPlate[pb.plateId] = pb.totalPlateCost;
-  // Test-print files come from all project files linked to test-print plates
-  // (not surfaced directly in p.files since those are filtered; we use p.plates to detect)
-  const testPrintPlates = (p.plates || []).filter(pl => pl.is_test_print);
-  const tpRows = testPrintPlates.map(pl => {
-    const cost = testCostByPlate[pl.id] || 0;
-    const printerOpts = '<option value="">--</option>' + printers.map(pr => `<option value="${pr.id}" ${pr.id == pl.printer_id ? 'selected' : ''}>${esc(pr.name)}</option>`).join('');
-    const materialOpts = '<option value="">--</option>' + materials.map(m => `<option value="${m.id}" ${m.id == pl.material_id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+  // ── Test prints table ───────────────────────────────────────────────
+  const testPrintsList = (p.test_prints || []);
+  const tpRows = testPrintsList.map(tp => {
+    const actual = (tp.attachmentBreakdowns || []).reduce((s, b) => s + (Number(b.totalPlateCost) || 0), 0);
+    const est = Number(tp.estimated_cost) || 0;
+    const hasAttachments = (tp.attachmentBreakdowns || []).length > 0;
+    const delta = est - actual;
+    let deltaCell;
+    if (!hasAttachments) {
+      deltaCell = `<span style="color:var(--text-muted)">—</span>`;
+    } else if (delta >= 0) {
+      deltaCell = `<span style="color:var(--success)">+${fmt(delta)}</span>`;
+    } else {
+      deltaCell = `<span style="color:var(--danger)">${fmt(delta)}</span>`;
+    }
+
+    // Attachment sub-rows (indented)
+    const attachRows = (tp.attachmentBreakdowns || []).map(ab => {
+      const plate = (p.test_print_plates || []).find(pl => pl.id === ab.plateId) || {};
+      const printerOpts = '<option value="">--</option>' + printers.map(pr => `<option value="${pr.id}" ${pr.id == plate.printer_id ? 'selected' : ''}>${esc(pr.name)}</option>`).join('');
+      const materialOpts = '<option value="">--</option>' + materials.map(m => `<option value="${m.id}" ${m.id == plate.material_id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+      return `<tr style="background:var(--bg-muted,#f7f7f8);font-size:12px">
+        <td style="padding-left:24px;color:var(--text-muted)">${esc(ab.name || plate.name || 'Attached .3mf')}</td>
+        <td></td>
+        <td class="num">${fmt(ab.totalPlateCost)}</td>
+        <td><select class="inline-input" onchange="patchPlateField(${p.id}, ${ab.plateId}, 'printer_id', parseInt(this.value) || null)">${printerOpts}</select></td>
+        <td><select class="inline-input" onchange="patchPlateField(${p.id}, ${ab.plateId}, 'material_id', parseInt(this.value) || null)">${materialOpts}</select></td>
+        <td></td>
+        <td><button class="btn-icon" title="Remove attachment" onclick="deleteTestPrintAttachment(${p.id}, ${ab.plateId})">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button></td>
+      </tr>`;
+    }).join('');
+
+    // Attach .3mf button (hidden for orphans)
+    const attachBtn = tp.isOrphan ? '' : `<tr style="background:var(--bg-muted,#f7f7f8)">
+      <td colspan="7" style="padding-left:24px">
+        <label class="btn btn-sm" style="cursor:pointer;font-size:11px">
+          + Attach .3mf
+          <input type="file" accept=".3mf" style="display:none" onchange="attachTestPrint3mf(${p.id}, ${tp.id}, this)">
+        </label>
+      </td>
+    </tr>`;
+
+    if (tp.isOrphan) {
+      // Orphan: read-only, delete via existing deleteTestPrint on the plate
+      const plateId = tp.orphanPlateId || (tp.attachmentBreakdowns?.[0]?.plateId);
+      return `<tr>
+        <td><span style="color:var(--text-muted)">${esc(tp.description)}</span></td>
+        <td class="num" style="color:var(--text-muted)">—</td>
+        <td class="num">${fmt(actual)}</td>
+        <td></td>
+        <td></td>
+        <td>${deltaCell}</td>
+        <td>${plateId ? `<button class="btn-icon" title="Delete" onclick="deleteTestPrint(${plateId}, ${p.id})">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>` : ''}</td>
+      </tr>${attachRows}`;
+    }
+
     return `<tr>
-      <td>${esc(pl.name || 'Test print')}</td>
-      <td class="num">${fmtTime(pl.print_time_minutes || 0)}</td>
-      <td class="num">${fmtGrams(pl.plastic_grams || 0)}</td>
-      <td><select class="inline-input" onchange="patchPlateField(${p.id}, ${pl.id}, 'printer_id', parseInt(this.value) || null)">${printerOpts}</select></td>
-      <td><select class="inline-input" onchange="patchPlateField(${p.id}, ${pl.id}, 'material_id', parseInt(this.value) || null)">${materialOpts}</select></td>
-      <td class="num">${fmt(cost)}</td>
-      <td><button class="btn-icon" title="Delete" onclick="deleteTestPrint(${pl.id}, ${p.id})">
+      <td><input type="text" class="eh-input" value="${esc(tp.description || '')}" maxlength="200"
+        onblur="patchTestPrint(${p.id}, ${tp.id}, 'description', this.value)"></td>
+      <td class="num"><input type="number" class="eh-input num" min="0" step="0.01" value="${est}"
+        onblur="patchTestPrint(${p.id}, ${tp.id}, 'estimated_cost', parseFloat(this.value) || 0)"></td>
+      <td class="num">${fmt(actual)}</td>
+      <td></td>
+      <td></td>
+      <td>${deltaCell}</td>
+      <td><button class="btn-icon" title="Delete" onclick="deleteTestPrintEntry(${p.id}, ${tp.id})">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button></td>
-    </tr>`;
+    </tr>${attachRows}${attachBtn}`;
   }).join('');
 
-  // Design extras rows
+  // ── Design extras rows ───────────────────────────────────────────────
   const deRows = designExtrasItems.map((e, i) => {
     return `<tr data-de-row="${i}">
       <td class="eh-desc"><input type="text" class="eh-input de-input-desc" value="${esc(e.description || '')}" maxlength="200"
@@ -793,12 +864,14 @@ function renderDesignCostSection(p) {
   return `<div class="extras-section" data-design-cost-panel="${p.id}">
     <div class="extras-section-header"><h3>Setup &amp; Design</h3></div>
 
+    ${notesBlock}
+
     <h4 style="font-size:13px;margin:8px 0 4px;color:var(--text-muted)">Design Hours</h4>
     <div data-design-hours-panel="${p.id}">
       ${designHoursItems.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
-        <thead><tr><th>Description</th><th>Hours</th><th>Rate (${settings.currency_symbol || '€'}/h)</th><th>Subtotal</th><th></th></tr></thead>
+        <thead><tr><th>Description</th><th>Hours (billed)</th><th>Rate (${currSym}/h)</th><th>Subtotal</th><th>Actual</th><th>Δ</th><th></th></tr></thead>
         <tbody>${dhRows}</tbody>
-        <tfoot><tr><td colspan="3" style="text-align:right;font-weight:600">Subtotal</td><td class="num" style="font-weight:700">${fmt(dc.designHoursSubtotal || 0)}</td><td></td></tr></tfoot>
+        <tfoot><tr><td colspan="3" style="text-align:right;font-weight:600">Subtotal</td><td class="num" style="font-weight:700">${fmt(dc.designHoursSubtotal || 0)}</td><td colspan="3"></td></tr></tfoot>
       </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No design hours added yet.</p>'}
       <div class="ec-add-row">
         <button class="btn btn-sm btn-primary" onclick="addDesignHourRow(${p.id}, ${safeDesignRate})">+ Add row</button>
@@ -806,22 +879,20 @@ function renderDesignCostSection(p) {
     </div>
 
     <h4 style="font-size:13px;margin:12px 0 4px;color:var(--text-muted)">Test Prints</h4>
-    ${testPrintPlates.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
-      <thead><tr><th>Filename</th><th>Time</th><th>Plastic</th><th>Printer</th><th>Material</th><th>Cost</th><th></th></tr></thead>
+    ${testPrintsList.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
+      <thead><tr><th>Description</th><th>Estimated (${currSym})</th><th>Actual (${currSym})</th><th>Printer</th><th>Material</th><th>Δ</th><th></th></tr></thead>
       <tbody>${tpRows}</tbody>
-      <tfoot><tr><td colspan="5" style="text-align:right;font-weight:600">Subtotal</td><td class="num" style="font-weight:700">${fmt(dc.testPrintsSubtotal || 0)}</td><td></td></tr></tfoot>
-    </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No test prints uploaded yet.</p>'}
+      <tfoot><tr><td style="text-align:right;font-weight:600">Subtotal (estimated)</td><td class="num" style="font-weight:700">${fmt(dc.testPrintsSubtotal || 0)}</td><td colspan="5"></td></tr></tfoot>
+    </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No test prints added yet.</p>'}
     <div class="ec-add-row">
-      <label class="btn btn-sm btn-primary" style="cursor:pointer">
-        + Upload test print
-        <input type="file" accept=".3mf" style="display:none" onchange="uploadTestPrint(${p.id}, this)">
-      </label>
+      <button class="btn btn-sm btn-primary" onclick="addTestPrint(${p.id})">+ Add test print</button>
+      <!-- uploadTestPrint is deprecated — use addTestPrint + attachTestPrint3mf instead -->
     </div>
 
     <h4 style="font-size:13px;margin:12px 0 4px;color:var(--text-muted)">Other Setup &amp; Design Costs</h4>
     <div data-design-extras-panel="${p.id}">
       ${designExtrasItems.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
-        <thead><tr><th>Description</th><th>Amount (${settings.currency_symbol || '€'})</th><th></th></tr></thead>
+        <thead><tr><th>Description</th><th>Amount (${currSym})</th><th></th></tr></thead>
         <tbody>${deRows}</tbody>
         <tfoot><tr><td style="text-align:right;font-weight:600">Subtotal</td><td class="num" style="font-weight:700">${fmt(dc.extrasSubtotal || 0)}</td><td></td></tr></tfoot>
       </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No extra design costs added yet.</p>'}
@@ -848,13 +919,16 @@ async function commitDesignHours(projectId) {
   let order = 0;
   for (const row of rows) {
     const desc = row.querySelector('.dh-input-desc')?.value || '';
-    const hoursStr = row.querySelector('.eh-hours .eh-input')?.value || '0';
+    const hoursStr = row.querySelector('.dh-input-hours')?.value || '0';
     const rateStr  = row.querySelector('.eh-rate .eh-input')?.value || '0';
     const parsedHours = parseHoursMinutes(hoursStr);
+    const actualStr = row.querySelector('.dh-input-actual')?.value?.trim() || '';
+    const parsedActual = actualStr === '' ? null : parseHoursMinutes(actualStr);
     items.push({
       description: desc,
       hours: Number.isFinite(parsedHours) ? parsedHours : 0,
       hourly_rate: parseFloat(rateStr) || 0,
+      actual_hours: (parsedActual !== null && Number.isFinite(parsedActual)) ? parsedActual : null,
       sort_order: order++,
     });
   }
@@ -869,12 +943,14 @@ async function addDesignHourRow(projectId, defaultRate) {
     description: e.description,
     hours: Number(e.hours) || 0,
     hourly_rate: Number(e.hourly_rate) || 0,
+    actual_hours: e.actual_hours ?? null,
     sort_order: e.sort_order ?? i,
   }));
   existing.push({
     description: 'Design work',
     hours: 1,
     hourly_rate: Number.isFinite(defaultRate) ? defaultRate : 65,
+    actual_hours: null,
     sort_order: existing.length,
   });
   await PUT(`/api/projects/${projectId}/design-hours`, existing);
@@ -893,6 +969,7 @@ async function removeDesignHourRow(projectId, idx) {
     description: e.description,
     hours: Number(e.hours) || 0,
     hourly_rate: Number(e.hourly_rate) || 0,
+    actual_hours: e.actual_hours ?? null,
     sort_order: e.sort_order ?? i,
   }));
   if (idx < 0 || idx >= items.length) return;
@@ -978,6 +1055,58 @@ async function uploadTestPrint(projectId, input) {
 async function deleteTestPrint(plateId, projectId) {
   // Delete the plate (cascades to project_files via ON DELETE CASCADE)
   const confirmed = await showConfirm({ title: 'Delete test print', message: 'Remove this test print?' });
+  if (!confirmed) return;
+  await DEL(`/api/projects/${projectId}/plates/${plateId}`);
+  await reloadSingleProject(projectId);
+}
+
+/* ================================================================== */
+/*  Test prints CRUD (project_test_prints)                             */
+/* ================================================================== */
+async function addTestPrint(projectId) {
+  await POST(`/api/projects/${projectId}/test-prints`, { description: 'Test print', estimated_cost: 0 });
+  await reloadSingleProject(projectId);
+}
+
+async function patchTestPrint(projectId, tpId, field, value) {
+  await PATCH(`/api/projects/${projectId}/test-prints/${tpId}`, { [field]: value });
+  await reloadSingleProject(projectId);
+}
+
+async function deleteTestPrintEntry(projectId, tpId) {
+  const confirmed = await showConfirm({ title: 'Delete test print', message: 'Remove this test print and all attached .3mf files?' });
+  if (!confirmed) return;
+  await DEL(`/api/projects/${projectId}/test-prints/${tpId}`);
+  await reloadSingleProject(projectId);
+}
+
+async function attachTestPrint3mf(projectId, tpId, input) {
+  const file = input?.files?.[0];
+  if (!file) return;
+  if (input.value) input.value = '';
+
+  if (!file.name.toLowerCase().endsWith('.3mf')) {
+    await showAlert({ title: 'Invalid file', message: 'Only .3mf files are allowed.' });
+    return;
+  }
+
+  const buf = await file.arrayBuffer();
+  const res = await fetch(`/api/projects/${projectId}/test-prints/${tpId}/attach`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name },
+    body: buf,
+  });
+  if (res.status === 401) { window.location.replace('/login'); return; }
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    await showAlert({ title: 'Upload failed', message: e.error || 'Upload failed' });
+    return;
+  }
+  await reloadSingleProject(projectId);
+}
+
+async function deleteTestPrintAttachment(projectId, plateId) {
+  const confirmed = await showConfirm({ title: 'Remove .3mf', message: 'Remove this 3MF attachment from the test print?' });
   if (!confirmed) return;
   await DEL(`/api/projects/${projectId}/plates/${plateId}`);
   await reloadSingleProject(projectId);
@@ -1277,6 +1406,18 @@ async function saveProjectNotes(projectId, value) {
     actual_sales_price: p.actual_sales_price,
   });
   p.notes = value || null; // update local state without full reload
+}
+
+async function saveDesignNotes(projectId, value) {
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return;
+  if ((p.design_notes || '') === value) return; // no change
+  await PUT(`/api/projects/${projectId}`, {
+    name: p.name, customer_name: p.customer_name,
+    items_per_set: p.items_per_set, tags: p.tags || '', notes: p.notes ?? null,
+    actual_sales_price: p.actual_sales_price, design_notes: value || null,
+  });
+  p.design_notes = value || null; // update local state without full reload
 }
 
 /* ================================================================== */

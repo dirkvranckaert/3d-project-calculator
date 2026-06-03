@@ -602,9 +602,9 @@ describe('calculateDesignCosts', () => {
         { hours: 2, hourly_rate: 65 },
         { hours: 1, hourly_rate: 50 },
       ],
-      testPrintPlateBreakdowns: [
-        { totalPlateCost: 3.50 },
-        { totalPlateCost: 2.00 },
+      testPrints: [
+        { estimated_cost: 3.50, attachmentBreakdowns: [{ totalPlateCost: 3.50 }] },
+        { estimated_cost: 2.00, attachmentBreakdowns: [{ totalPlateCost: 2.00 }] },
       ],
       designExtras: [
         { amount: 10 },
@@ -613,8 +613,14 @@ describe('calculateDesignCosts', () => {
     });
     // designHours: 2*65 + 1*50 = 180
     expect(result.designHoursSubtotal).toBeCloseTo(180, 4);
-    // testPrints: 3.50 + 2.00 = 5.50
+    // testPrints subtotal = sum of estimated_cost: 3.50 + 2.00 = 5.50
     expect(result.testPrintsSubtotal).toBeCloseTo(5.50, 4);
+    // testPrintDetails: two entries
+    expect(result.testPrintDetails).toHaveLength(2);
+    expect(result.testPrintDetails[0].estimated).toBeCloseTo(3.50, 4);
+    expect(result.testPrintDetails[0].actual).toBeCloseTo(3.50, 4);
+    expect(result.testPrintDetails[1].estimated).toBeCloseTo(2.00, 4);
+    expect(result.testPrintDetails[1].actual).toBeCloseTo(2.00, 4);
     // extras: 10 + 5.50 = 15.50
     expect(result.extrasSubtotal).toBeCloseTo(15.50, 4);
     // total: 180 + 5.50 + 15.50 = 201
@@ -625,6 +631,7 @@ describe('calculateDesignCosts', () => {
     const result = calc.calculateDesignCosts({});
     expect(result.designHoursSubtotal).toBe(0);
     expect(result.testPrintsSubtotal).toBe(0);
+    expect(result.testPrintDetails).toHaveLength(0);
     expect(result.extrasSubtotal).toBe(0);
     expect(result.designTotal).toBe(0);
   });
@@ -632,13 +639,46 @@ describe('calculateDesignCosts', () => {
   test('non-finite inputs are skipped gracefully', () => {
     const result = calc.calculateDesignCosts({
       designHours: [{ hours: 'bad', hourly_rate: 65 }, { hours: 1, hourly_rate: 65 }],
-      testPrintPlateBreakdowns: [{ totalPlateCost: NaN }, { totalPlateCost: 5 }],
+      testPrints: [
+        { estimated_cost: NaN, attachmentBreakdowns: [] },
+        { estimated_cost: 5, attachmentBreakdowns: [] },
+      ],
       designExtras: [{ amount: null }, { amount: 10 }],
     });
     // only the valid rows contribute
     expect(result.designHoursSubtotal).toBeCloseTo(65, 4);
+    // NaN → 0 for first, 5 for second → subtotal 5
     expect(result.testPrintsSubtotal).toBeCloseTo(5, 4);
     expect(result.extrasSubtotal).toBeCloseTo(10, 4);
+  });
+
+  test('testPrintsSubtotal uses estimated_cost, not computed plate cost', () => {
+    // est=10 with attachment actual=15 → subtotal 10, detail.actual=15
+    const r1 = calc.calculateDesignCosts({
+      testPrints: [{ estimated_cost: 10, attachmentBreakdowns: [{ totalPlateCost: 15 }] }],
+    });
+    expect(r1.testPrintsSubtotal).toBeCloseTo(10, 4);
+    expect(r1.testPrintDetails[0].estimated).toBeCloseTo(10, 4);
+    expect(r1.testPrintDetails[0].actual).toBeCloseTo(15, 4);
+    expect(r1.testPrintDetails[0].attachmentCount).toBe(1);
+
+    // est=5 no attachments → actual=0; subtotal from two entries = 15
+    const r2 = calc.calculateDesignCosts({
+      testPrints: [
+        { estimated_cost: 10, attachmentBreakdowns: [{ totalPlateCost: 15 }] },
+        { estimated_cost: 5, attachmentBreakdowns: [] },
+      ],
+    });
+    expect(r2.testPrintsSubtotal).toBeCloseTo(15, 4);
+    expect(r2.testPrintDetails[1].estimated).toBeCloseTo(5, 4);
+    expect(r2.testPrintDetails[1].actual).toBeCloseTo(0, 4);
+    expect(r2.testPrintDetails[1].attachmentCount).toBe(0);
+  });
+
+  test('empty testPrints → subtotal 0, details length 0', () => {
+    const result = calc.calculateDesignCosts({ testPrints: [] });
+    expect(result.testPrintsSubtotal).toBe(0);
+    expect(result.testPrintDetails).toHaveLength(0);
   });
 });
 
@@ -696,13 +736,14 @@ describe('calculateProject — design cost module', () => {
     expect(result.designCosts.extrasSubtotal).toBeCloseTo(10, 4);
   });
 
-  test('is_test_print:1 plates excluded from perItemCosts but their cost in designCosts.testPrintsSubtotal', () => {
+  test('is_test_print:1 plates excluded from perItemCosts; testPrintsSubtotal comes from explicit testPrints opts', () => {
     const result = calc.calculateProject({
       plates: [plates[0], testPrintPlate],
       extras: [],
       settings: defaultSettings,
       itemsPerSet: 1,
       isCustom: true,
+      testPrints: [{ estimated_cost: 5.00, attachmentBreakdowns: [] }],
     });
 
     // Only the non-test-print plate should contribute to per-item costs
@@ -715,8 +756,8 @@ describe('calculateProject — design cost module', () => {
     });
     expect(result.perItemCosts.totalPerItem).toBeCloseTo(resultNoTestPrint.perItemCosts.totalPerItem, 4);
 
-    // Test-print plate cost should be in designCosts.testPrintsSubtotal
-    expect(result.designCosts.testPrintsSubtotal).toBeGreaterThan(0);
+    // testPrintsSubtotal = sum estimated_cost from explicit testPrints
+    expect(result.designCosts.testPrintsSubtotal).toBeCloseTo(5.00, 4);
   });
 
   test('designTotal is NOT added to productionCost or totalExclVat', () => {
@@ -774,36 +815,26 @@ describe('calculateProject — design cost module', () => {
     expect(result.plateBreakdowns).toHaveLength(3);
   });
 
-  test('test-print plate WITH printer+material → testPrintsSubtotal > 0', () => {
-    // testPrintPlate already has printer_purchase_price, printer_earn_back_months,
-    // printer_kwh_per_hour, and material_price_per_kg set to non-zero values.
+  test('testPrints with non-zero estimated_cost → testPrintsSubtotal > 0', () => {
     const result = calc.calculateProject({
       plates: [plates[0], testPrintPlate],
       extras: [],
       settings: defaultSettings,
       itemsPerSet: 1,
       isCustom: true,
+      testPrints: [{ estimated_cost: 7.50, attachmentBreakdowns: [] }],
     });
-    expect(result.designCosts.testPrintsSubtotal).toBeGreaterThan(0);
+    expect(result.designCosts.testPrintsSubtotal).toBeCloseTo(7.50, 4);
   });
 
-  test('test-print plate with null printer/material → testPrintsSubtotal === 0', () => {
-    const nullPrinterMaterialPlate = {
-      id: 99, name: 'NullTest',
-      print_time_minutes: 60, plastic_grams: 20,
-      items_per_plate: 1, risk_multiplier: 1,
-      pre_processing_minutes: 0, post_processing_minutes: 0,
-      printer_purchase_price: 0, printer_earn_back_months: 24, printer_kwh_per_hour: 0,
-      material_price_per_kg: 0,
-      enabled: 1,
-      is_test_print: 1,
-    };
+  test('testPrints not provided → testPrintsSubtotal === 0', () => {
     const result = calc.calculateProject({
-      plates: [plates[0], nullPrinterMaterialPlate],
+      plates: [plates[0], testPrintPlate],
       extras: [],
       settings: defaultSettings,
       itemsPerSet: 1,
       isCustom: true,
+      // no testPrints opt
     });
     expect(result.designCosts.testPrintsSubtotal).toBe(0);
   });

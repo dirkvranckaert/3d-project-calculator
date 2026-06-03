@@ -156,6 +156,16 @@ function bootstrap(db) {
       sort_order  INTEGER NOT NULL DEFAULT 0,
       created_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    /* ---- Test prints — manual entry with estimate (custom projects) ---- */
+    CREATE TABLE IF NOT EXISTS project_test_prints (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id     INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      description    TEXT NOT NULL,
+      estimated_cost REAL NOT NULL DEFAULT 0,
+      sort_order     INTEGER NOT NULL DEFAULT 0,
+      created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   migrate(db);
@@ -184,6 +194,10 @@ function migrate(db) {
   addCol('projects', 'is_custom', 'INTEGER NOT NULL DEFAULT 0');
   addCol('project_extra_hours', 'is_design_cost', 'INTEGER NOT NULL DEFAULT 0');
   addCol('project_plates', 'is_test_print', 'INTEGER NOT NULL DEFAULT 0');
+  // Design cost enhancements (2026-06-03)
+  addCol('projects', 'design_notes', 'TEXT');
+  addCol('project_extra_hours', 'actual_hours', 'TEXT');
+  addCol('project_plates', 'test_print_id', 'INTEGER');
 }
 
 /* ------------------------------------------------------------------ */

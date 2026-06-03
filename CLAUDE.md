@@ -132,8 +132,13 @@ Deployed via the shared infrastructure repo: `../infrastructure/apps/project-cal
 - Managed via `PUT /api/projects/:id/design-extras`.
 
 ### Calc engine
-- `calculateDesignCosts({ designHours, testPrintPlateBreakdowns, designExtras })` — pure function, exported.
-- `calculateProject` returns `designCosts: { designHoursSubtotal, testPrintsSubtotal, extrasSubtotal, designTotal }` when `isCustom=true`, else `null`.
+- `calculateDesignCosts({ designHours, testPrints, designExtras })` — pure function, exported.
+  - `testPrints`: `Array<{estimated_cost, attachmentBreakdowns: Array<{totalPlateCost}>}>`
+  - Returns `{ designHoursSubtotal, testPrintsSubtotal, testPrintDetails, extrasSubtotal, designTotal }`
+  - `testPrintsSubtotal = SUM(estimated_cost)` — NOT the computed plate costs.
+  - `testPrintDetails`: per-entry `{ estimated, actual, attachmentCount }` for variance display.
+- `calculateProject` accepts `testPrints = []` in opts; passes them to `calculateDesignCosts`.
+- `calculateProject` returns `designCosts: { designHoursSubtotal, testPrintsSubtotal, testPrintDetails, extrasSubtotal, designTotal }` when `isCustom=true`, else `null`.
 - `designTotal` is **never** added to `productionCost`, `totalExclVat`, or `suggestedPrice`.
 
 ## What NOT to do
@@ -148,6 +153,43 @@ Deployed via the shared infrastructure repo: `../infrastructure/apps/project-cal
 ## Shared infrastructure
 
 Deploy scripts, nginx configs, and runbooks live in `../infrastructure/`. That repo's `apps/project-calculator/deploy.sh` is a thin wrapper around `apps/_template/deploy.sh`.
+
+## Design cost module enhancements (2026-06-03)
+
+### projects.design_notes
+- `TEXT` column (nullable). Separate from `projects.notes` (Print tab).
+- Saved on blur via `saveDesignNotes()` in the Setup & Design tab.
+- Included in `PUT /api/projects/:id`, `POST /api/projects`, and `POST /:id/duplicate`.
+
+### project_extra_hours.actual_hours
+- `TEXT` column (nullable). Stores actual hours worked (decimal, same unit as `hours`).
+- Informational only — not used in cost calculation. `designHoursSubtotal` uses billed `hours * hourly_rate`.
+- UI: editable H:MM input in the Design Hours table. Δ column shows `billed - actual` (green=billed>actual, red=billed<actual, muted=empty).
+- `commitDesignHours`, `addDesignHourRow`, and `removeDesignHourRow` all preserve `actual_hours`.
+
+### project_test_prints table
+- `(id, project_id, description, estimated_cost, sort_order, created_at)` — one row per manual test-print entry.
+- `project_plates.test_print_id INTEGER` — nullable FK linking an uploaded plate to its parent test print.
+- Orphan handling: `is_test_print=1` plates with `test_print_id IS NULL` are synthesised on read as virtual entries (`isOrphan: true, estimated_cost = computed`). Rendered read-only; deleted via existing plate delete.
+- `buildTestPrints(db, projectId, settings)` — server helper; builds `{ testPrints, testPrintPlates }` combining real rows + orphans; called by `enrichProject` and `enrichProjectLite`.
+
+### testPrintsSubtotal = SUM(estimated_cost)
+- The test-prints subtotal is the sum of `project_test_prints.estimated_cost`, NOT the sum of attached plate computed costs.
+- `attachmentBreakdowns` expose the actual computed cost for each attached .3mf plate (for Δ indicator only).
+
+### New routes (test prints)
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/projects/:id/test-prints` | Create test print entry |
+| `PATCH` | `/api/projects/:id/test-prints/:tpId` | Update description/estimated_cost |
+| `DELETE` | `/api/projects/:id/test-prints/:tpId` | Delete entry + attached plates |
+| `POST` | `/api/projects/:id/test-prints/:tpId/attach` | Upload .3mf attachment (octet-stream) |
+
+Old `POST /:id/test-print` still works for back-compat (creates orphan plate).
+
+### calculateDesignCosts signature change
+- Old: `testPrintPlateBreakdowns: Array<{totalPlateCost}>` — computed sum fed subtotal.
+- New: `testPrints: Array<{estimated_cost, attachmentBreakdowns}>` — `estimated_cost` feeds subtotal; `attachmentBreakdowns` populate `testPrintDetails[].actual`.
 
 ## Architecture guide
 

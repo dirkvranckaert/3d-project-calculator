@@ -300,12 +300,12 @@ function marginIndicator(marginPct, greenThreshold = 30, orangeThreshold = 5) {
  *
  * @param {object} opts
  *   - designHours: Array<{hours, hourly_rate}>  (is_design_cost=1 rows)
- *   - testPrintPlateBreakdowns: Array<{totalPlateCost}> (is_test_print=1 plates)
+ *   - testPrints: Array<{estimated_cost, attachmentBreakdowns: Array<{totalPlateCost}>}>
  *   - designExtras: Array<{amount}>
- * @returns {{ designHoursSubtotal, testPrintsSubtotal, extrasSubtotal, designTotal }}
+ * @returns {{ designHoursSubtotal, testPrintsSubtotal, testPrintDetails, extrasSubtotal, designTotal }}
  */
 function calculateDesignCosts(opts) {
-  const { designHours = [], testPrintPlateBreakdowns = [], designExtras = [] } = opts;
+  const { designHours = [], testPrints = [], designExtras = [] } = opts;
 
   let designHoursSubtotal = 0;
   for (const h of designHours) {
@@ -315,7 +315,17 @@ function calculateDesignCosts(opts) {
   }
 
   let testPrintsSubtotal = 0;
-  for (const p of testPrintPlateBreakdowns) testPrintsSubtotal += Number(p.totalPlateCost) || 0;
+  const testPrintDetails = [];
+  for (const tp of testPrints) {
+    const est = Number(tp.estimated_cost) || 0;
+    testPrintsSubtotal += est;
+    const actual = (tp.attachmentBreakdowns || []).reduce((s, b) => s + (Number(b.totalPlateCost) || 0), 0);
+    testPrintDetails.push({
+      estimated: est,
+      actual,
+      attachmentCount: (tp.attachmentBreakdowns || []).length,
+    });
+  }
 
   let extrasSubtotal = 0;
   for (const e of designExtras) extrasSubtotal += Number(e.amount) || 0;
@@ -323,6 +333,7 @@ function calculateDesignCosts(opts) {
   return {
     designHoursSubtotal,
     testPrintsSubtotal,
+    testPrintDetails,
     extrasSubtotal,
     designTotal: designHoursSubtotal + testPrintsSubtotal + extrasSubtotal,
   };
@@ -341,6 +352,7 @@ function calculateDesignCosts(opts) {
  *   - settings:  All settings object
  *   - itemsPerSet: number
  *   - actualSalesPrice: number | null
+ *   - testPrints: Array<{estimated_cost, attachmentBreakdowns}> (custom projects)
  * @returns {object} full breakdown
  */
 function calculateProject(opts) {
@@ -392,9 +404,6 @@ function calculateProject(opts) {
     };
   });
 
-  // Test-print plates are excluded from production calc but kept for design costs
-  const testPrintBreakdowns = plateBreakdowns.filter(p => p.isTestPrint);
-
   // Per-item costs (only enabled, non-test-print plates)
   const enabledPlates = plateBreakdowns.filter(p => p.enabled && !p.isTestPrint);
   const perItemCosts = calculatePerItemCosts(enabledPlates);
@@ -410,7 +419,7 @@ function calculateProject(opts) {
 
   // Design costs (only for custom projects)
   const designCosts = isCustom
-    ? calculateDesignCosts({ designHours, testPrintPlateBreakdowns: testPrintBreakdowns, designExtras })
+    ? calculateDesignCosts({ designHours, testPrints: opts.testPrints || [], designExtras })
     : null;
 
   // Final pricing
