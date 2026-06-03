@@ -93,7 +93,7 @@ npm test
 Deployed via the shared infrastructure repo: `../infrastructure/apps/project-calculator/deploy.sh`
 
 - **Production port:** 3459
-- **Domain:** `calculator.app3.be`
+- **Domain:** `3dprojects.app3.be` (NOT `calculator.app3.be` — that subdomain 404s)
 - **PM2 name:** `project-calculator`
 - **Server:** `app3-node-01` (142.93.105.91)
 
