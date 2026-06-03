@@ -786,9 +786,9 @@ function renderDesignCostSection(p) {
     if (!hasAttachments) {
       deltaCell = `<span style="color:var(--text-muted)">—</span>`;
     } else if (delta < 0) {
-      deltaCell = `<span style="color:var(--success)">-€${fmt(Math.abs(delta))}</span>`;
+      deltaCell = `<span style="color:var(--success)">-${fmt(Math.abs(delta))}</span>`;
     } else if (delta > 0) {
-      deltaCell = `<span style="color:var(--danger)">+€${fmt(delta)}</span>`;
+      deltaCell = `<span style="color:var(--danger)">+${fmt(delta)}</span>`;
     } else {
       deltaCell = `<span>€0.00</span>`;
     }
