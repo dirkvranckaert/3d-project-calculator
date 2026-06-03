@@ -1145,81 +1145,98 @@ describe('calculateVerification', () => {
 });
 
 /* ================================================================== */
-/*  Test-prints path parity with calculateProject                      */
+/*  Test-prints path parity with calculateProject (cost-only, no margin) */
 /* ================================================================== */
 describe('test-prints cost parity with calculateProject', () => {
-  // A single plate that would appear as a test-print plate
-  const testPrintPlate = {
-    print_time_minutes: 237,
-    plastic_grams: 76.35,
+  // Helper that replicates the fixed computePlateCost from buildTestPrints.
+  // settings may be raw (string values from DB); same normalization as calculateProject.
+  function computePlateCost(plate, settings) {
+    const printer = {
+      purchase_price: plate.printer_purchase_price || 0,
+      earn_back_months: plate.printer_earn_back_months || 24,
+      kwh_per_hour: plate.printer_kwh_per_hour || 0,
+    };
+    const material = { price_per_kg: plate.material_price_per_kg || 0 };
+    const effectiveSettings = {
+      ...settings,
+      hourly_rate: Number(settings.hourly_rate) || 40,
+      electricity_price_kwh: Number(settings.electricity_price_kwh) || 0.40,
+    };
+    return calc.calculatePlateCosts(plate, printer, material, effectiveSettings).totalPlateCost;
+  }
+
+  const basePlate = {
+    print_time_minutes: 211,
+    plastic_grams: 73.53,
     items_per_plate: 1,
     risk_multiplier: 1,
     pre_processing_minutes: 0,
-    post_processing_minutes: 5,
-    material_waste_grams: 1,
-    printer_purchase_price: 812.43,
+    post_processing_minutes: 2,
+    material_waste_grams: 0,
+    printer_purchase_price: 1889.92,
     printer_earn_back_months: 24,
-    printer_kwh_per_hour: 0.11,
-    material_price_per_kg: 17.38,
+    printer_kwh_per_hour: 0.5,
+    material_price_per_kg: 18.99,
     is_test_print: 1,
     enabled: true,
   };
 
-  const settings = defaultSettings;
+  // Test 1: hourly_rate='0' (string, as it comes from the DB) — must normalize to 40
+  // and agree with calculateProject's plateBreakdowns[].totalPlateCost.
+  test('parity with calculateProject plateBreakdowns when hourly_rate is string "0" (normalizes to 40)', () => {
+    const settingsZero = { ...defaultSettings, hourly_rate: '0', electricity_price_kwh: '0.40' };
 
-  test('computePlateCost (new: costs+profit) matches calculateProject for a single test-print plate', () => {
-    // Replicate the new computePlateCost logic from buildTestPrints after the fix
-    const printer = {
-      purchase_price: testPrintPlate.printer_purchase_price || 0,
-      earn_back_months: testPrintPlate.printer_earn_back_months || 24,
-      kwh_per_hour: testPrintPlate.printer_kwh_per_hour || 0,
-    };
-    const material = { price_per_kg: testPrintPlate.material_price_per_kg || 0 };
+    const testPrintTotal = computePlateCost(basePlate, settingsZero);
 
-    const costs = calc.calculatePlateCosts(testPrintPlate, printer, material, settings);
-    const profits = calc.applyProfitMargins(costs, settings);
-    const testPrintTotal = costs.totalPlateCost + profits.totalProfit;
-
-    // calculateProject treats test-print plates as non-production (isTestPrint=true),
-    // so they don't contribute to perItemCosts/profits. We compare only the raw
-    // plate-level price-with-margin, which must equal what calculateProject computes
-    // for an equivalent enabled non-test plate (same inputs, same path).
     const projectResult = calc.calculateProject({
-      plates: [{ ...testPrintPlate, is_test_print: 0 }],
-      settings,
+      plates: [{ ...basePlate, is_test_print: 0 }],
+      settings: settingsZero,
       itemsPerSet: 1,
     });
+    // calculateProject's normalized 's' object uses Number('0') || 40 = 40,
+    // so plateBreakdowns[0].totalPlateCost is computed at hourly_rate=40.
+    const projectPlateCost = projectResult.plateBreakdowns[0].totalPlateCost;
 
-    // The project's per-item production cost (before extras/design) + profit
-    // must equal testPrintTotal (both start from the same plate costs + margins).
-    const projectPlateCostWithMargin =
-      projectResult.perItemCosts.totalPerItem + projectResult.profits.totalProfit;
-
-    expect(testPrintTotal).toBeCloseTo(projectPlateCostWithMargin, 6);
+    expect(testPrintTotal).toBeCloseTo(projectPlateCost, 6);
+    // Repro target: €3.82
+    expect(testPrintTotal).toBeCloseTo(3.82, 2);
   });
 
-  test('old bare-cost logic (costs only, no margin) does NOT match calculateProject', () => {
-    // This test documents that the old path was wrong — it would fail parity.
-    const printer = {
-      purchase_price: testPrintPlate.printer_purchase_price || 0,
-      earn_back_months: testPrintPlate.printer_earn_back_months || 24,
-      kwh_per_hour: testPrintPlate.printer_kwh_per_hour || 0,
-    };
-    const material = { price_per_kg: testPrintPlate.material_price_per_kg || 0 };
+  // Test 2: non-zero hourly_rate — parity must hold there too.
+  test('parity with calculateProject plateBreakdowns when hourly_rate is non-zero', () => {
+    const settingsNonZero = { ...defaultSettings, hourly_rate: 50, electricity_price_kwh: 0.40 };
 
-    // Old logic: only totalPlateCost, no margin
-    const oldTotal = calc.calculatePlateCosts(testPrintPlate, printer, material, settings).totalPlateCost;
+    const testPrintTotal = computePlateCost(basePlate, settingsNonZero);
 
     const projectResult = calc.calculateProject({
-      plates: [{ ...testPrintPlate, is_test_print: 0 }],
+      plates: [{ ...basePlate, is_test_print: 0 }],
+      settings: settingsNonZero,
+      itemsPerSet: 1,
+    });
+    const projectPlateCost = projectResult.plateBreakdowns[0].totalPlateCost;
+
+    expect(testPrintTotal).toBeCloseTo(projectPlateCost, 6);
+  });
+
+  // Test 3: test-prints value must NOT include margin — it is strictly less than
+  // calculateProject's project-level price-with-margin for the same single plate.
+  test('test-prints totalPlateCost is cost-only, strictly less than project price-with-margin', () => {
+    const settings = defaultSettings; // has non-zero profit margins
+
+    const testPrintTotal = computePlateCost(basePlate, settings);
+
+    const projectResult = calc.calculateProject({
+      plates: [{ ...basePlate, is_test_print: 0 }],
       settings,
       itemsPerSet: 1,
     });
-    const projectPlateCostWithMargin =
+    // Project-level price with margin = perItemCosts.totalPerItem + profits.totalProfit
+    const projectPriceWithMargin =
       projectResult.perItemCosts.totalPerItem + projectResult.profits.totalProfit;
 
-    // The old bare cost is strictly less than the project price-with-margin
-    // (because margins are > 0 in defaultSettings).
-    expect(oldTotal).toBeLessThan(projectPlateCostWithMargin);
+    // cost-only < cost+margin (margins are non-zero in defaultSettings)
+    expect(testPrintTotal).toBeLessThan(projectPriceWithMargin);
+    // And the plate-level cost agrees with calculateProject's own plate breakdown (cost-only)
+    expect(testPrintTotal).toBeCloseTo(projectResult.plateBreakdowns[0].totalPlateCost, 6);
   });
 });
