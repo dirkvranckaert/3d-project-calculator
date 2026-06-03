@@ -508,9 +508,6 @@ function calculateVerification(opts) {
     settings = {},
   } = opts;
 
-  const greenThreshold  = Number(settings.margin_green_pct)  || 30;
-  const orangeThreshold = Number(settings.margin_orange_pct) || 5;
-
   // Per-plate machine costs — each plate carries embedded printer/material
   const plateCosts = plates.map(plate => {
     const printer = {
@@ -521,11 +518,11 @@ function calculateVerification(opts) {
     const material = { price_per_kg: plate.material_price_per_kg || 0 };
     // risk_multiplier default 1, material_waste_grams default 0 per brief ambiguity defaults
     const plateFull = {
-      risk_multiplier:         plate.risk_multiplier         || 1,
-      material_waste_grams:    plate.material_waste_grams    || 0,
-      pre_processing_minutes:  0,
-      post_processing_minutes: 0,
+      risk_multiplier:         1,
+      material_waste_grams:    0,
       ...plate,
+      pre_processing_minutes:  0,   // processing handled at batch level
+      post_processing_minutes: 0,
     };
     const s = { hourly_rate: 0, electricity_price_kwh: Number(settings.electricity_price_kwh) || 0.40 };
     const pc = calculatePlateCosts(plateFull, printer, material, s);

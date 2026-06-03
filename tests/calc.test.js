@@ -1126,4 +1126,20 @@ describe('calculateVerification', () => {
     const expected = result.totalMachineCost + result.timeCost + result.suppliesCost;
     expect(result.totalBatchCost).toBeCloseTo(expected, 6);
   });
+
+  test('vsProductionCost.delta === null when projectProductionCost = 0 (divide-by-zero guard)', () => {
+    const result = calc.calculateVerification({
+      plates: [singlePlate],
+      preProcessingMinutes: 0,
+      postProcessingMinutes: 0,
+      hourlyRate: 40,
+      supplies: [],
+      itemsPerSet: 1,
+      projectProductionCost: 0,
+      projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+
+    expect(result.vsProductionCost.delta).toBeNull();
+  });
 });
