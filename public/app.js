@@ -26,6 +26,7 @@ let verifySupplies = [];     // [{ description, price_excl_vat, quantity }]
 let verifyPreMinutes = 0;
 let verifyPostMinutes = 0;
 let verifyHourlyRate = 40;
+let _verifyRecomputeTimer = null;
 
 /* ================================================================== */
 /*  API helpers                                                        */
@@ -3245,14 +3246,14 @@ function renderVerifyModal() {
     ).join('');
     platesRows += `<tr>
       <td style="font-size:12px;word-break:break-all">${esc(plate.filename)}</td>
-      <td><select onchange="verifySetPlateField(${idx},'printerId',+this.value)">
+      <td><select onchange="verifySetPlateField(${idx},'printerId',+this.value);verifyScheduleRecompute()">
         <option value="">-- printer --</option>${printerOptions}
       </select></td>
-      <td><select onchange="verifySetPlateField(${idx},'materialId',+this.value)">
+      <td><select onchange="verifySetPlateField(${idx},'materialId',+this.value);verifyScheduleRecompute()">
         <option value="">-- material --</option>${materialOptions}
       </select></td>
       <td><input type="number" min="1" value="${plate.itemsPerPlate || 1}" style="width:60px"
-        onchange="verifySetPlateField(${idx},'itemsPerPlate',+this.value||1)"></td>
+        onchange="verifySetPlateField(${idx},'itemsPerPlate',+this.value||1);verifyScheduleRecompute()"></td>
       <td><button class="btn btn-icon btn-sm" onclick="verifyRemovePlate(${idx})" title="Remove">&times;</button></td>
     </tr>`;
   });
@@ -3262,11 +3263,11 @@ function renderVerifyModal() {
   verifySupplies.forEach((s, idx) => {
     suppliesRows += `<tr>
       <td><input type="text" value="${esc(s.description)}" placeholder="Description"
-        onchange="verifySetSupplyField(${idx},'description',this.value)"></td>
+        onchange="verifySetSupplyField(${idx},'description',this.value);verifyScheduleRecompute()"></td>
       <td><input type="number" min="0" step="0.01" value="${s.price_excl_vat}" style="width:80px"
-        onchange="verifySetSupplyField(${idx},'price_excl_vat',+this.value||0)"></td>
+        onchange="verifySetSupplyField(${idx},'price_excl_vat',+this.value||0);verifyScheduleRecompute()"></td>
       <td><input type="number" min="1" value="${s.quantity}" style="width:60px"
-        onchange="verifySetSupplyField(${idx},'quantity',+this.value||1)"></td>
+        onchange="verifySetSupplyField(${idx},'quantity',+this.value||1);verifyScheduleRecompute()"></td>
       <td><button class="btn btn-icon btn-sm" onclick="verifyRemoveSupply(${idx})" title="Remove">&times;</button></td>
     </tr>`;
   });
@@ -3300,12 +3301,12 @@ function renderVerifyModal() {
       <div class="form-group">
         <label>Pre-processing time (minutes total)</label>
         <input type="number" min="0" value="${verifyPreMinutes}" class="eh-input"
-          onchange="verifyPreMinutes=+this.value||0">
+          onchange="verifyPreMinutes=+this.value||0;verifyScheduleRecompute()">
       </div>
       <div class="form-group">
         <label>Post-processing time (minutes total)</label>
         <input type="number" min="0" value="${verifyPostMinutes}" class="eh-input"
-          onchange="verifyPostMinutes=+this.value||0">
+          onchange="verifyPostMinutes=+this.value||0;verifyScheduleRecompute()">
       </div>
     </div>
 
@@ -3313,7 +3314,7 @@ function renderVerifyModal() {
     <div class="form-group" style="max-width:180px;margin-bottom:12px">
       <label>€/h (time cost only)</label>
       <input type="number" min="0" step="0.01" value="${verifyHourlyRate}" class="eh-input"
-        onchange="verifyHourlyRate=+this.value||0">
+        onchange="verifyHourlyRate=+this.value||0;verifyScheduleRecompute()">
     </div>
 
     <h4 style="margin:0 0 6px">Supplies &amp; Packaging</h4>
@@ -3323,12 +3324,19 @@ function renderVerifyModal() {
       </tr></thead>
       <tbody id="verify-supplies-body">${suppliesRows}</tbody>
     </table>
-    <div style="margin-bottom:16px">
+    <div style="margin-bottom:16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-sm btn-primary" onclick="verifyAddSupply()">+ Add line</button>
+      ${(extraCostItems && extraCostItems.length > 0) ? `
+      <select id="verify-catalog-select" class="ec-add-select">
+        <option value="">Add supply from catalog...</option>
+        ${extraCostItems.map(eci => `<option value="${eci.id}">${esc(eci.name)} (${fmt(eci.price_excl_vat)})</option>`).join('')}
+      </select>
+      <button class="btn btn-sm btn-primary" onclick="verifyAddFromCatalog()">Add</button>
+      ` : ''}
     </div>
 
-    <div id="verify-result" style="display:none;border-top:1px solid var(--border);padding-top:12px">
-      <!-- Result rendered by runVerification() -->
+    <div id="verify-result" style="border-top:1px solid var(--border);padding-top:12px;margin-top:8px">
+      <p style="color:var(--text-muted);font-size:13px">Add at least one .3mf file to see results.</p>
     </div>
   `;
 }
@@ -3340,11 +3348,28 @@ function verifySetPlateField(idx, field, value) {
 function verifyRemovePlate(idx) {
   verifyPlates.splice(idx, 1);
   renderVerifyModal();
+  verifyScheduleRecompute();
 }
 
 function verifyAddSupply() {
   verifySupplies.push({ description: '', price_excl_vat: 0, quantity: 1 });
   renderVerifyModal();
+  verifyScheduleRecompute();
+}
+
+function verifyAddFromCatalog() {
+  const sel = document.getElementById('verify-catalog-select');
+  const ecId = parseInt(sel?.value);
+  if (!ecId) return;
+  const item = (extraCostItems || []).find(e => e.id === ecId);
+  if (!item) return;
+  verifySupplies.push({
+    description:    item.name,
+    price_excl_vat: item.price_excl_vat,
+    quantity:       item.default_quantity || 1,
+  });
+  renderVerifyModal();
+  verifyScheduleRecompute();
 }
 
 function verifySetSupplyField(idx, field, value) {
@@ -3354,6 +3379,7 @@ function verifySetSupplyField(idx, field, value) {
 function verifyRemoveSupply(idx) {
   verifySupplies.splice(idx, 1);
   renderVerifyModal();
+  verifyScheduleRecompute();
 }
 
 async function verifyHandleFiles(fileList) {
@@ -3393,7 +3419,7 @@ async function verifyHandleFiles(fileList) {
         if (matchMat) materialId = matchMat.id;
       }
 
-      verifyPlates.push({ filename: file.name, parsedResult: parsed, printerId, materialId, itemsPerPlate: 1 });
+      verifyPlates.push({ filename: file.name, parsedResult: parsed, printerId, materialId, itemsPerPlate: (parsed?.plates?.[0]?.objectCount) || 1 });
     } catch (err) {
       status.textContent = `Parse error: ${err.message}`;
       return;
@@ -3402,6 +3428,64 @@ async function verifyHandleFiles(fileList) {
 
   status.textContent = '';
   renderVerifyModal();
+  verifyScheduleRecompute();
+}
+
+function verifyScheduleRecompute() {
+  clearTimeout(_verifyRecomputeTimer);
+  _verifyRecomputeTimer = setTimeout(verifyRecompute, 250);
+}
+
+async function verifyRecompute() {
+  if (!verifyProjectRef) return;
+  const resultDiv = document.getElementById('verify-result');
+  if (!resultDiv) return;
+
+  if (verifyPlates.length === 0) {
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = '<p style="color:var(--text-muted);font-size:13px">Add at least one .3mf file to see results.</p>';
+    return;
+  }
+
+  resultDiv.style.display = 'block';
+  resultDiv.innerHTML = '<em style="color:var(--text-muted);font-size:13px">Calculating…</em>';
+
+  try {
+    const platesPayload = verifyPlates.map(p => {
+      const first = p.parsedResult && p.parsedResult.plates && p.parsedResult.plates[0];
+      return {
+        printer_id:         p.printerId  || null,
+        material_id:        p.materialId || null,
+        print_time_minutes: first ? (first.printTimeMinutes || 0) : 0,
+        plastic_grams:      first ? (first.weightGrams      || 0) : 0,
+        items_per_plate:    p.itemsPerPlate || 1,
+      };
+    });
+
+    const suppliesPayload = verifySupplies.map(s => ({
+      description:    s.description,
+      price_excl_vat: s.price_excl_vat,
+      quantity:       s.quantity,
+    }));
+
+    const body = {
+      plates:                platesPayload,
+      preProcessingMinutes:  verifyPreMinutes,
+      postProcessingMinutes: verifyPostMinutes,
+      hourlyRate:            verifyHourlyRate,
+      supplies:              suppliesPayload,
+      itemsPerSet:           verifyProjectRef.itemsPerSet,
+      projectProductionCost: verifyProjectRef.productionCost,
+      projectSellingPrice:   verifyProjectRef.sellingPrice,
+    };
+
+    const result = await POST(`/api/projects/${verifyProjectId}/verify-batch`, body);
+    if (!result) return;
+
+    renderVerifyResult(result, verifyProjectRef);
+  } catch (err) {
+    if (resultDiv) resultDiv.innerHTML = `<span style="color:var(--red)">Error: ${esc(err.message)}</span>`;
+  }
 }
 
 async function runVerification() {
@@ -3467,21 +3551,45 @@ function renderVerifyResult(result, ref) {
       <strong>Not enough pieces for a complete set.</strong>
       Got ${result.totalPieces} piece(s), need ${ref.itemsPerSet} per set.
     </div>`;
-    resultDiv.style.display = 'block';
     return;
   }
 
   const cpu = result.actualCostPerUnit;
   const cpuFinite = Number.isFinite(cpu);
 
-  function fmtDelta(comp) {
-    if (!comp || comp.delta === null) return '—';
-    const sign  = comp.delta >= 0 ? '+' : '';
-    const color = comp.indicator === 'green' ? 'var(--green)' : 'var(--red)';
-    return `<span style="color:${color}">${sign}${fmt(comp.delta)} / ${sign}${Number(comp.deltaPct || 0).toFixed(1)}%</span>`;
+  // Margin-threshold indicator for vs-selling-price (mirrors project pricing thresholds)
+  function sellingIndicator(deltaPct) {
+    const green  = settings.margin_green_pct  || 30;
+    const orange = settings.margin_orange_pct || 5;
+    if (deltaPct >= green)  return 'green';
+    if (deltaPct >= orange) return 'orange';
+    return 'red';
   }
 
-  resultDiv.style.display = 'block';
+  // Cost-coverage indicator for vs-production-cost (green ≥ 0, red < 0)
+  function costIndicator(delta) {
+    return (delta !== null && delta >= 0) ? 'green' : 'red';
+  }
+
+  function fmtSign(n) { return n >= 0 ? `+${fmt(n)}` : fmt(n); }
+  function fmtSignPct(n) { return (n >= 0 ? '+' : '') + Number(n || 0).toFixed(1) + '%'; }
+
+  const vpc  = result.vsProductionCost;
+  const vsp  = result.vsSellingPrice;
+
+  const vpcDelta    = vpc  && vpc.delta  !== null ? vpc.delta  : null;
+  const vpcDeltaPct = vpc  && vpc.deltaPct !== null ? vpc.deltaPct : null;
+  const vspDelta    = vsp  && vsp.delta  !== null ? vsp.delta  : null;
+  const vspDeltaPct = vsp  && vsp.deltaPct !== null ? vsp.deltaPct : null;
+
+  const vpcBadge = vpcDelta !== null
+    ? `<span class="margin-badge ${costIndicator(vpcDelta)}">${fmtSignPct(vpcDeltaPct)}</span>`
+    : `<span class="margin-badge red">—</span>`;
+
+  const vspBadge = vspDelta !== null
+    ? `<span class="margin-badge ${sellingIndicator(vspDeltaPct)}">${fmtSignPct(vspDeltaPct)}</span>`
+    : `<span class="margin-badge red">—</span>`;
+
   resultDiv.innerHTML = `
     <h4 style="margin:0 0 8px">Result</h4>
     <div class="pricing-grid" style="margin-bottom:8px">
@@ -3502,13 +3610,13 @@ function renderVerifyResult(result, ref) {
       </div>
       <div class="pricing-block">
         <h4>vs. Production cost (${fmt(ref.productionCost)}/set)</h4>
-        <div class="big-price">${fmtDelta(result.vsProductionCost)}</div>
-        <div class="sub">${result.vsProductionCost && result.vsProductionCost.delta >= 0 ? 'Cheaper than reference' : 'More expensive than reference'}</div>
+        <div class="big-price">${vpcDelta !== null ? fmtSign(vpcDelta) : '—'}</div>
+        <div class="sub">${vpcBadge} ${vpcDelta !== null && vpcDelta >= 0 ? 'Cheaper than reference' : 'More expensive than reference'}</div>
       </div>
       <div class="pricing-block">
         <h4>vs. ${esc(ref.sellingPriceLabel)} (${fmt(ref.sellingPrice)}/set)</h4>
-        <div class="big-price">${fmtDelta(result.vsSellingPrice)}</div>
-        <div class="sub">${result.vsSellingPrice && result.vsSellingPrice.delta >= 0 ? 'Margin intact' : 'Below selling price'}</div>
+        <div class="big-price">${vspDelta !== null ? fmtSign(vspDelta) : '—'}</div>
+        <div class="sub">${vspBadge} ${vspDelta !== null && vspDelta >= 0 ? 'Margin intact' : 'Below selling price'}</div>
       </div>
     </div>
   `;
