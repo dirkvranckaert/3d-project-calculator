@@ -300,6 +300,8 @@ function buildTestPrints(db, projectId, settings) {
         totalPlateCost: computePlateCost(pl),
         print_time_minutes: pl.print_time_minutes,
         plastic_grams: pl.plastic_grams,
+        pre_processing_minutes: pl.pre_processing_minutes ?? 0,
+        post_processing_minutes: pl.post_processing_minutes ?? 0,
         file_id: fileRow?.id ?? null,
         filename: fileRow?.filename ?? null,
       };
@@ -744,6 +746,7 @@ app.patch('/api/projects/:projectId/plates/:plateId', (req, res) => {
   const plate = db.prepare('SELECT * FROM project_plates WHERE id = ? AND project_id = ?')
     .get(req.params.plateId, req.params.projectId);
   if (!plate) return res.status(404).json({ error: 'Not found' });
+  if (plate.is_test_print) { req.body.risk_multiplier = 1; }
   const allowed = ['name', 'print_time_minutes', 'plastic_grams', 'items_per_plate',
     'risk_multiplier', 'pre_processing_minutes', 'post_processing_minutes',
     'printer_id', 'material_id', 'material_waste_grams', 'notes', 'colors', 'enabled',

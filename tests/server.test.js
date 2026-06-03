@@ -897,6 +897,82 @@ describe('POST /api/projects/:id/verify-batch', () => {
   });
 });
 
+/* ================================================================== */
+/*  Test-print processing inputs + risk-lock (task #330)              */
+/* ================================================================== */
+describe('Test-print processing inputs + risk-lock', () => {
+  let pid;
+  let tpId;
+  let plateId;
+
+  beforeAll(async () => {
+    const pr = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'TP Processing Test', items_per_set: 1 });
+    pid = pr.body.id;
+
+    // Create a test-print entry
+    const tp = await request(app).post(`/api/projects/${pid}/test-prints`).set('Cookie', cookie)
+      .send({ description: 'Processing test', estimated_cost: 0 });
+    expect(tp.status).toBe(201);
+    tpId = tp.body.test_prints[0].id;
+
+    // Attach a minimal .3mf buffer
+    const fakeBuf = Buffer.from('PK\x03\x04dummy3mf');
+    const attach = await request(app)
+      .post(`/api/projects/${pid}/test-prints/${tpId}/attach`)
+      .set('Cookie', cookie)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Filename', 'part.3mf')
+      .send(fakeBuf);
+    expect(attach.status).toBe(201);
+
+    // GET the project to find the new plate id from attachmentBreakdowns
+    const get = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    expect(get.status).toBe(200);
+    const tp0 = get.body.test_prints.find(t => t.id === tpId);
+    expect(tp0).toBeDefined();
+    expect(tp0.attachmentBreakdowns.length).toBeGreaterThan(0);
+    plateId = tp0.attachmentBreakdowns[0].plateId;
+  });
+
+  afterAll(async () => {
+    await request(app).delete(`/api/projects/${pid}`).set('Cookie', cookie);
+  });
+
+  test('A: post_processing_minutes=2 reaches totalPlateCost in attachmentBreakdown', async () => {
+    const patch = await request(app)
+      .patch(`/api/projects/${pid}/plates/${plateId}`)
+      .set('Cookie', cookie)
+      .send({ post_processing_minutes: 2 });
+    expect(patch.status).toBe(200);
+
+    const get = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    expect(get.status).toBe(200);
+
+    const tp0 = get.body.test_prints.find(t => t.id === tpId);
+    expect(tp0).toBeDefined();
+    const ab = tp0.attachmentBreakdowns[0];
+    expect(ab.post_processing_minutes).toBe(2);
+    // (0+2)/60 * 40 = 1.333... processing contribution
+    expect(ab.totalPlateCost).toBeGreaterThanOrEqual(1.33);
+  });
+
+  test('B: risk_multiplier forced to 1 on test-print plates', async () => {
+    const patch = await request(app)
+      .patch(`/api/projects/${pid}/plates/${plateId}`)
+      .set('Cookie', cookie)
+      .send({ risk_multiplier: 1.5 });
+    expect(patch.status).toBe(200);
+
+    const get = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    expect(get.status).toBe(200);
+
+    const tp_plate = get.body.test_print_plates.find(pl => pl.id === plateId);
+    expect(tp_plate).toBeDefined();
+    expect(tp_plate.risk_multiplier).toBe(1);
+  });
+});
+
 // Clean up
 afterAll(() => {
   if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);

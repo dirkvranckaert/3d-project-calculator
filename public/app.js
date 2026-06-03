@@ -810,12 +810,16 @@ function renderDesignCostSection(p) {
       const materialOpts = '<option value="">--</option>' + materials.map(m => `<option value="${m.id}" ${m.id == plate.material_id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
       const timeGramsCaption = (ab.print_time_minutes != null || ab.plastic_grams != null) ? `<span style="font-size:11px;color:var(--text-muted)">${fmtTime(ab.print_time_minutes || 0)} · ${fmtGrams(ab.plastic_grams || 0)}</span>` : '';
       const dlLink = ab.file_id ? `<a href="/api/files/${ab.file_id}/download" title="Download ${esc(ab.filename || 'file')}" style="display:inline-flex;align-items:center;color:var(--text-muted)" target="_blank"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></a>` : '';
+      const preVal  = ab.pre_processing_minutes  ?? 0;
+      const postVal = ab.post_processing_minutes ?? 0;
       return `<tr style="background:var(--bg-muted,#f7f7f8);font-size:12px">
         <td style="padding-left:24px;color:var(--text-muted)">${esc(ab.name || plate.name || 'Attached .3mf')} ${dlLink}</td>
         <td>${timeGramsCaption}</td>
         <td class="num">${fmt(ab.totalPlateCost)}</td>
         <td><select class="inline-input" onchange="patchPlateField(${p.id}, ${ab.plateId}, 'printer_id', parseInt(this.value) || null)">${printerOpts}</select></td>
         <td><select class="inline-input" onchange="patchPlateField(${p.id}, ${ab.plateId}, 'material_id', parseInt(this.value) || null)">${materialOpts}</select></td>
+        <td><input type="number" class="inline-input num" min="0" step="1" value="${preVal}" style="width:52px" onchange="patchPlateField(${p.id}, ${ab.plateId}, 'pre_processing_minutes', Math.max(0, parseFloat(this.value) || 0))"></td>
+        <td><input type="number" class="inline-input num" min="0" step="1" value="${postVal}" style="width:52px" onchange="patchPlateField(${p.id}, ${ab.plateId}, 'post_processing_minutes', Math.max(0, parseFloat(this.value) || 0))"></td>
         <td></td>
         <td style="white-space:nowrap"><button class="btn-icon" title="Remove attachment" onclick="deleteTestPrintAttachment(${p.id}, ${ab.plateId})">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -825,7 +829,7 @@ function renderDesignCostSection(p) {
 
     // Attach .3mf button (hidden for orphans)
     const attachBtn = tp.isOrphan ? '' : `<tr style="background:var(--bg-muted,#f7f7f8)">
-      <td colspan="7" style="padding-left:24px">
+      <td colspan="9" style="padding-left:24px">
         <label class="btn btn-sm" style="cursor:pointer;font-size:11px">
           + Attach .3mf
           <input type="file" accept=".3mf" style="display:none" onchange="attachTestPrint3mf(${p.id}, ${tp.id}, this)">
@@ -842,6 +846,8 @@ function renderDesignCostSection(p) {
         <td class="num">${fmt(actual)}</td>
         <td></td>
         <td></td>
+        <td></td>
+        <td></td>
         <td>${deltaCell}</td>
         <td>${plateId ? `<button class="btn-icon" title="Delete" onclick="deleteTestPrint(${plateId}, ${p.id})">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -855,6 +861,8 @@ function renderDesignCostSection(p) {
       <td class="num"><input type="number" class="eh-input num" min="0" step="0.01" value="${est}"
         onblur="patchTestPrint(${p.id}, ${tp.id}, 'estimated_cost', parseFloat(this.value) || 0)"></td>
       <td class="num">${fmt(actual)}</td>
+      <td></td>
+      <td></td>
       <td></td>
       <td></td>
       <td>${deltaCell}</td>
@@ -896,9 +904,9 @@ function renderDesignCostSection(p) {
 
     <h4 style="font-size:13px;margin:12px 0 4px;color:var(--text-muted)">Test Prints</h4>
     ${testPrintsList.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
-      <thead><tr><th>Description</th><th>Estimated (${currSym})</th><th>Actual (${currSym})</th><th>Printer</th><th>Material</th><th>Δ</th><th></th></tr></thead>
+      <thead><tr><th>Description</th><th>Estimated (${currSym})</th><th>Actual (${currSym})</th><th>Printer</th><th>Material</th><th>Pre (min)</th><th>Post (min)</th><th>Δ</th><th></th></tr></thead>
       <tbody>${tpRows}</tbody>
-      <tfoot><tr><td style="text-align:right;font-weight:600">Subtotal (estimated)</td><td class="num" style="font-weight:700">${fmt(dc.testPrintsSubtotal || 0)}</td><td colspan="5"></td></tr></tfoot>
+      <tfoot><tr><td style="text-align:right;font-weight:600">Subtotal (estimated)</td><td class="num" style="font-weight:700">${fmt(dc.testPrintsSubtotal || 0)}</td><td colspan="7"></td></tr></tfoot>
     </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No test prints added yet.</p>'}
     <div class="ec-add-row">
       <button class="btn btn-sm btn-primary" onclick="addTestPrint(${p.id})">+ Add test print</button>
