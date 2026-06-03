@@ -191,6 +191,34 @@ Old `POST /:id/test-print` still works for back-compat (creates orphan plate).
 - Old: `testPrintPlateBreakdowns: Array<{totalPlateCost}>` — computed sum fed subtotal.
 - New: `testPrints: Array<{estimated_cost, attachmentBreakdowns}>` — `estimated_cost` feeds subtotal; `attachmentBreakdowns` populate `testPrintDetails[].actual`.
 
+## Test-print attachment row enhancements (2026-06-03 v2)
+
+### Server-side auto-fill on attach
+`POST /api/projects/:projectId/test-prints/:tpId/attach` now auto-fills `printer_id` and `material_id` on the newly created plate after parsing the uploaded .3mf.
+
+- `normName(s)` helper (module-level, before `buildTestPrints`): lowercases, strips `[\s\-_]+`, strips literal `"lab"`. Mirrors the client-side `norm()` function in `app.js`'s Import-3MF dialog.
+- `parse3mf(req.body)` is called **once** (result lifted into `parsedResult`); used for both time/grams write and the new auto-fill — not called twice.
+- **Printer match:** `parsedResult.printerName` → `normName` → fuzzy `includes` against all rows in `printers` table → `UPDATE project_plates SET printer_id`. NULL on no match (current behaviour preserved).
+- **Material match:** `parsedResult.plates[0].filamentType` (skipped if null or `"Mixed"`) → `toLowerCase()` → match against `materials.material_type` using `mt.includes(ft) || ft.includes(mt.split(/\s/)[0])` → `UPDATE project_plates SET material_id`. NULL on no match.
+- Both writes are wrapped in the existing best-effort try/catch — a parse failure leaves printer and material as NULL.
+- Auto-fill is **not** added to the legacy `POST /:id/test-print` route.
+
+### buildTestPrints now surfaces print_time_minutes, plastic_grams, file_id, filename
+The `attachmentBreakdowns` array (both real and orphan entries) now includes:
+- `print_time_minutes` — from `project_plates.print_time_minutes`
+- `plastic_grams` — from `project_plates.plastic_grams`
+- `file_id` — from `project_files WHERE plate_id = ? LIMIT 1` (null if no file row)
+- `filename` — from the same file row (null if no file row)
+
+### Read-only time · grams caption in the Estimated column
+Client (`renderDesignCostSection` attachment sub-row): the Estimated `<td>` (previously empty) now shows a muted non-editable `<span>` with `fmtTime(ab.print_time_minutes || 0) · fmtGrams(ab.plastic_grams || 0)` when either value is non-null. Rendered only as a caption — not an `<input>`.
+
+### Per-attachment download link
+Client: each attachment sub-row's last `<td>` (the Remove-button cell) now also contains a download icon `<a href="/api/files/${ab.file_id}/download" …>` placed **before** the Remove button, using the existing `/api/files/:id/download` route. The cell gets `white-space:nowrap`. No new CSS. `ab.file_id` null → no link rendered.
+
+### Main Files list still excludes test-print files (intentional)
+`GET /api/projects/:id/files` filters `pp.is_test_print = 0` — unchanged. Test-print files appear **only** via the per-attachment download link, not in the main Files section.
+
 ## Architecture guide
 
 The full house-style spec: `/Users/dirkvranckaert/Documents/personal-assistant/docs/app-architecture-guide.md`

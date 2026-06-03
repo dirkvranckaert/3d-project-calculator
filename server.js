@@ -230,6 +230,9 @@ app.delete('/api/extra-costs/:id', (req, res) => {
 /*  Projects API                                                       */
 /* ------------------------------------------------------------------ */
 
+/** Normalize a printer/material name for fuzzy matching (mirrors client-side norm in app.js). */
+function normName(s) { return String(s || '').toLowerCase().replace(/[\s\-_]+/g, '').replace('lab', ''); }
+
 /**
  * Build the test_prints and test_print_plates arrays for a project.
  * Returns real project_test_prints rows with attachmentBreakdowns,
@@ -283,13 +286,20 @@ function buildTestPrints(db, projectId, settings) {
   const tpRows = db.prepare('SELECT * FROM project_test_prints WHERE project_id = ? ORDER BY sort_order, id').all(projectId);
   const testPrints = tpRows.map(tp => {
     const attachedPlates = allTestPrintPlates.filter(pl => pl.test_print_id == tp.id);
-    const attachmentBreakdowns = attachedPlates.map(pl => ({
-      plateId: pl.id,
-      name: pl.name,
-      printer_id: pl.printer_id,
-      material_id: pl.material_id,
-      totalPlateCost: computePlateCost(pl),
-    }));
+    const attachmentBreakdowns = attachedPlates.map(pl => {
+      const fileRow = db.prepare('SELECT id, filename FROM project_files WHERE plate_id = ? LIMIT 1').get(pl.id);
+      return {
+        plateId: pl.id,
+        name: pl.name,
+        printer_id: pl.printer_id,
+        material_id: pl.material_id,
+        totalPlateCost: computePlateCost(pl),
+        print_time_minutes: pl.print_time_minutes,
+        plastic_grams: pl.plastic_grams,
+        file_id: fileRow?.id ?? null,
+        filename: fileRow?.filename ?? null,
+      };
+    });
     return {
       id: tp.id,
       description: tp.description,
@@ -304,12 +314,20 @@ function buildTestPrints(db, projectId, settings) {
   const orphanPlates = allTestPrintPlates.filter(pl => pl.test_print_id == null);
   for (const pl of orphanPlates) {
     const computedCost = computePlateCost(pl);
+    const orphanFileRow = db.prepare('SELECT id, filename FROM project_files WHERE plate_id = ? LIMIT 1').get(pl.id);
     testPrints.push({
       id: null,
       description: pl.name || 'Test print',
       estimated_cost: computedCost,
       sort_order: pl.sort_order || 0,
-      attachmentBreakdowns: [{ totalPlateCost: computedCost, plateId: pl.id }],
+      attachmentBreakdowns: [{
+        totalPlateCost: computedCost,
+        plateId: pl.id,
+        print_time_minutes: pl.print_time_minutes,
+        plastic_grams: pl.plastic_grams,
+        file_id: orphanFileRow?.id ?? null,
+        filename: orphanFileRow?.filename ?? null,
+      }],
       isOrphan: true,
       orphanPlateId: pl.id,
       orphanPlate: pl,
@@ -1010,13 +1028,29 @@ app.post('/api/projects/:projectId/test-prints/:tpId/attach', express.raw({ type
     .run(pid, filename, maxOrder + 1, tpId);
   const plateId = plateResult.lastInsertRowid;
 
-  // Parse the 3mf for time and plastic — mirror exact field names from existing /test-print route
+  // Parse the 3mf for time, plastic, printer, and material (all best-effort)
+  let parsedResult = null;
   try {
-    const result = parse3mf(req.body);
-    if (result.plates && result.plates.length > 0) {
-      const first = result.plates[0];
+    parsedResult = parse3mf(req.body);
+    if (parsedResult.plates && parsedResult.plates.length > 0) {
+      const first = parsedResult.plates[0];
       db.prepare('UPDATE project_plates SET print_time_minutes=?, plastic_grams=? WHERE id=?')
         .run(first.printTimeMinutes || 0, first.weightGrams || 0, plateId);
+    }
+    // Auto-fill printer_id
+    if (parsedResult.printerName) {
+      const pNorm = normName(parsedResult.printerName);
+      const allPrinters = db.prepare('SELECT id, name FROM printers').all();
+      const matchedPrinter = allPrinters.find(pr => { const n = normName(pr.name); return pNorm.includes(n) || n.includes(pNorm); });
+      if (matchedPrinter) db.prepare('UPDATE project_plates SET printer_id = ? WHERE id = ?').run(matchedPrinter.id, plateId);
+    }
+    // Auto-fill material_id from first plate's filamentType
+    const firstPlate = parsedResult.plates?.[0];
+    if (firstPlate?.filamentType && firstPlate.filamentType !== 'Mixed') {
+      const ft = firstPlate.filamentType.toLowerCase();
+      const allMaterials = db.prepare('SELECT id, material_type FROM materials').all();
+      const matchedMaterial = allMaterials.find(m => { const mt = m.material_type.toLowerCase(); return mt.includes(ft) || ft.includes(mt.split(/\s/)[0]); });
+      if (matchedMaterial) db.prepare('UPDATE project_plates SET material_id = ? WHERE id = ?').run(matchedMaterial.id, plateId);
     }
   } catch { /* parsing is best-effort */ }
 

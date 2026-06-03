@@ -798,14 +798,16 @@ function renderDesignCostSection(p) {
       const plate = (p.test_print_plates || []).find(pl => pl.id === ab.plateId) || {};
       const printerOpts = '<option value="">--</option>' + printers.map(pr => `<option value="${pr.id}" ${pr.id == plate.printer_id ? 'selected' : ''}>${esc(pr.name)}</option>`).join('');
       const materialOpts = '<option value="">--</option>' + materials.map(m => `<option value="${m.id}" ${m.id == plate.material_id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+      const timeGramsCaption = (ab.print_time_minutes != null || ab.plastic_grams != null) ? `<span style="font-size:11px;color:var(--text-muted)">${fmtTime(ab.print_time_minutes || 0)} · ${fmtGrams(ab.plastic_grams || 0)}</span>` : '';
+      const dlLink = ab.file_id ? `<a href="/api/files/${ab.file_id}/download" title="Download ${esc(ab.filename || 'file')}" style="display:inline-flex;align-items:center;color:var(--text-muted)" target="_blank"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></a>` : '';
       return `<tr style="background:var(--bg-muted,#f7f7f8);font-size:12px">
         <td style="padding-left:24px;color:var(--text-muted)">${esc(ab.name || plate.name || 'Attached .3mf')}</td>
-        <td></td>
+        <td>${timeGramsCaption}</td>
         <td class="num">${fmt(ab.totalPlateCost)}</td>
         <td><select class="inline-input" onchange="patchPlateField(${p.id}, ${ab.plateId}, 'printer_id', parseInt(this.value) || null)">${printerOpts}</select></td>
         <td><select class="inline-input" onchange="patchPlateField(${p.id}, ${ab.plateId}, 'material_id', parseInt(this.value) || null)">${materialOpts}</select></td>
         <td></td>
-        <td><button class="btn-icon" title="Remove attachment" onclick="deleteTestPrintAttachment(${p.id}, ${ab.plateId})">
+        <td style="white-space:nowrap">${dlLink}<button class="btn-icon" title="Remove attachment" onclick="deleteTestPrintAttachment(${p.id}, ${ab.plateId})">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button></td>
       </tr>`;
