@@ -747,14 +747,16 @@ function renderDesignCostSection(p) {
     const decHours = Number(e.hours) || 0;
     const subtotal = decHours * (Number(e.hourly_rate) || 0);
     const actualDec = (e.actual_hours != null && e.actual_hours !== '') ? (Number.isFinite(Number(e.actual_hours)) ? Number(e.actual_hours) : null) : null;
-    const delta = actualDec !== null ? (decHours - actualDec) : null;
+    const delta = actualDec !== null ? (actualDec - decHours) : null;
     let deltaCell;
     if (delta === null) {
       deltaCell = `<span style="color:var(--text-muted)">—</span>`;
-    } else if (delta >= 0) {
-      deltaCell = `<span style="color:var(--success)">+${formatHoursMinutes(delta)}</span>`;
+    } else if (delta < 0) {
+      deltaCell = `<span style="color:var(--success)">-${formatHoursMinutes(Math.abs(delta))}</span>`;
+    } else if (delta > 0) {
+      deltaCell = `<span style="color:var(--danger)">+${formatHoursMinutes(delta)}</span>`;
     } else {
-      deltaCell = `<span style="color:var(--danger)">${formatHoursMinutes(Math.abs(delta))}</span>`;
+      deltaCell = `<span>0:00</span>`;
     }
     return `<tr data-dh-row="${i}">
       <td class="eh-desc"><input type="text" class="eh-input dh-input-desc" value="${esc(e.description || '')}" maxlength="200"
@@ -779,14 +781,16 @@ function renderDesignCostSection(p) {
     const actual = (tp.attachmentBreakdowns || []).reduce((s, b) => s + (Number(b.totalPlateCost) || 0), 0);
     const est = Number(tp.estimated_cost) || 0;
     const hasAttachments = (tp.attachmentBreakdowns || []).length > 0;
-    const delta = est - actual;
+    const delta = actual - est;
     let deltaCell;
     if (!hasAttachments) {
       deltaCell = `<span style="color:var(--text-muted)">—</span>`;
-    } else if (delta >= 0) {
-      deltaCell = `<span style="color:var(--success)">+${fmt(delta)}</span>`;
+    } else if (delta < 0) {
+      deltaCell = `<span style="color:var(--success)">-€${fmt(Math.abs(delta))}</span>`;
+    } else if (delta > 0) {
+      deltaCell = `<span style="color:var(--danger)">+€${fmt(delta)}</span>`;
     } else {
-      deltaCell = `<span style="color:var(--danger)">${fmt(delta)}</span>`;
+      deltaCell = `<span>€0.00</span>`;
     }
 
     // Attachment sub-rows (indented)
