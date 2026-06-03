@@ -61,6 +61,9 @@ project-calculator/
 - **Schema inline in db.js** — tables created via `CREATE IF NOT EXISTS` at boot.
 - **sharp for thumbnails** — `sharp` is used to process images from .3mf files. It requires native binaries (installed automatically via npm).
 - **Detail view tabs** — tab state in `currentDetailTab` module variable (`'print'`|`'design'`), default `'print'`; survives `reloadSingleProject`; non-custom projects show no tab bar; toggling Custom off while on design tab resets to `'print'`; "Setup & Design" is a UI label only, DB/routes/keys unchanged.
+- **Per-plate total is cost-only** — the per-plate number shown in BOTH the print-project plates list and the test-prints (Setup & Design) tab is raw `totalPlateCost` (material+processing+electricity+printer). Profit **margin is applied only at project level** (`calculateFinalPricing`), never per-plate. Don't add `applyProfitMargins` to any per-plate path. Test prints live in `project_plates` (`is_test_print=1`); `buildTestPrints().computePlateCost` must mirror `calculateProject`'s settings normalization exactly so both tabs agree.
+- **`hourly_rate || 40` quirk** — `calculateProject` (and `computePlateCost`) normalize `Number(hourly_rate) || 40`, so an intentional `hourly_rate=0` is silently billed at €40/h (adds processing cost). Kept deliberately for tab-consistency; if changing to honor 0, change BOTH paths together (use a `Number.isFinite` guard, not `|| 40`).
+- **Test-print risk locked to 1** — `is_test_print` plates force `risk_multiplier=1` in the plate PATCH route (a test is one print; a failed one just adds another). Per-test-print `pre_/post_processing_minutes` are user-editable in the Setup & Design tab and drive processing cost; new test prints default to 0/0.
 
 ## Coding conventions
 
