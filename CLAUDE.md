@@ -123,7 +123,7 @@ Deployed via the shared infrastructure repo: `../infrastructure/apps/project-cal
 ## Gotchas
 
 - **pm2 cwd caching:** pm2 caches cwd at first start. Delete + restart if you change ecosystem.config.js.
-- **Service worker:** cache-first strategy. Bump cache version in `public/sw.js` to force updates.
+- **Service worker:** network-only — the `fetch` handler is a no-op (always hits the network) and `activate` deletes all caches. No asset caching, so frontend changes ship without a cache-version bump.
 - **sharp native binaries:** `sharp` downloads platform-specific binaries on `npm install`. If deploying from a different OS/arch than the server, run `npm install` on the target.
 - **SQLite WAL mode:** the `data/` directory must be writable and on a local filesystem.
 
