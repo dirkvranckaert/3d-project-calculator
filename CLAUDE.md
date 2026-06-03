@@ -80,6 +80,29 @@ npm start               # default port 3003
 
 Open http://localhost:3003
 
+## Local test server (pm2)
+
+The fixed local test port is **3010** (not 3003). A pm2 entry named `project-calculator` runs the server locally in development mode.
+
+- **pm2 process name:** `project-calculator`
+- **Local test port:** 3010
+- **Config:** `.env` must have `PORT=3010` and `NODE_ENV=development`
+- **Prod port on app3-node:** 3459 (unchanged — do not touch)
+- **Bare `npm start` default:** 3003 (no `.env` override)
+
+Restart command:
+```bash
+PATH="/opt/homebrew/bin:$PATH" pm2 restart project-calculator
+```
+
+To start from scratch (e.g. after cwd change):
+```bash
+PATH="/opt/homebrew/bin:$PATH" pm2 delete project-calculator
+cd /Users/dirkvranckaert/Documents/app3/printseed/project-calculator
+PATH="/opt/homebrew/bin:$PATH" PORT=3010 NODE_ENV=development pm2 start server.js --name project-calculator
+PATH="/opt/homebrew/bin:$PATH" pm2 save
+```
+
 ## Tests
 
 ```bash
