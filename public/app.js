@@ -18,6 +18,15 @@ let currentView = 'list'; // 'list' or 'detail'
 let currentProjectId = null;
 let currentDetailTab = 'print'; // 'print' | 'design'
 
+// Verify Batch modal state
+let verifyProjectId = null;
+let verifyProjectRef = null; // { itemsPerSet, productionCost, sellingPrice, sellingPriceLabel, hourlyRate }
+let verifyPlates = [];       // [{ filename, parsedResult, printerId, materialId, itemsPerPlate }]
+let verifySupplies = [];     // [{ description, price_excl_vat, quantity }]
+let verifyPreMinutes = 0;
+let verifyPostMinutes = 0;
+let verifyHourlyRate = 40;
+
 /* ================================================================== */
 /*  API helpers                                                        */
 /* ================================================================== */
@@ -1384,10 +1393,11 @@ function renderPricingSection(p) {
     ${actualBlock}
     ${designCostBlock}
   </div>
-  ${p.actual_sales_price > 0 ? `<div style="padding:8px 0 0;text-align:right">
-    <button class="btn btn-sm" onclick="updateActualPrice(${p.id}, null)">Clear actual price</button>
-    <button class="btn btn-sm" onclick="promptActualPrice(${p.id}, ${p.actual_sales_price})">Change price</button>
-  </div>` : ''}
+  <div style="padding:8px 0 0;text-align:right">
+    ${p.actual_sales_price > 0 ? `<button class="btn btn-sm" onclick="updateActualPrice(${p.id}, null)">Clear actual price</button>
+    <button class="btn btn-sm" onclick="promptActualPrice(${p.id}, ${p.actual_sales_price})">Change price</button>` : ''}
+    <button class="btn btn-sm" onclick="openVerifyModal(${p.id})">Verify batch</button>
+  </div>
   </div>`;
 }
 
@@ -3183,6 +3193,326 @@ document.addEventListener('drop', e => {
     }
   }
 });
+
+/* ================================================================== */
+/*  Verify Batch modal                                                 */
+/* ================================================================== */
+
+function openVerifyModal(projectId) {
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return;
+
+  verifyProjectId = projectId;
+
+  const pricing = p.calculation && p.calculation.pricing;
+  const productionCost = pricing ? pricing.productionCost : 0;
+  const actualPrice    = p.actual_sales_price > 0 ? p.actual_sales_price : null;
+  const suggestedPrice = pricing ? pricing.suggestedPrice : 0;
+  const sellingPrice     = actualPrice !== null ? actualPrice : suggestedPrice;
+  const sellingPriceLabel = actualPrice !== null ? 'Actual selling price' : 'Suggested price';
+
+  verifyProjectRef = {
+    itemsPerSet:       p.items_per_set || 1,
+    productionCost,
+    sellingPrice,
+    sellingPriceLabel,
+    hourlyRate: Number(settings.hourly_rate) || 40,
+  };
+
+  // Reset state
+  verifyPlates      = [];
+  verifySupplies    = [];
+  verifyPreMinutes  = 0;
+  verifyPostMinutes = 0;
+  verifyHourlyRate  = verifyProjectRef.hourlyRate;
+
+  renderVerifyModal();
+  openModal('verify-modal');
+}
+
+function renderVerifyModal() {
+  const ref = verifyProjectRef;
+  if (!ref) return;
+
+  // Build plates rows HTML
+  let platesRows = '';
+  verifyPlates.forEach((plate, idx) => {
+    const printerOptions = printers.map(pr =>
+      `<option value="${pr.id}" ${plate.printerId === pr.id ? 'selected' : ''}>${esc(pr.name)}</option>`
+    ).join('');
+    const materialOptions = materials.map(m =>
+      `<option value="${m.id}" ${plate.materialId === m.id ? 'selected' : ''}>${esc(m.name)}</option>`
+    ).join('');
+    platesRows += `<tr>
+      <td style="font-size:12px;word-break:break-all">${esc(plate.filename)}</td>
+      <td><select onchange="verifySetPlateField(${idx},'printerId',+this.value)">
+        <option value="">-- printer --</option>${printerOptions}
+      </select></td>
+      <td><select onchange="verifySetPlateField(${idx},'materialId',+this.value)">
+        <option value="">-- material --</option>${materialOptions}
+      </select></td>
+      <td><input type="number" min="1" value="${plate.itemsPerPlate || 1}" style="width:60px"
+        onchange="verifySetPlateField(${idx},'itemsPerPlate',+this.value||1)"></td>
+      <td><button class="btn btn-icon btn-sm" onclick="verifyRemovePlate(${idx})" title="Remove">&times;</button></td>
+    </tr>`;
+  });
+
+  // Build supplies rows HTML
+  let suppliesRows = '';
+  verifySupplies.forEach((s, idx) => {
+    suppliesRows += `<tr>
+      <td><input type="text" value="${esc(s.description)}" placeholder="Description"
+        onchange="verifySetSupplyField(${idx},'description',this.value)"></td>
+      <td><input type="number" min="0" step="0.01" value="${s.price_excl_vat}" style="width:80px"
+        onchange="verifySetSupplyField(${idx},'price_excl_vat',+this.value||0)"></td>
+      <td><input type="number" min="1" value="${s.quantity}" style="width:60px"
+        onchange="verifySetSupplyField(${idx},'quantity',+this.value||1)"></td>
+      <td><button class="btn btn-icon btn-sm" onclick="verifyRemoveSupply(${idx})" title="Remove">&times;</button></td>
+    </tr>`;
+  });
+
+  document.getElementById('verify-modal-body').innerHTML = `
+    <div style="margin-bottom:12px">
+      <strong>Reference:</strong>
+      Production cost: <strong>${fmt(ref.productionCost)}/set</strong> ·
+      ${ref.sellingPriceLabel}: <strong>${fmt(ref.sellingPrice)}/set</strong> ·
+      Items per set: <strong>${ref.itemsPerSet}</strong>
+    </div>
+
+    <h4 style="margin:0 0 6px">3MF Files</h4>
+    <table class="eh-table" style="width:100%;margin-bottom:8px">
+      <thead><tr>
+        <th>File</th><th>Printer</th><th>Material</th><th>Items/plate</th><th></th>
+      </tr></thead>
+      <tbody id="verify-plates-body">${platesRows}</tbody>
+    </table>
+    <div style="margin-bottom:12px">
+      <input type="file" id="verify-file-input" accept=".3mf" multiple style="display:none"
+        onchange="verifyHandleFiles(this.files)">
+      <button class="btn btn-sm btn-primary" onclick="document.getElementById('verify-file-input').click()">
+        + Upload .3mf files
+      </button>
+      <span id="verify-upload-status" style="font-size:12px;margin-left:8px;color:var(--text-muted)"></span>
+    </div>
+
+    <h4 style="margin:0 0 6px">Processing Time</h4>
+    <div class="form-grid" style="margin-bottom:12px">
+      <div class="form-group">
+        <label>Pre-processing time (minutes total)</label>
+        <input type="number" min="0" value="${verifyPreMinutes}" class="eh-input"
+          onchange="verifyPreMinutes=+this.value||0">
+      </div>
+      <div class="form-group">
+        <label>Post-processing time (minutes total)</label>
+        <input type="number" min="0" value="${verifyPostMinutes}" class="eh-input"
+          onchange="verifyPostMinutes=+this.value||0">
+      </div>
+    </div>
+
+    <h4 style="margin:0 0 6px">Hourly Rate Override</h4>
+    <div class="form-group" style="max-width:180px;margin-bottom:12px">
+      <label>€/h (time cost only)</label>
+      <input type="number" min="0" step="0.01" value="${verifyHourlyRate}" class="eh-input"
+        onchange="verifyHourlyRate=+this.value||0">
+    </div>
+
+    <h4 style="margin:0 0 6px">Supplies &amp; Packaging</h4>
+    <table class="eh-table" style="width:100%;margin-bottom:8px">
+      <thead><tr>
+        <th>Description</th><th>Price excl. VAT (€)</th><th>Qty</th><th></th>
+      </tr></thead>
+      <tbody id="verify-supplies-body">${suppliesRows}</tbody>
+    </table>
+    <div style="margin-bottom:16px">
+      <button class="btn btn-sm btn-primary" onclick="verifyAddSupply()">+ Add line</button>
+    </div>
+
+    <div id="verify-result" style="display:none;border-top:1px solid var(--border);padding-top:12px">
+      <!-- Result rendered by runVerification() -->
+    </div>
+  `;
+}
+
+function verifySetPlateField(idx, field, value) {
+  if (verifyPlates[idx]) verifyPlates[idx][field] = value;
+}
+
+function verifyRemovePlate(idx) {
+  verifyPlates.splice(idx, 1);
+  renderVerifyModal();
+}
+
+function verifyAddSupply() {
+  verifySupplies.push({ description: '', price_excl_vat: 0, quantity: 1 });
+  renderVerifyModal();
+}
+
+function verifySetSupplyField(idx, field, value) {
+  if (verifySupplies[idx]) verifySupplies[idx][field] = value;
+}
+
+function verifyRemoveSupply(idx) {
+  verifySupplies.splice(idx, 1);
+  renderVerifyModal();
+}
+
+async function verifyHandleFiles(fileList) {
+  const status = document.getElementById('verify-upload-status');
+  const files = Array.from(fileList);
+  if (!files.length) return;
+
+  status.textContent = `Parsing ${files.length} file(s)…`;
+
+  for (const file of files) {
+    try {
+      const buf = await file.arrayBuffer();
+      const parsed = await fetch('/api/parse-3mf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: buf,
+      }).then(r => r.json());
+
+      // Auto-match printer
+      const norm = s => String(s || '').toLowerCase().replace(/[\s\-_]+/g, '').replace('lab', '');
+      let printerId = null;
+      if (parsed.printerName) {
+        const pNorm = norm(parsed.printerName);
+        const match = printers.find(pr => { const n = norm(pr.name); return pNorm.includes(n) || n.includes(pNorm); });
+        if (match) printerId = match.id;
+      }
+
+      // Auto-match material from first plate filamentType
+      let materialId = null;
+      const firstPlate = parsed.plates && parsed.plates[0];
+      if (firstPlate && firstPlate.filamentType && firstPlate.filamentType !== 'Mixed') {
+        const ft = firstPlate.filamentType.toLowerCase();
+        const matchMat = materials.find(m => {
+          const mt = m.material_type.toLowerCase();
+          return mt.includes(ft) || ft.includes(mt.split(/\s/)[0]);
+        });
+        if (matchMat) materialId = matchMat.id;
+      }
+
+      verifyPlates.push({ filename: file.name, parsedResult: parsed, printerId, materialId, itemsPerPlate: 1 });
+    } catch (err) {
+      status.textContent = `Parse error: ${err.message}`;
+      return;
+    }
+  }
+
+  status.textContent = '';
+  renderVerifyModal();
+}
+
+async function runVerification() {
+  const ref = verifyProjectRef;
+  if (!ref) return;
+
+  const resultDiv = document.getElementById('verify-result');
+  if (resultDiv) { resultDiv.style.display = 'block'; resultDiv.innerHTML = '<em>Calculating…</em>'; }
+
+  try {
+    // Collect current input values from DOM before submitting
+    // (onchange handlers update state, but we read fresh from DOM too)
+    const preEl  = document.querySelector('#verify-modal-body input[onchange*="verifyPreMinutes"]');
+    const postEl = document.querySelector('#verify-modal-body input[onchange*="verifyPostMinutes"]');
+    const rateEl = document.querySelector('#verify-modal-body input[onchange*="verifyHourlyRate"]');
+    if (preEl)  verifyPreMinutes  = +preEl.value  || 0;
+    if (postEl) verifyPostMinutes = +postEl.value || 0;
+    if (rateEl) verifyHourlyRate  = +rateEl.value || 0;
+
+    const platesPayload = verifyPlates.map(p => {
+      const first = p.parsedResult && p.parsedResult.plates && p.parsedResult.plates[0];
+      return {
+        printer_id:          p.printerId  || null,
+        material_id:         p.materialId || null,
+        print_time_minutes:  first ? (first.printTimeMinutes || 0) : 0,
+        plastic_grams:       first ? (first.weightGrams      || 0) : 0,
+        items_per_plate:     p.itemsPerPlate || 1,
+      };
+    });
+
+    const suppliesPayload = verifySupplies.map(s => ({
+      description:   s.description,
+      price_excl_vat: s.price_excl_vat,
+      quantity:       s.quantity,
+    }));
+
+    const body = {
+      plates:                platesPayload,
+      preProcessingMinutes:  verifyPreMinutes,
+      postProcessingMinutes: verifyPostMinutes,
+      hourlyRate:            verifyHourlyRate,
+      supplies:              suppliesPayload,
+      itemsPerSet:           ref.itemsPerSet,
+      projectProductionCost: ref.productionCost,
+      projectSellingPrice:   ref.sellingPrice,
+    };
+
+    const result = await POST(`/api/projects/${verifyProjectId}/verify-batch`, body);
+    if (!result) return;
+
+    renderVerifyResult(result, ref);
+  } catch (err) {
+    if (resultDiv) resultDiv.innerHTML = `<span style="color:var(--red)">Error: ${esc(err.message)}</span>`;
+  }
+}
+
+function renderVerifyResult(result, ref) {
+  const resultDiv = document.getElementById('verify-result');
+  if (!resultDiv) return;
+
+  if (result.sellableUnits === 0) {
+    resultDiv.innerHTML = `<div class="pricing-block" style="color:var(--red)">
+      <strong>Not enough pieces for a complete set.</strong>
+      Got ${result.totalPieces} piece(s), need ${ref.itemsPerSet} per set.
+    </div>`;
+    resultDiv.style.display = 'block';
+    return;
+  }
+
+  const cpu = result.actualCostPerUnit;
+  const cpuFinite = Number.isFinite(cpu);
+
+  function fmtDelta(comp) {
+    if (!comp || comp.delta === null) return '—';
+    const sign  = comp.delta >= 0 ? '+' : '';
+    const color = comp.indicator === 'green' ? 'var(--green)' : 'var(--red)';
+    return `<span style="color:${color}">${sign}${fmt(comp.delta)} / ${sign}${Number(comp.deltaPct || 0).toFixed(1)}%</span>`;
+  }
+
+  resultDiv.style.display = 'block';
+  resultDiv.innerHTML = `
+    <h4 style="margin:0 0 8px">Result</h4>
+    <div class="pricing-grid" style="margin-bottom:8px">
+      <div class="pricing-block">
+        <h4>Total pieces</h4>
+        <div class="big-price">${result.totalPieces}</div>
+        <div class="sub">Sellable sets of ${ref.itemsPerSet}: <strong>${result.sellableUnits}</strong></div>
+      </div>
+      <div class="pricing-block">
+        <h4>Actual cost per unit</h4>
+        <div class="big-price">${cpuFinite ? fmt(cpu) : '—'}</div>
+        <div class="sub">Total batch: ${fmt(result.totalBatchCost)}</div>
+        <div class="sub" style="font-size:11px;opacity:.7">
+          Machine: ${fmt(result.totalMachineCost)} ·
+          Time: ${fmt(result.timeCost)} ·
+          Supplies: ${fmt(result.suppliesCost)}
+        </div>
+      </div>
+      <div class="pricing-block">
+        <h4>vs. Production cost (${fmt(ref.productionCost)}/set)</h4>
+        <div class="big-price">${fmtDelta(result.vsProductionCost)}</div>
+        <div class="sub">${result.vsProductionCost && result.vsProductionCost.delta >= 0 ? 'Cheaper than reference' : 'More expensive than reference'}</div>
+      </div>
+      <div class="pricing-block">
+        <h4>vs. ${esc(ref.sellingPriceLabel)} (${fmt(ref.sellingPrice)}/set)</h4>
+        <div class="big-price">${fmtDelta(result.vsSellingPrice)}</div>
+        <div class="sub">${result.vsSellingPrice && result.vsSellingPrice.delta >= 0 ? 'Margin intact' : 'Below selling price'}</div>
+      </div>
+    </div>
+  `;
+}
 
 /* ================================================================== */
 /*  Init                                                               */

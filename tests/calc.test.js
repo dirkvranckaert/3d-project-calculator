@@ -899,3 +899,231 @@ describe('electricity cost formula', () => {
     expect(cost).toBeCloseTo(0.702, 2);
   });
 });
+
+/* ================================================================== */
+/*  calculateVerification                                              */
+/* ================================================================== */
+describe('calculateVerification', () => {
+  // A single enriched plate object (embedded printer/material)
+  const singlePlate = {
+    print_time_minutes: 120,
+    plastic_grams: 50,
+    items_per_plate: 1,
+    risk_multiplier: 1,
+    pre_processing_minutes: 0,
+    post_processing_minutes: 0,
+    material_waste_grams: 0,
+    printer_purchase_price: 812.43,
+    printer_earn_back_months: 24,
+    printer_kwh_per_hour: 0.11,
+    material_price_per_kg: 17.38,
+  };
+
+  // Helper: build a plate with given items_per_plate
+  function makePlate(items, overrides = {}) {
+    return { ...singlePlate, items_per_plate: items, ...overrides };
+  }
+
+  test('single plate, items_per_set=1 — actualCostPerUnit equals totalBatchCost / totalPieces', () => {
+    const result = calc.calculateVerification({
+      plates: [singlePlate],
+      preProcessingMinutes: 0,
+      postProcessingMinutes: 0,
+      hourlyRate: 40,
+      supplies: [],
+      itemsPerSet: 1,
+      projectProductionCost: 10,
+      projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+
+    expect(result.totalPieces).toBe(1);
+    expect(result.sellableUnits).toBe(1);
+    expect(result.actualCostPerUnit).toBeCloseTo(result.totalBatchCost / 1, 6);
+    expect(result.plateCosts).toHaveLength(1);
+  });
+
+  test('items_per_set=4, 9 total pieces — sellableUnits = floor(9/4) = 2', () => {
+    // 9 total pieces from 3 plates of 3 items each
+    const result = calc.calculateVerification({
+      plates: [makePlate(3), makePlate(3), makePlate(3)],
+      preProcessingMinutes: 0,
+      postProcessingMinutes: 0,
+      hourlyRate: 40,
+      supplies: [],
+      itemsPerSet: 4,
+      projectProductionCost: 10,
+      projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+
+    expect(result.totalPieces).toBe(9);
+    expect(result.sellableUnits).toBe(2); // floor(9/4)
+  });
+
+  test('multi-plate — totalMachineCost equals sum of plateCosts[].totalPlateCost', () => {
+    const result = calc.calculateVerification({
+      plates: [singlePlate, singlePlate],
+      preProcessingMinutes: 0,
+      postProcessingMinutes: 0,
+      hourlyRate: 40,
+      supplies: [],
+      itemsPerSet: 1,
+      projectProductionCost: 10,
+      projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+
+    const sumPlateCosts = result.plateCosts.reduce((s, pc) => s + pc.totalPlateCost, 0);
+    expect(result.totalMachineCost).toBeCloseTo(sumPlateCosts, 6);
+    expect(result.plateCosts).toHaveLength(2);
+  });
+
+  test('vsProductionCost positive when actualCostPerUnit < projectProductionCost', () => {
+    const result = calc.calculateVerification({
+      plates: [singlePlate],
+      preProcessingMinutes: 0,
+      postProcessingMinutes: 0,
+      hourlyRate: 40,
+      supplies: [],
+      itemsPerSet: 1,
+      projectProductionCost: 999, // far above actual cost
+      projectSellingPrice: 1500,
+      settings: defaultSettings,
+    });
+
+    expect(result.vsProductionCost.delta).toBeGreaterThan(0);
+    expect(result.vsProductionCost.sign).toBe('+');
+    expect(result.vsProductionCost.indicator).toBe('green');
+  });
+
+  test('vsProductionCost negative when actualCostPerUnit > projectProductionCost', () => {
+    const result = calc.calculateVerification({
+      plates: [singlePlate],
+      preProcessingMinutes: 0,
+      postProcessingMinutes: 0,
+      hourlyRate: 40,
+      supplies: [],
+      itemsPerSet: 1,
+      projectProductionCost: 0.01, // far below actual cost
+      projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+
+    expect(result.vsProductionCost.delta).toBeLessThan(0);
+    expect(result.vsProductionCost.sign).toBe('-');
+    expect(result.vsProductionCost.indicator).toBe('red');
+  });
+
+  test('vsSellingPrice positive when actualCostPerUnit < projectSellingPrice', () => {
+    const result = calc.calculateVerification({
+      plates: [singlePlate],
+      preProcessingMinutes: 0,
+      postProcessingMinutes: 0,
+      hourlyRate: 40,
+      supplies: [],
+      itemsPerSet: 1,
+      projectProductionCost: 10,
+      projectSellingPrice: 9999, // very high selling price
+      settings: defaultSettings,
+    });
+
+    expect(result.vsSellingPrice.delta).toBeGreaterThan(0);
+    expect(result.vsSellingPrice.sign).toBe('+');
+    expect(result.vsSellingPrice.indicator).toBe('green');
+  });
+
+  test('vsSellingPrice negative when actualCostPerUnit > projectSellingPrice', () => {
+    const result = calc.calculateVerification({
+      plates: [singlePlate],
+      preProcessingMinutes: 0,
+      postProcessingMinutes: 0,
+      hourlyRate: 40,
+      supplies: [],
+      itemsPerSet: 1,
+      projectProductionCost: 10,
+      projectSellingPrice: 0.01, // far below actual cost
+      settings: defaultSettings,
+    });
+
+    expect(result.vsSellingPrice.delta).toBeLessThan(0);
+    expect(result.vsSellingPrice.sign).toBe('-');
+    expect(result.vsSellingPrice.indicator).toBe('red');
+  });
+
+  test('0 sellable units — actualCostPerUnit is Infinity', () => {
+    // items_per_plate=1, items_per_set=2 → floor(1/2)=0 sellable units
+    const result = calc.calculateVerification({
+      plates: [makePlate(1)],
+      preProcessingMinutes: 0,
+      postProcessingMinutes: 0,
+      hourlyRate: 40,
+      supplies: [],
+      itemsPerSet: 2,
+      projectProductionCost: 10,
+      projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+
+    expect(result.sellableUnits).toBe(0);
+    expect(result.actualCostPerUnit).toBe(Infinity);
+  });
+
+  test('timeCost = (pre + post) / 60 * hourlyRate', () => {
+    const pre = 30;
+    const post = 15;
+    const rate = 60;
+    const result = calc.calculateVerification({
+      plates: [singlePlate],
+      preProcessingMinutes: pre,
+      postProcessingMinutes: post,
+      hourlyRate: rate,
+      supplies: [],
+      itemsPerSet: 1,
+      projectProductionCost: 10,
+      projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+
+    const expected = (pre + post) / 60 * rate;
+    expect(result.timeCost).toBeCloseTo(expected, 6);
+  });
+
+  test('suppliesCost = sum of price_excl_vat * quantity', () => {
+    const supplies = [
+      { price_excl_vat: 0.50, quantity: 3 },
+      { price_excl_vat: 1.00, quantity: 2 },
+    ];
+    const result = calc.calculateVerification({
+      plates: [singlePlate],
+      preProcessingMinutes: 0,
+      postProcessingMinutes: 0,
+      hourlyRate: 40,
+      supplies,
+      itemsPerSet: 1,
+      projectProductionCost: 10,
+      projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+
+    expect(result.suppliesCost).toBeCloseTo(3.50, 6);
+  });
+
+  test('totalBatchCost = totalMachineCost + timeCost + suppliesCost', () => {
+    const supplies = [{ price_excl_vat: 1.00, quantity: 2 }];
+    const result = calc.calculateVerification({
+      plates: [singlePlate],
+      preProcessingMinutes: 10,
+      postProcessingMinutes: 5,
+      hourlyRate: 40,
+      supplies,
+      itemsPerSet: 1,
+      projectProductionCost: 10,
+      projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+
+    const expected = result.totalMachineCost + result.timeCost + result.suppliesCost;
+    expect(result.totalBatchCost).toBeCloseTo(expected, 6);
+  });
+});

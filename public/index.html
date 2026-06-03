@@ -202,6 +202,23 @@
     </div>
   </div>
 
+  <!-- Verify Batch Modal -->
+  <div class="modal-overlay" id="verify-modal">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2>Verify Batch</h2>
+        <button class="btn btn-icon modal-close" data-close="verify-modal">&times;</button>
+      </div>
+      <div class="modal-body" id="verify-modal-body">
+        <!-- Rendered by renderVerifyModal() -->
+      </div>
+      <div class="modal-footer">
+        <button class="btn" data-close="verify-modal">Close</button>
+        <button class="btn btn-primary" id="btn-verify-calculate" onclick="runVerification()">Calculate</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Bottom sheet (mobile context menu) -->
   <div id="bottom-sheet-overlay" class="bottom-sheet-overlay"></div>
   <div id="bottom-sheet" class="bottom-sheet">

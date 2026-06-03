@@ -802,6 +802,101 @@ describe('Design Cost Module', () => {
   });
 });
 
+/* ================================================================== */
+/*  POST /api/projects/:id/verify-batch                                */
+/* ================================================================== */
+describe('POST /api/projects/:id/verify-batch', () => {
+  let pid;
+  let printerId;
+  let materialId;
+
+  beforeAll(async () => {
+    // Create a project to verify against
+    const pr = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'Verify Batch Test', items_per_set: 2 });
+    pid = pr.body.id;
+
+    // Grab first seeded printer and material ids
+    const printerRes  = await request(app).get('/api/printers').set('Cookie', cookie);
+    const materialRes = await request(app).get('/api/materials').set('Cookie', cookie);
+    printerId  = printerRes.body[0].id;
+    materialId = materialRes.body[0].id;
+  });
+
+  afterAll(async () => {
+    await request(app).delete(`/api/projects/${pid}`).set('Cookie', cookie);
+  });
+
+  test('returns 404 for unknown project', async () => {
+    const res = await request(app)
+      .post('/api/projects/9999999/verify-batch')
+      .set('Cookie', cookie)
+      .send({ plates: [], preProcessingMinutes: 0, postProcessingMinutes: 0, itemsPerSet: 1,
+              projectProductionCost: 10, projectSellingPrice: 20 });
+    expect(res.status).toBe(404);
+  });
+
+  test('valid input returns totalBatchCost, sellableUnits, vsProductionCost.sign', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${pid}/verify-batch`)
+      .set('Cookie', cookie)
+      .send({
+        plates: [
+          { printer_id: printerId, material_id: materialId,
+            print_time_minutes: 120, plastic_grams: 50, items_per_plate: 2 },
+          { printer_id: printerId, material_id: materialId,
+            print_time_minutes: 60, plastic_grams: 20, items_per_plate: 3 },
+        ],
+        preProcessingMinutes: 5,
+        postProcessingMinutes: 10,
+        hourlyRate: 40,
+        supplies: [{ price_excl_vat: 0.50, quantity: 2 }],
+        itemsPerSet: 2,
+        projectProductionCost: 999,  // high → actual cost cheaper → sign '+'
+        projectSellingPrice: 1500,
+      });
+
+    expect(res.status).toBe(200);
+    expect(typeof res.body.totalBatchCost).toBe('number');
+    expect(typeof res.body.sellableUnits).toBe('number');
+    expect(res.body.sellableUnits).toBe(2); // floor((2+3)/2) = 2
+    expect(res.body.vsProductionCost).toBeDefined();
+    expect(res.body.vsProductionCost.sign).toBe('+');
+    expect(res.body.vsSellingPrice).toBeDefined();
+  });
+
+  test('sellableUnits=0 case — actualCostPerUnit is Infinity', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${pid}/verify-batch`)
+      .set('Cookie', cookie)
+      .send({
+        plates: [
+          { printer_id: printerId, material_id: materialId,
+            print_time_minutes: 60, plastic_grams: 20, items_per_plate: 1 },
+        ],
+        preProcessingMinutes: 0,
+        postProcessingMinutes: 0,
+        hourlyRate: 40,
+        supplies: [],
+        itemsPerSet: 5,   // 1 piece < 5 per set → 0 sellable units
+        projectProductionCost: 10,
+        projectSellingPrice: 20,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.sellableUnits).toBe(0);
+    // JSON serializes Infinity as null
+    expect(res.body.actualCostPerUnit === null || res.body.actualCostPerUnit === Infinity || !Number.isFinite(res.body.actualCostPerUnit)).toBe(true);
+  });
+
+  test('requires auth', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${pid}/verify-batch`)
+      .send({ plates: [], itemsPerSet: 1, projectProductionCost: 10, projectSellingPrice: 20 });
+    expect(res.status).toBe(401);
+  });
+});
+
 // Clean up
 afterAll(() => {
   if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);

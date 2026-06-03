@@ -465,6 +465,112 @@ function calculateProject(opts) {
   };
 }
 
+/* ------------------------------------------------------------------ */
+/*  Production Verification (ephemeral spot-check, no DB)              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Orchestrates a batch verification entirely in memory — no project, no DB.
+ * Used by the Verify Batch modal and the POST /api/projects/:id/verify-batch route.
+ *
+ * @param {object} opts
+ *   - plates: Array of enriched plate objects with embedded printer/material fields:
+ *       { print_time_minutes, plastic_grams, items_per_plate,
+ *         risk_multiplier (default 1), pre_processing_minutes (ignored here),
+ *         post_processing_minutes (ignored here), material_waste_grams (default 0),
+ *         printer_purchase_price, printer_earn_back_months, printer_kwh_per_hour,
+ *         material_price_per_kg }
+ *   - preProcessingMinutes  {number}  batch-level (all plates combined)
+ *   - postProcessingMinutes {number}  batch-level (all plates combined)
+ *   - hourlyRate            {number}  €/h for time cost
+ *   - supplies: Array<{price_excl_vat, quantity}>
+ *   - itemsPerSet           {number}  pieces per sellable unit
+ *   - projectProductionCost {number}  reference from existing calculation
+ *   - projectSellingPrice   {number}  actual_sales_price or suggestedPrice
+ *   - settings              {object}  for marginIndicator thresholds
+ *
+ * @returns {object}
+ *   { plateCosts, totalMachineCost, timeCost, suppliesCost, totalBatchCost,
+ *     totalPieces, sellableUnits, actualCostPerUnit,
+ *     vsProductionCost: { reference, delta, deltaPct, sign, indicator },
+ *     vsSellingPrice:   { reference, delta, deltaPct, sign, indicator } }
+ */
+function calculateVerification(opts) {
+  const {
+    plates = [],
+    preProcessingMinutes = 0,
+    postProcessingMinutes = 0,
+    hourlyRate = 40,
+    supplies = [],
+    itemsPerSet = 1,
+    projectProductionCost = 0,
+    projectSellingPrice = 0,
+    settings = {},
+  } = opts;
+
+  const greenThreshold  = Number(settings.margin_green_pct)  || 30;
+  const orangeThreshold = Number(settings.margin_orange_pct) || 5;
+
+  // Per-plate machine costs — each plate carries embedded printer/material
+  const plateCosts = plates.map(plate => {
+    const printer = {
+      purchase_price:   plate.printer_purchase_price   || 0,
+      earn_back_months: plate.printer_earn_back_months || 24,
+      kwh_per_hour:     plate.printer_kwh_per_hour     || 0,
+    };
+    const material = { price_per_kg: plate.material_price_per_kg || 0 };
+    // risk_multiplier default 1, material_waste_grams default 0 per brief ambiguity defaults
+    const plateFull = {
+      risk_multiplier:         plate.risk_multiplier         || 1,
+      material_waste_grams:    plate.material_waste_grams    || 0,
+      pre_processing_minutes:  0,
+      post_processing_minutes: 0,
+      ...plate,
+    };
+    const s = { hourly_rate: 0, electricity_price_kwh: Number(settings.electricity_price_kwh) || 0.40 };
+    const pc = calculatePlateCosts(plateFull, printer, material, s);
+    return { totalPlateCost: pc.totalPlateCost, itemsPerPlate: plate.items_per_plate || 1 };
+  });
+
+  const totalMachineCost = plateCosts.reduce((s, pc) => s + pc.totalPlateCost, 0);
+
+  // Batch-level time cost (pre + post at the batch level)
+  const timeCost = ((preProcessingMinutes + postProcessingMinutes) / 60) * hourlyRate;
+
+  // Supplies cost
+  const suppliesCost = calculateExtraCosts(supplies);
+
+  const totalBatchCost = totalMachineCost + timeCost + suppliesCost;
+
+  const totalPieces   = plateCosts.reduce((s, pc) => s + pc.itemsPerPlate, 0);
+  const sellableUnits = Math.floor(totalPieces / (itemsPerSet || 1));
+  const actualCostPerUnit = sellableUnits === 0 ? Infinity : totalBatchCost / sellableUnits;
+
+  function makeComparison(reference) {
+    if (!Number.isFinite(actualCostPerUnit) || reference === 0) {
+      return { reference, delta: null, deltaPct: null, sign: null, indicator: 'red' };
+    }
+    const delta    = reference - actualCostPerUnit; // positive = cheaper than reference
+    const deltaPct = (delta / reference) * 100;
+    const sign     = delta >= 0 ? '+' : '-';
+    const indicator = delta >= 0 ? 'green' : 'red';
+    return { reference, delta, deltaPct, sign, indicator };
+  }
+
+  return {
+    plateCosts,
+    totalMachineCost,
+    timeCost,
+    suppliesCost,
+    totalBatchCost,
+    totalPieces,
+    sellableUnits,
+    actualCostPerUnit,
+    vsProductionCost: makeComparison(projectProductionCost),
+    vsSellingPrice:   makeComparison(projectSellingPrice),
+  };
+}
+
 module.exports = {
   calculatePlateCosts,
   calculatePerItemCosts,
@@ -476,4 +582,5 @@ module.exports = {
   calculateActualMargin,
   marginIndicator,
   calculateProject,
+  calculateVerification,
 };

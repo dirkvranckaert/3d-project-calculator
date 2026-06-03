@@ -219,6 +219,43 @@ Client: each attachment sub-row's last `<td>` (the Remove-button cell) now also 
 ### Main Files list still excludes test-print files (intentional)
 `GET /api/projects/:id/files` filters `pp.is_test_print = 0` — unchanged. Test-print files appear **only** via the per-attachment download link, not in the main Files section.
 
+## Production Verification Tool (added 2026-06-03)
+
+### Purpose
+Ephemeral spot-check from a project detail page: upload one or more .3mf files, assign printer and material, enter processing time and packaging costs, and see whether the actual batch cost per sellable unit is above or below the reference production cost and selling price. Nothing is persisted.
+
+### Calc engine — `calculateVerification(opts)`
+New pure function exported from `calc.js`. Orchestrates batch cost independently of `calculateProject` (no project, no DB).
+
+**opts:**
+- `plates` — array of enriched plate objects with embedded `printer_purchase_price`, `printer_earn_back_months`, `printer_kwh_per_hour`, `material_price_per_kg`, `print_time_minutes`, `plastic_grams`, `items_per_plate`
+- `preProcessingMinutes`, `postProcessingMinutes` — batch-level (not per plate)
+- `hourlyRate` — €/h for time cost
+- `supplies` — `Array<{price_excl_vat, quantity}>`
+- `itemsPerSet` — pieces per sellable unit; `sellableUnits = Math.floor(totalPieces / itemsPerSet)`
+- `projectProductionCost`, `projectSellingPrice` — reference values passed in from the frontend
+- `settings` — for `electricity_price_kwh`; `risk_multiplier` defaults to 1; `material_waste_grams` defaults to 0
+
+**Returns:**
+`{ plateCosts, totalMachineCost, timeCost, suppliesCost, totalBatchCost, totalPieces, sellableUnits, actualCostPerUnit (Infinity when 0 sellable), vsProductionCost, vsSellingPrice }`
+
+Each `vs*` comparison: `{ reference, delta (reference − actual; positive = cheaper), deltaPct, sign ('+'/'-'), indicator ('green'/'red') }`.
+
+### Backend — `POST /api/projects/:projectId/verify-batch`
+Sits behind `requireAuth`. No persistence.
+
+**Body:** `{ plates: Array<{printer_id, material_id, print_time_minutes, plastic_grams, items_per_plate}>, preProcessingMinutes, postProcessingMinutes, hourlyRate, supplies, itemsPerSet, projectProductionCost, projectSellingPrice }`
+
+Route looks up printer and material from DB, calls `resolveKwh` (module-scope helper extracted to avoid duplication with `buildTestPrints`), then calls `calc.calculateVerification` and returns the result.
+
+### Frontend
+- **Modal:** `<div id="verify-modal">` added to `index.html`, same `.modal-overlay` + `.modal-header` + `[data-close]` + Escape pattern as other modals.
+- **Trigger:** "Verify batch" button in `renderPricingSection()`.
+- **State:** `verifyProjectId`, `verifyProjectRef`, `verifyPlates[]`, `verifySupplies[]`, `verifyPreMinutes`, `verifyPostMinutes`, `verifyHourlyRate` in module-level state.
+- **Functions:** `openVerifyModal(projectId)`, `renderVerifyModal()`, `verifyHandleFiles(fileList)`, `runVerification()`, `renderVerifyResult(result, ref)` — plus small helpers for plate/supply CRUD.
+- **3MF parsing:** each uploaded file is POSTed to `POST /api/parse-3mf` (existing endpoint, no storage); printer and material are auto-matched using the same `norm()` fuzzy logic as the Import 3MF dialog.
+- **`resolveKwh(db, printerId, materialType)`:** extracted as a module-scope function in `server.js` (was previously inlined inside `buildTestPrints`). The `buildTestPrints` inner usage was updated to call the module-scope version.
+
 ## Architecture guide
 
 The full house-style spec: `/Users/dirkvranckaert/Documents/personal-assistant/docs/app-architecture-guide.md`

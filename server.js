@@ -234,6 +234,20 @@ app.delete('/api/extra-costs/:id', (req, res) => {
 function normName(s) { return String(s || '').toLowerCase().replace(/[\s\-_]+/g, '').replace('lab', ''); }
 
 /**
+ * Resolve printer kwh_per_hour for a given printer_id + material_type.
+ * Strategy: exact match → base type (first word) → PLA fallback.
+ * Extracted at module scope so the verify-batch route can reuse it.
+ */
+function resolveKwh(db, printerId, materialType) {
+  if (!printerId) return 0;
+  const mt = materialType || 'PLA';
+  let elec = db.prepare('SELECT kwh_per_hour FROM printer_electricity WHERE printer_id = ? AND material_type = ?').get(printerId, mt);
+  if (!elec) elec = db.prepare('SELECT kwh_per_hour FROM printer_electricity WHERE printer_id = ? AND material_type = ?').get(printerId, mt.split(/\s/)[0]);
+  if (!elec) elec = db.prepare('SELECT kwh_per_hour FROM printer_electricity WHERE printer_id = ? AND material_type = ?').get(printerId, 'PLA');
+  return elec ? elec.kwh_per_hour : 0;
+}
+
+/**
  * Build the test_prints and test_print_plates arrays for a project.
  * Returns real project_test_prints rows with attachmentBreakdowns,
  * plus synthetic orphan entries for is_test_print=1 plates with no test_print_id.
@@ -243,16 +257,6 @@ function buildTestPrints(db, projectId, settings) {
     hourly_rate: Number(settings.hourly_rate) || 40,
     electricity_price_kwh: Number(settings.electricity_price_kwh) || 0.40,
   };
-
-  // Helper: resolve kwh for a plate row
-  function resolveKwh(plate) {
-    if (!plate.printer_id) return 0;
-    const mt = plate.material_type || 'PLA';
-    let elec = db.prepare('SELECT kwh_per_hour FROM printer_electricity WHERE printer_id = ? AND material_type = ?').get(plate.printer_id, mt);
-    if (!elec) elec = db.prepare('SELECT kwh_per_hour FROM printer_electricity WHERE printer_id = ? AND material_type = ?').get(plate.printer_id, mt.split(/\s/)[0]);
-    if (!elec) elec = db.prepare('SELECT kwh_per_hour FROM printer_electricity WHERE printer_id = ? AND material_type = ?').get(plate.printer_id, 'PLA');
-    return elec ? elec.kwh_per_hour : 0;
-  }
 
   // Query all test-print plates for this project (for printer/material selects)
   const allTestPrintPlates = db.prepare(`
@@ -268,7 +272,7 @@ function buildTestPrints(db, projectId, settings) {
   `).all(projectId);
 
   for (const pl of allTestPrintPlates) {
-    pl.printer_kwh_per_hour = resolveKwh(pl);
+    pl.printer_kwh_per_hour = resolveKwh(db, pl.printer_id, pl.material_type);
   }
 
   // Helper: compute plate cost
@@ -1394,6 +1398,85 @@ app.post('/api/materials/:id/price-impact', (req, res) => {
 app.post('/api/calculate', (req, res) => {
   const settings = getAllSettings(getDb());
   const result = calc.calculateProject({ ...req.body, settings });
+  res.json(result);
+});
+
+/* ------------------------------------------------------------------ */
+/*  Production Verification endpoint (ephemeral, no persistence)       */
+/* ------------------------------------------------------------------ */
+app.post('/api/projects/:projectId/verify-batch', (req, res) => {
+  const db = getDb();
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.projectId);
+  if (!project) return res.status(404).json({ error: 'Not found' });
+
+  const {
+    plates = [],
+    preProcessingMinutes = 0,
+    postProcessingMinutes = 0,
+    hourlyRate,
+    supplies = [],
+    projectProductionCost = 0,
+    projectSellingPrice = 0,
+    itemsPerSet = project.items_per_set || 1,
+  } = req.body;
+
+  const settings = getAllSettings(db);
+  const effectiveHourlyRate = hourlyRate !== undefined ? Number(hourlyRate) : (Number(settings.hourly_rate) || 40);
+
+  // Enrich each plate with printer + material data from DB, using same resolveKwh logic
+  const enrichedPlates = plates.map(pl => {
+    const printer_id  = pl.printer_id  ? Number(pl.printer_id)  : null;
+    const material_id = pl.material_id ? Number(pl.material_id) : null;
+
+    let printer_purchase_price   = 0;
+    let printer_earn_back_months = 24;
+    let printer_kwh_per_hour     = 0;
+    let material_price_per_kg    = 0;
+    let material_type            = 'PLA';
+
+    if (printer_id) {
+      const pr = db.prepare('SELECT purchase_price, earn_back_months FROM printers WHERE id = ?').get(printer_id);
+      if (pr) {
+        printer_purchase_price   = pr.purchase_price   || 0;
+        printer_earn_back_months = pr.earn_back_months || 24;
+      }
+    }
+    if (material_id) {
+      const mat = db.prepare('SELECT price_per_kg, material_type FROM materials WHERE id = ?').get(material_id);
+      if (mat) {
+        material_price_per_kg = mat.price_per_kg  || 0;
+        material_type         = mat.material_type || 'PLA';
+      }
+    }
+    if (printer_id) {
+      printer_kwh_per_hour = resolveKwh(db, printer_id, material_type);
+    }
+
+    return {
+      print_time_minutes:   Number(pl.print_time_minutes)  || 0,
+      plastic_grams:        Number(pl.plastic_grams)        || 0,
+      items_per_plate:      Number(pl.items_per_plate)      || 1,
+      risk_multiplier:      1,
+      material_waste_grams: 0,
+      printer_purchase_price,
+      printer_earn_back_months,
+      printer_kwh_per_hour,
+      material_price_per_kg,
+    };
+  });
+
+  const result = calc.calculateVerification({
+    plates: enrichedPlates,
+    preProcessingMinutes: Number(preProcessingMinutes) || 0,
+    postProcessingMinutes: Number(postProcessingMinutes) || 0,
+    hourlyRate: effectiveHourlyRate,
+    supplies: supplies.map(s => ({ price_excl_vat: Number(s.price_excl_vat) || 0, quantity: Number(s.quantity) || 0 })),
+    itemsPerSet: Number(itemsPerSet) || 1,
+    projectProductionCost: Number(projectProductionCost) || 0,
+    projectSellingPrice: Number(projectSellingPrice) || 0,
+    settings,
+  });
+
   res.json(result);
 });
 
