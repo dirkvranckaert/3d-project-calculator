@@ -15,9 +15,16 @@ process.env.DB_PATH = testDbPath;
 const dataDir = path.dirname(testDbPath);
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
+// Remove DB file and its WAL/SHM siblings (stale siblings cause login 500)
+function removeDbFiles(dbPath) {
+  for (const p of [dbPath, dbPath + '-wal', dbPath + '-shm']) {
+    fs.rmSync(p, { force: true });
+  }
+}
+
 // Clean up test DB before each run
 beforeAll(() => {
-  if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
+  removeDbFiles(testDbPath);
 });
 
 const { app } = require('../server');
@@ -975,5 +982,5 @@ describe('Test-print processing inputs + risk-lock', () => {
 
 // Clean up
 afterAll(() => {
-  if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
+  removeDbFiles(testDbPath);
 });
