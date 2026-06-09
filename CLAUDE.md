@@ -85,24 +85,29 @@ Open http://localhost:3003
 
 ## Local test server (pm2)
 
-The fixed local test port is **3010** (not 3003). A pm2 entry named `project-calculator` runs the server locally in development mode.
+A pm2 entry named `project-calculator` runs the server locally in development mode.
 
 - **pm2 process name:** `project-calculator`
-- **Local test port:** 3010
-- **Config:** `.env` must have `PORT=3010` and `NODE_ENV=development`
-- **Prod port on app3-node:** 3459 (unchanged — do not touch)
+- **Local test port:** no fixed value — **3010 is taken by the Haply app** (persistent, always on). Starting on 3010 causes `EADDRINUSE` / crash-loop. Use a free port instead (e.g. 3011).
+- **Config:** `.env` must have `PORT=<free-port>` and `NODE_ENV=development`
+- **Prod port on app3-node:** 3459 (set server-side in the ecosystem/.env — unaffected by local config; do not touch)
 - **Bare `npm start` default:** 3003 (no `.env` override)
 
-Restart command:
+Before picking a local port, verify it is free:
 ```bash
-PATH="/opt/homebrew/bin:$PATH" pm2 restart project-calculator
+lsof -nP -iTCP:<port> -sTCP:LISTEN
+```
+
+Restart with a specific port (e.g. 3011):
+```bash
+PATH="/opt/homebrew/bin:$PATH" PORT=3011 pm2 restart project-calculator --update-env
 ```
 
 To start from scratch (e.g. after cwd change):
 ```bash
 PATH="/opt/homebrew/bin:$PATH" pm2 delete project-calculator
 cd /Users/dirkvranckaert/Documents/app3/printseed/project-calculator
-PATH="/opt/homebrew/bin:$PATH" PORT=3010 NODE_ENV=development pm2 start server.js --name project-calculator
+PATH="/opt/homebrew/bin:$PATH" PORT=3011 NODE_ENV=development pm2 start server.js --name project-calculator
 PATH="/opt/homebrew/bin:$PATH" pm2 save
 ```
 
