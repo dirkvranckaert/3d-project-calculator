@@ -1145,6 +1145,233 @@ describe('calculateVerification', () => {
 });
 
 /* ================================================================== */
+/*  calculateVerification — multi-plate aggregation (task #352)        */
+/* ================================================================== */
+describe('calculateVerification — multi-plate aggregation', () => {
+  const basePlate = {
+    print_time_minutes: 60,
+    plastic_grams: 30,
+    items_per_plate: 2,
+    risk_multiplier: 1,
+    material_waste_grams: 0,
+    printer_purchase_price: 812.43,
+    printer_earn_back_months: 24,
+    printer_kwh_per_hour: 0.11,
+    material_price_per_kg: 17.38,
+  };
+
+  test('totalPieces = Σ items_per_plate across all plates of all files', () => {
+    // Simulates 2 files × 2 plates each: 3 + 2 + 4 + 1 = 10 items total
+    const plates = [
+      { ...basePlate, items_per_plate: 3, print_time_minutes: 40 },
+      { ...basePlate, items_per_plate: 2, print_time_minutes: 50 },
+      { ...basePlate, items_per_plate: 4, print_time_minutes: 30 },
+      { ...basePlate, items_per_plate: 1, print_time_minutes: 60 },
+    ];
+    const result = calc.calculateVerification({
+      plates, preProcessingMinutes: 0, postProcessingMinutes: 0,
+      hourlyRate: 40, supplies: [], itemsPerSet: 1,
+      projectProductionCost: 10, projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+
+    expect(result.totalPieces).toBe(10);
+    expect(result.plateCosts).toHaveLength(4);
+  });
+
+  test('totalMachineCost = Σ per-plate machine costs across all plates', () => {
+    // Two plates: verify sum equals individual computations
+    const p1 = { ...basePlate, items_per_plate: 3, print_time_minutes: 40 };
+    const p2 = { ...basePlate, items_per_plate: 2, print_time_minutes: 60 };
+
+    const combined = calc.calculateVerification({
+      plates: [p1, p2], preProcessingMinutes: 0, postProcessingMinutes: 0,
+      hourlyRate: 40, supplies: [], itemsPerSet: 1,
+      projectProductionCost: 10, projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+
+    const single1 = calc.calculateVerification({
+      plates: [p1], preProcessingMinutes: 0, postProcessingMinutes: 0,
+      hourlyRate: 40, supplies: [], itemsPerSet: 1,
+      projectProductionCost: 10, projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+    const single2 = calc.calculateVerification({
+      plates: [p2], preProcessingMinutes: 0, postProcessingMinutes: 0,
+      hourlyRate: 40, supplies: [], itemsPerSet: 1,
+      projectProductionCost: 10, projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+
+    expect(combined.totalMachineCost).toBeCloseTo(
+      single1.totalMachineCost + single2.totalMachineCost, 6
+    );
+    // Regression fence: reverting multi-plate sum would give only one plate's cost
+    expect(combined.totalMachineCost).toBeGreaterThan(single1.totalMachineCost);
+    expect(combined.totalMachineCost).toBeGreaterThan(single2.totalMachineCost);
+  });
+
+  test('printingCost === totalMachineCost (named alias)', () => {
+    const result = calc.calculateVerification({
+      plates: [basePlate], preProcessingMinutes: 0, postProcessingMinutes: 0,
+      hourlyRate: 40, supplies: [], itemsPerSet: 1,
+      projectProductionCost: 10, projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+    expect(result.printingCost).toBeCloseTo(result.totalMachineCost, 6);
+  });
+
+  test('postProcessingCost === timeCost (named alias)', () => {
+    const result = calc.calculateVerification({
+      plates: [basePlate], preProcessingMinutes: 20, postProcessingMinutes: 10,
+      hourlyRate: 60, supplies: [], itemsPerSet: 1,
+      projectProductionCost: 10, projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+    expect(result.postProcessingCost).toBeCloseTo(result.timeCost, 6);
+    // = (20+10)/60 * 60 = 30
+    expect(result.postProcessingCost).toBeCloseTo(30, 6);
+  });
+
+  test('printing and post-processing are shown as distinct components of totalBatchCost', () => {
+    const result = calc.calculateVerification({
+      plates: [basePlate, basePlate],
+      preProcessingMinutes: 10, postProcessingMinutes: 20,
+      hourlyRate: 40,
+      supplies: [{ price_excl_vat: 1.00, quantity: 3 }],
+      itemsPerSet: 1,
+      projectProductionCost: 10, projectSellingPrice: 20,
+      settings: defaultSettings,
+    });
+    // post-proc = (10+20)/60 * 40 = 20
+    expect(result.postProcessingCost).toBeCloseTo(20, 6);
+    // printing = totalMachineCost > 0
+    expect(result.printingCost).toBeGreaterThan(0);
+    // totalBatchCost = printing + post-proc + supplies
+    expect(result.totalBatchCost).toBeCloseTo(
+      result.printingCost + result.postProcessingCost + result.suppliesCost, 6
+    );
+    // Regression fence: if post-proc was merged into printing, postProcessingCost would be 0
+    expect(result.postProcessingCost).toBeGreaterThan(0);
+  });
+});
+
+/* ================================================================== */
+/*  calculateVerification — actual margin on batch (task #352)         */
+/* ================================================================== */
+describe('calculateVerification — actual margin on batch', () => {
+  const simplePlate = {
+    print_time_minutes: 60,
+    plastic_grams: 50,
+    items_per_plate: 4,
+    risk_multiplier: 1,
+    material_waste_grams: 0,
+    printer_purchase_price: 812.43,
+    printer_earn_back_months: 24,
+    printer_kwh_per_hour: 0.11,
+    material_price_per_kg: 17.38,
+  };
+
+  test('actualMarginOnBatch is null when actualSellingTotalInclVat is 0 (default)', () => {
+    const result = calc.calculateVerification({
+      plates: [simplePlate],
+      preProcessingMinutes: 0, postProcessingMinutes: 0,
+      hourlyRate: 40, supplies: [], itemsPerSet: 1,
+      projectProductionCost: 5, projectSellingPrice: 10,
+      settings: defaultSettings,
+    });
+    expect(result.actualMarginOnBatch).toBeNull();
+  });
+
+  test('actualMarginOnBatch is null when actualSellingTotalInclVat is not provided', () => {
+    const result = calc.calculateVerification({
+      plates: [simplePlate],
+      preProcessingMinutes: 0, postProcessingMinutes: 0,
+      hourlyRate: 40, supplies: [], itemsPerSet: 1,
+      projectProductionCost: 5, projectSellingPrice: 10,
+      settings: defaultSettings,
+      // actualSellingTotalInclVat not passed at all
+    });
+    expect(result.actualMarginOnBatch).toBeNull();
+  });
+
+  test('netRevenue = actualSellingTotalInclVat / 1.21 (VERIFY_VAT_RATE = 0.21)', () => {
+    const inclVat = 121; // convenient: 121 / 1.21 = 100.00 exactly
+    const result = calc.calculateVerification({
+      plates: [simplePlate],
+      preProcessingMinutes: 0, postProcessingMinutes: 0,
+      hourlyRate: 40, supplies: [], itemsPerSet: 1,
+      projectProductionCost: 5, projectSellingPrice: 10,
+      actualSellingTotalInclVat: inclVat,
+      settings: defaultSettings,
+    });
+    expect(result.actualMarginOnBatch).not.toBeNull();
+    expect(result.actualMarginOnBatch.netRevenue).toBeCloseTo(100, 6);
+    // Regression fence: if VAT rate were wrong (e.g. 0), netRevenue would equal inclVat
+    expect(result.actualMarginOnBatch.netRevenue).toBeLessThan(inclVat);
+  });
+
+  test('absoluteMargin = netRevenue - totalBatchCost', () => {
+    const inclVat = 50;
+    const result = calc.calculateVerification({
+      plates: [simplePlate],
+      preProcessingMinutes: 0, postProcessingMinutes: 0,
+      hourlyRate: 40, supplies: [], itemsPerSet: 1,
+      projectProductionCost: 5, projectSellingPrice: 10,
+      actualSellingTotalInclVat: inclVat,
+      settings: defaultSettings,
+    });
+    const amb = result.actualMarginOnBatch;
+    expect(amb.absoluteMargin).toBeCloseTo(amb.netRevenue - result.totalBatchCost, 6);
+    // Regression fence: if absoluteMargin were computed from inclVat instead of netRevenue, it would differ
+    const wrongAbsolute = inclVat - result.totalBatchCost;
+    expect(Math.abs(amb.absoluteMargin - wrongAbsolute)).toBeGreaterThan(0.01);
+  });
+
+  test('marginPct = absoluteMargin / netRevenue * 100', () => {
+    const inclVat = 121; // netRevenue = 100
+    const result = calc.calculateVerification({
+      plates: [simplePlate],
+      preProcessingMinutes: 0, postProcessingMinutes: 0,
+      hourlyRate: 40, supplies: [], itemsPerSet: 1,
+      projectProductionCost: 5, projectSellingPrice: 10,
+      actualSellingTotalInclVat: inclVat,
+      settings: defaultSettings,
+    });
+    const amb = result.actualMarginOnBatch;
+    const expectedPct = (amb.absoluteMargin / amb.netRevenue) * 100;
+    expect(amb.marginPct).toBeCloseTo(expectedPct, 6);
+  });
+
+  test('negative margin when batch cost exceeds net revenue', () => {
+    // Force totalBatchCost to be large: use very expensive plate
+    const expensivePlate = {
+      ...simplePlate,
+      print_time_minutes: 10000, // very long print → high machine cost
+    };
+    const result = calc.calculateVerification({
+      plates: [expensivePlate],
+      preProcessingMinutes: 0, postProcessingMinutes: 0,
+      hourlyRate: 40, supplies: [], itemsPerSet: 1,
+      projectProductionCost: 5, projectSellingPrice: 10,
+      actualSellingTotalInclVat: 1, // tiny selling price → loss
+      settings: defaultSettings,
+    });
+    expect(result.actualMarginOnBatch.absoluteMargin).toBeLessThan(0);
+    expect(result.actualMarginOnBatch.marginPct).toBeLessThan(0);
+    expect(result.actualMarginOnBatch.indicator).toBe('red');
+    // Regression fence: if negative margin was suppressed to 0, this would fail
+    expect(result.actualMarginOnBatch.absoluteMargin).not.toBe(0);
+  });
+
+  test('VERIFY_VAT_RATE constant is exported and equals 0.21', () => {
+    // This test fails if someone changes the constant to something else without noticing
+    expect(calc.VERIFY_VAT_RATE).toBeCloseTo(0.21, 6);
+  });
+});
+
+/* ================================================================== */
 /*  Test-prints path parity with calculateProject (cost-only, no margin) */
 /* ================================================================== */
 describe('test-prints cost parity with calculateProject', () => {

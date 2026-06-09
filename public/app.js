@@ -21,11 +21,12 @@ let currentDetailTab = 'print'; // 'print' | 'design'
 // Verify Batch modal state
 let verifyProjectId = null;
 let verifyProjectRef = null; // { itemsPerSet, productionCost, sellingPrice, sellingPriceLabel, hourlyRate }
-let verifyPlates = [];       // [{ filename, parsedResult, printerId, materialId, itemsPerPlate }]
+let verifyPlates = [];       // [{ filename, parsedResult, printerId, materialId, plateItems: number[] }]
 let verifySupplies = [];     // [{ description, price_excl_vat, quantity }]
 let verifyPreMinutes = 0;
 let verifyPostMinutes = 0;
 let verifyHourlyRate = 40;
+let verifyActualSelling = 0; // actual selling price incl. VAT for the whole batch
 let _verifyRecomputeTimer = null;
 
 /* ================================================================== */
@@ -3217,8 +3218,9 @@ function openVerifyModal(projectId) {
   const productionCost = pricing ? pricing.productionCost : 0;
   const actualPrice    = p.actual_sales_price > 0 ? p.actual_sales_price : null;
   const suggestedPrice = pricing ? pricing.suggestedPrice : 0;
-  const sellingPrice     = actualPrice !== null ? actualPrice : suggestedPrice;
-  const sellingPriceLabel = actualPrice !== null ? 'Actual selling price' : 'Suggested price';
+  const sellingPrice      = actualPrice !== null ? actualPrice : suggestedPrice;
+  // Label rename per task #352: project's stored/calculated price → "Calculated selling price"
+  const sellingPriceLabel = actualPrice !== null ? 'Calculated selling price' : 'Suggested price';
 
   verifyProjectRef = {
     itemsPerSet:       p.items_per_set || 1,
@@ -3229,11 +3231,12 @@ function openVerifyModal(projectId) {
   };
 
   // Reset state
-  verifyPlates      = [];
-  verifySupplies    = [];
-  verifyPreMinutes  = 0;
-  verifyPostMinutes = 0;
-  verifyHourlyRate  = verifyProjectRef.hourlyRate;
+  verifyPlates        = [];
+  verifySupplies      = [];
+  verifyPreMinutes    = 0;
+  verifyPostMinutes   = 0;
+  verifyHourlyRate    = verifyProjectRef.hourlyRate;
+  verifyActualSelling = 0;
 
   renderVerifyModal();
   openModal('verify-modal');
@@ -3243,27 +3246,51 @@ function renderVerifyModal() {
   const ref = verifyProjectRef;
   if (!ref) return;
 
-  // Build plates rows HTML
+  // Build plates rows HTML — one file-level row + per-plate sub-rows per file
   let platesRows = '';
-  verifyPlates.forEach((plate, idx) => {
+  let totalItemsAllFiles = 0;
+  verifyPlates.forEach((file, fileIdx) => {
     const printerOptions = printers.map(pr =>
-      `<option value="${pr.id}" ${plate.printerId === pr.id ? 'selected' : ''}>${esc(pr.name)}</option>`
+      `<option value="${pr.id}" ${file.printerId === pr.id ? 'selected' : ''}>${esc(pr.name)}</option>`
     ).join('');
     const materialOptions = materials.map(m =>
-      `<option value="${m.id}" ${plate.materialId === m.id ? 'selected' : ''}>${esc(m.name)}</option>`
+      `<option value="${m.id}" ${file.materialId === m.id ? 'selected' : ''}>${esc(m.name)}</option>`
     ).join('');
-    platesRows += `<tr>
-      <td style="font-size:12px;word-break:break-all">${esc(plate.filename)}</td>
-      <td><select onchange="verifySetPlateField(${idx},'printerId',+this.value);verifyScheduleRecompute()">
+    const srcPlates = (file.parsedResult && file.parsedResult.plates && file.parsedResult.plates.length > 0)
+      ? file.parsedResult.plates
+      : [{ printTimeMinutes: 0, weightGrams: 0, index: 1 }];
+    // File-level row: filename + printer/material selects + remove button
+    platesRows += `<tr style="background:var(--bg-subtle,#f8f8f8)">
+      <td style="font-size:12px;word-break:break-all"><strong>${esc(file.filename)}</strong>
+        <span style="font-size:11px;color:var(--text-muted);margin-left:4px">(${srcPlates.length} plate${srcPlates.length !== 1 ? 's' : ''})</span>
+      </td>
+      <td><select onchange="verifySetPlateField(${fileIdx},'printerId',+this.value);verifyScheduleRecompute()">
         <option value="">-- printer --</option>${printerOptions}
       </select></td>
-      <td><select onchange="verifySetPlateField(${idx},'materialId',+this.value);verifyScheduleRecompute()">
+      <td><select onchange="verifySetPlateField(${fileIdx},'materialId',+this.value);verifyScheduleRecompute()">
         <option value="">-- material --</option>${materialOptions}
       </select></td>
-      <td><input type="number" min="1" value="${plate.itemsPerPlate || 1}" style="width:60px"
-        onchange="verifySetPlateField(${idx},'itemsPerPlate',+this.value||1);verifyScheduleRecompute()"></td>
-      <td><button class="btn btn-icon btn-sm" onclick="verifyRemovePlate(${idx})" title="Remove">&times;</button></td>
+      <td></td><td></td><td></td>
+      <td><button class="btn btn-icon btn-sm" onclick="verifyRemovePlate(${fileIdx})" title="Remove">&times;</button></td>
     </tr>`;
+    // Per-plate sub-rows
+    srcPlates.forEach((srcPlate, plateIdx) => {
+      const itemCount = (file.plateItems && file.plateItems[plateIdx] != null) ? file.plateItems[plateIdx] : 1;
+      totalItemsAllFiles += itemCount;
+      const tMin = srcPlate.printTimeMinutes || 0;
+      const wGr  = srcPlate.weightGrams      || 0;
+      platesRows += `<tr>
+        <td style="font-size:12px;padding-left:20px;color:var(--text-muted)">
+          Plate ${srcPlate.index || (plateIdx + 1)}
+        </td>
+        <td></td><td></td>
+        <td style="font-size:12px">${tMin > 0 ? Math.round(tMin) + ' min' : '—'}</td>
+        <td style="font-size:12px">${wGr > 0 ? wGr.toFixed(1) + ' g' : '—'}</td>
+        <td><input type="number" min="1" value="${itemCount}" style="width:60px"
+          onchange="verifySetPlateItemCount(${fileIdx},${plateIdx},+this.value||1);verifyScheduleRecompute()"></td>
+        <td></td>
+      </tr>`;
+    });
   });
 
   // Build supplies rows HTML
@@ -3289,12 +3316,15 @@ function renderVerifyModal() {
     </div>
 
     <h4 style="margin:0 0 6px">3MF Files</h4>
-    <table class="eh-table" style="width:100%;margin-bottom:8px">
+    <table class="eh-table" style="width:100%;margin-bottom:4px">
       <thead><tr>
-        <th>File</th><th>Printer</th><th>Material</th><th>Items/plate</th><th></th>
+        <th>File / Plate</th><th>Printer</th><th>Material</th><th>Print time</th><th>Weight</th><th>Items</th><th></th>
       </tr></thead>
       <tbody id="verify-plates-body">${platesRows}</tbody>
     </table>
+    ${verifyPlates.length > 0 ? `<div style="text-align:right;font-size:12px;margin-bottom:8px;color:var(--text-muted)">
+      <strong>Total items in print file(s): ${totalItemsAllFiles}</strong>
+    </div>` : ''}
     <div style="margin-bottom:12px">
       <input type="file" id="verify-file-input" accept=".3mf" multiple style="display:none"
         onchange="verifyHandleFiles(this.files)">
@@ -3325,6 +3355,13 @@ function renderVerifyModal() {
         onchange="verifyHourlyRate=+this.value||0;verifyScheduleRecompute()">
     </div>
 
+    <h4 style="margin:0 0 6px">My Actual Selling Price</h4>
+    <div class="form-group" style="max-width:280px;margin-bottom:12px">
+      <label>Whole batch, incl. VAT (€) — leave 0 to skip</label>
+      <input type="number" min="0" step="0.01" value="${verifyActualSelling || ''}" placeholder="0.00" class="eh-input"
+        onchange="verifyActualSelling=+this.value||0;verifyScheduleRecompute()">
+    </div>
+
     <h4 style="margin:0 0 6px">Supplies &amp; Packaging</h4>
     <table class="eh-table" style="width:100%;margin-bottom:8px">
       <thead><tr>
@@ -3351,6 +3388,13 @@ function renderVerifyModal() {
 
 function verifySetPlateField(idx, field, value) {
   if (verifyPlates[idx]) verifyPlates[idx][field] = value;
+}
+
+function verifySetPlateItemCount(fileIdx, plateIdx, value) {
+  if (verifyPlates[fileIdx]) {
+    if (!verifyPlates[fileIdx].plateItems) verifyPlates[fileIdx].plateItems = [];
+    verifyPlates[fileIdx].plateItems[plateIdx] = value;
+  }
 }
 
 function verifyRemovePlate(idx) {
@@ -3427,7 +3471,11 @@ async function verifyHandleFiles(fileList) {
         if (matchMat) materialId = matchMat.id;
       }
 
-      verifyPlates.push({ filename: file.name, parsedResult: parsed, printerId, materialId, itemsPerPlate: (parsed?.plates?.[0]?.objectCount) || 1 });
+      // Seed plateItems from objectCount across all plates (multi-plate fix, task #352)
+      const plateItems = (parsed.plates && parsed.plates.length > 0)
+        ? parsed.plates.map(p => p.objectCount || 1)
+        : [1];
+      verifyPlates.push({ filename: file.name, parsedResult: parsed, printerId, materialId, plateItems });
     } catch (err) {
       status.textContent = `Parse error: ${err.message}`;
       return;
@@ -3459,15 +3507,18 @@ async function verifyRecompute() {
   resultDiv.innerHTML = '<em style="color:var(--text-muted);font-size:13px">Calculating…</em>';
 
   try {
-    const platesPayload = verifyPlates.map(p => {
-      const first = p.parsedResult && p.parsedResult.plates && p.parsedResult.plates[0];
-      return {
+    // Flatten all plates from all files (multi-plate fix, task #352)
+    const platesPayload = verifyPlates.flatMap(p => {
+      const srcPlates = (p.parsedResult && p.parsedResult.plates && p.parsedResult.plates.length > 0)
+        ? p.parsedResult.plates
+        : [{ printTimeMinutes: 0, weightGrams: 0 }];
+      return srcPlates.map((srcPlate, plateIdx) => ({
         printer_id:         p.printerId  || null,
         material_id:        p.materialId || null,
-        print_time_minutes: first ? (first.printTimeMinutes || 0) : 0,
-        plastic_grams:      first ? (first.weightGrams      || 0) : 0,
-        items_per_plate:    p.itemsPerPlate || 1,
-      };
+        print_time_minutes: srcPlate.printTimeMinutes || 0,
+        plastic_grams:      srcPlate.weightGrams      || 0,
+        items_per_plate:    (p.plateItems && p.plateItems[plateIdx] != null) ? p.plateItems[plateIdx] : 1,
+      }));
     });
 
     const suppliesPayload = verifySupplies.map(s => ({
@@ -3477,14 +3528,15 @@ async function verifyRecompute() {
     }));
 
     const body = {
-      plates:                platesPayload,
-      preProcessingMinutes:  verifyPreMinutes,
-      postProcessingMinutes: verifyPostMinutes,
-      hourlyRate:            verifyHourlyRate,
-      supplies:              suppliesPayload,
-      itemsPerSet:           verifyProjectRef.itemsPerSet,
-      projectProductionCost: verifyProjectRef.productionCost,
-      projectSellingPrice:   verifyProjectRef.sellingPrice,
+      plates:                     platesPayload,
+      preProcessingMinutes:       verifyPreMinutes,
+      postProcessingMinutes:      verifyPostMinutes,
+      hourlyRate:                 verifyHourlyRate,
+      supplies:                   suppliesPayload,
+      itemsPerSet:                verifyProjectRef.itemsPerSet,
+      projectProductionCost:      verifyProjectRef.productionCost,
+      projectSellingPrice:        verifyProjectRef.sellingPrice,
+      actualSellingTotalInclVat:  verifyActualSelling || 0,
     };
 
     const result = await POST(`/api/projects/${verifyProjectId}/verify-batch`, body);
@@ -3513,15 +3565,18 @@ async function runVerification() {
     if (postEl) verifyPostMinutes = +postEl.value || 0;
     if (rateEl) verifyHourlyRate  = +rateEl.value || 0;
 
-    const platesPayload = verifyPlates.map(p => {
-      const first = p.parsedResult && p.parsedResult.plates && p.parsedResult.plates[0];
-      return {
-        printer_id:          p.printerId  || null,
-        material_id:         p.materialId || null,
-        print_time_minutes:  first ? (first.printTimeMinutes || 0) : 0,
-        plastic_grams:       first ? (first.weightGrams      || 0) : 0,
-        items_per_plate:     p.itemsPerPlate || 1,
-      };
+    // Flatten all plates from all files (multi-plate fix, task #352)
+    const platesPayload = verifyPlates.flatMap(p => {
+      const srcPlates = (p.parsedResult && p.parsedResult.plates && p.parsedResult.plates.length > 0)
+        ? p.parsedResult.plates
+        : [{ printTimeMinutes: 0, weightGrams: 0 }];
+      return srcPlates.map((srcPlate, plateIdx) => ({
+        printer_id:         p.printerId  || null,
+        material_id:        p.materialId || null,
+        print_time_minutes: srcPlate.printTimeMinutes || 0,
+        plastic_grams:      srcPlate.weightGrams      || 0,
+        items_per_plate:    (p.plateItems && p.plateItems[plateIdx] != null) ? p.plateItems[plateIdx] : 1,
+      }));
     });
 
     const suppliesPayload = verifySupplies.map(s => ({
@@ -3531,14 +3586,15 @@ async function runVerification() {
     }));
 
     const body = {
-      plates:                platesPayload,
-      preProcessingMinutes:  verifyPreMinutes,
-      postProcessingMinutes: verifyPostMinutes,
-      hourlyRate:            verifyHourlyRate,
-      supplies:              suppliesPayload,
-      itemsPerSet:           ref.itemsPerSet,
-      projectProductionCost: ref.productionCost,
-      projectSellingPrice:   ref.sellingPrice,
+      plates:                     platesPayload,
+      preProcessingMinutes:       verifyPreMinutes,
+      postProcessingMinutes:      verifyPostMinutes,
+      hourlyRate:                 verifyHourlyRate,
+      supplies:                   suppliesPayload,
+      itemsPerSet:                ref.itemsPerSet,
+      projectProductionCost:      ref.productionCost,
+      projectSellingPrice:        ref.sellingPrice,
+      actualSellingTotalInclVat:  verifyActualSelling || 0,
     };
 
     const result = await POST(`/api/projects/${verifyProjectId}/verify-batch`, body);
@@ -3598,8 +3654,27 @@ function renderVerifyResult(result, ref) {
     ? `<span class="margin-badge ${sellingIndicator(vspDeltaPct)}">${fmtSignPct(vspDeltaPct)}</span>`
     : `<span class="margin-badge red">—</span>`;
 
+  // Actual margin on batch (when Dirk entered an actual selling price)
+  const amb = result.actualMarginOnBatch;
+  const actualMarginBlock = amb ? `
+    <div class="pricing-block" style="border:2px solid var(--${amb.indicator === 'green' ? 'green' : amb.indicator === 'orange' ? 'orange' : 'red'},#ccc);margin-bottom:8px">
+      <h4 style="margin:0 0 4px">Margin on actual selling price</h4>
+      <div style="font-size:12px;margin-bottom:4px">
+        Actual (incl. VAT): <strong>${fmt(amb.actualSellingInclVat)}</strong> &nbsp;·&nbsp;
+        Net (excl. 21% VAT): <strong>${fmt(amb.netRevenue)}</strong>
+      </div>
+      <div class="big-price" style="color:var(--${amb.absoluteMargin >= 0 ? 'green' : 'red'})">
+        ${fmtSign(amb.absoluteMargin)}
+      </div>
+      <div class="sub">
+        <span class="margin-badge ${amb.indicator}">${fmtSignPct(amb.marginPct)}</span>
+        ${amb.absoluteMargin >= 0 ? 'Margin positive' : 'Loss — cost exceeds net revenue'}
+      </div>
+    </div>` : '';
+
   resultDiv.innerHTML = `
     <h4 style="margin:0 0 8px">Result</h4>
+    ${actualMarginBlock}
     <div class="pricing-grid" style="margin-bottom:8px">
       <div class="pricing-block">
         <h4>Total pieces</h4>
@@ -3611,8 +3686,8 @@ function renderVerifyResult(result, ref) {
         <div class="big-price">${cpuFinite ? fmt(cpu) : '—'}</div>
         <div class="sub">Total batch: ${fmt(result.totalBatchCost)}</div>
         <div class="sub" style="font-size:11px;opacity:.7">
-          Machine: ${fmt(result.totalMachineCost)} ·
-          Time: ${fmt(result.timeCost)} ·
+          Printing: ${fmt(result.printingCost)} ·
+          Post-proc: ${fmt(result.postProcessingCost)} ·
           Supplies: ${fmt(result.suppliesCost)}
         </div>
       </div>

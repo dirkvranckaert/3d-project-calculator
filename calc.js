@@ -470,8 +470,28 @@ function calculateProject(opts) {
 /* ------------------------------------------------------------------ */
 
 /**
+ * Belgian standard VAT rate used for the actual-selling-price net-of-VAT
+ * computation in calculateVerification. Defined as a named constant so it
+ * can be changed in one place without hunting for 0.21 literals.
+ */
+const VERIFY_VAT_RATE = 0.21;
+
+/**
  * Orchestrates a batch verification entirely in memory — no project, no DB.
  * Used by the Verify Batch modal and the POST /api/projects/:id/verify-batch route.
+ *
+ * Cost model:
+ *   printingCost      = Σ per-plate (printer_amortisation + electricity + material)
+ *                       via calculatePlateCosts with pre/post = 0
+ *   postProcessingCost = ((preProcessingMinutes + postProcessingMinutes) / 60) * hourlyRate
+ *   suppliesCost      = Σ price_excl_vat * quantity
+ *   totalBatchCost    = printingCost + postProcessingCost + suppliesCost
+ *   actualCostPerUnit = totalBatchCost / sellableUnits
+ *
+ * Actual revenue (when actualSellingTotalInclVat is provided):
+ *   netRevenue        = actualSellingTotalInclVat / (1 + VERIFY_VAT_RATE)
+ *   absoluteMargin    = netRevenue - totalBatchCost
+ *   marginPct         = absoluteMargin / netRevenue * 100
  *
  * @param {object} opts
  *   - plates: Array of enriched plate objects with embedded printer/material fields:
@@ -480,20 +500,23 @@ function calculateProject(opts) {
  *         post_processing_minutes (ignored here), material_waste_grams (default 0),
  *         printer_purchase_price, printer_earn_back_months, printer_kwh_per_hour,
  *         material_price_per_kg }
- *   - preProcessingMinutes  {number}  batch-level (all plates combined)
- *   - postProcessingMinutes {number}  batch-level (all plates combined)
- *   - hourlyRate            {number}  €/h for time cost
+ *   - preProcessingMinutes       {number}  batch-level (all plates combined)
+ *   - postProcessingMinutes      {number}  batch-level (all plates combined)
+ *   - hourlyRate                 {number}  €/h for time cost
  *   - supplies: Array<{price_excl_vat, quantity}>
- *   - itemsPerSet           {number}  pieces per sellable unit
- *   - projectProductionCost {number}  reference from existing calculation
- *   - projectSellingPrice   {number}  actual_sales_price or suggestedPrice
- *   - settings              {object}  for marginIndicator thresholds
+ *   - itemsPerSet                {number}  pieces per sellable unit
+ *   - projectProductionCost      {number}  reference from existing calculation
+ *   - projectSellingPrice        {number}  actual_sales_price or suggestedPrice (labelled "Calculated selling price" in UI)
+ *   - actualSellingTotalInclVat  {number}  Dirk's actual invoice total for this batch, incl. VAT (optional)
+ *   - settings                   {object}  for marginIndicator thresholds
  *
  * @returns {object}
- *   { plateCosts, totalMachineCost, timeCost, suppliesCost, totalBatchCost,
+ *   { plateCosts, totalMachineCost, printingCost, timeCost, postProcessingCost,
+ *     suppliesCost, totalBatchCost,
  *     totalPieces, sellableUnits, actualCostPerUnit,
  *     vsProductionCost: { reference, delta, deltaPct, sign, indicator },
- *     vsSellingPrice:   { reference, delta, deltaPct, sign, indicator } }
+ *     vsSellingPrice:   { reference, delta, deltaPct, sign, indicator },
+ *     actualMarginOnBatch: null | { actualSellingInclVat, netRevenue, absoluteMargin, marginPct, indicator } }
  */
 function calculateVerification(opts) {
   const {
@@ -505,6 +528,7 @@ function calculateVerification(opts) {
     itemsPerSet = 1,
     projectProductionCost = 0,
     projectSellingPrice = 0,
+    actualSellingTotalInclVat = 0,
     settings = {},
   } = opts;
 
@@ -531,8 +555,12 @@ function calculateVerification(opts) {
 
   const totalMachineCost = plateCosts.reduce((s, pc) => s + pc.totalPlateCost, 0);
 
-  // Batch-level time cost (pre + post at the batch level)
+  // Named alias: printing cost = machine-only (printer amortisation + electricity + plastic)
+  const printingCost = totalMachineCost;
+
+  // Batch-level time cost (pre + post at the batch level) = post-processing cost
   const timeCost = ((preProcessingMinutes + postProcessingMinutes) / 60) * hourlyRate;
+  const postProcessingCost = timeCost;
 
   // Supplies cost
   const suppliesCost = calculateExtraCosts(supplies);
@@ -554,10 +582,29 @@ function calculateVerification(opts) {
     return { reference, delta, deltaPct, sign, indicator };
   }
 
+  // Actual revenue margin (only when caller supplies an actual selling price incl. VAT)
+  let actualMarginOnBatch = null;
+  if (actualSellingTotalInclVat > 0) {
+    const netRevenue = actualSellingTotalInclVat / (1 + VERIFY_VAT_RATE);
+    const absoluteMargin = netRevenue - totalBatchCost;
+    const marginPct = netRevenue > 0 ? (absoluteMargin / netRevenue) * 100 : 0;
+    actualMarginOnBatch = {
+      actualSellingInclVat: actualSellingTotalInclVat,
+      netRevenue,
+      absoluteMargin,
+      marginPct,
+      indicator: marginIndicator(marginPct,
+        (settings.margin_green_pct  || 30),
+        (settings.margin_orange_pct || 5)),
+    };
+  }
+
   return {
     plateCosts,
     totalMachineCost,
+    printingCost,         // alias for totalMachineCost — machine + electricity + plastic, no time
     timeCost,
+    postProcessingCost,   // alias for timeCost — (pre+post)/60 * hourlyRate
     suppliesCost,
     totalBatchCost,
     totalPieces,
@@ -565,10 +612,12 @@ function calculateVerification(opts) {
     actualCostPerUnit,
     vsProductionCost: makeComparison(projectProductionCost),
     vsSellingPrice:   makeComparison(projectSellingPrice),
+    actualMarginOnBatch,
   };
 }
 
 module.exports = {
+  VERIFY_VAT_RATE,
   calculatePlateCosts,
   calculatePerItemCosts,
   applyProfitMargins,

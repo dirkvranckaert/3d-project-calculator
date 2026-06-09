@@ -250,36 +250,61 @@ Client: each attachment sub-row's last `<td>` (the Remove-button cell) now also 
 ### Purpose
 Ephemeral spot-check from a project detail page: upload one or more .3mf files, assign printer and material, enter processing time and packaging costs, and see whether the actual batch cost per sellable unit is above or below the reference production cost and selling price. Nothing is persisted.
 
-### Calc engine — `calculateVerification(opts)`
-New pure function exported from `calc.js`. Orchestrates batch cost independently of `calculateProject` (no project, no DB).
+### Calc engine — `calculateVerification(opts)` (updated task #352)
+Pure function exported from `calc.js`. Orchestrates batch cost independently of `calculateProject` (no project, no DB).
+
+**Cost model (as of task #352):**
+- `printingCost` = Σ per-plate `calculatePlateCosts(plate, printer, material, s)` with `pre/post = 0` (machine amortisation + electricity + plastic only, **no time component**)
+- `postProcessingCost` = `((preProcessingMinutes + postProcessingMinutes) / 60) * hourlyRate`
+- `suppliesCost` = Σ `price_excl_vat * quantity`
+- `totalBatchCost` = `printingCost + postProcessingCost + suppliesCost`
+- `totalPieces` = Σ `items_per_plate` across **all** plates (multi-file × multi-plate aggregation)
+- `sellableUnits` = `Math.floor(totalPieces / itemsPerSet)`
+- `actualCostPerUnit` = `totalBatchCost / sellableUnits` (Infinity when 0 sellable)
+
+**Actual revenue margin (new, task #352):**
+- `VERIFY_VAT_RATE = 0.21` — exported constant, Belgian standard VAT rate. Change here only.
+- `netRevenue = actualSellingTotalInclVat / (1 + VERIFY_VAT_RATE)`
+- `absoluteMargin = netRevenue - totalBatchCost`
+- `marginPct = absoluteMargin / netRevenue * 100`
+- `actualMarginOnBatch = null` when `actualSellingTotalInclVat` is 0 or not provided.
 
 **opts:**
 - `plates` — array of enriched plate objects with embedded `printer_purchase_price`, `printer_earn_back_months`, `printer_kwh_per_hour`, `material_price_per_kg`, `print_time_minutes`, `plastic_grams`, `items_per_plate`
-- `preProcessingMinutes`, `postProcessingMinutes` — batch-level (not per plate)
+- `preProcessingMinutes`, `postProcessingMinutes` — batch-level (all plates combined)
 - `hourlyRate` — €/h for time cost
 - `supplies` — `Array<{price_excl_vat, quantity}>`
-- `itemsPerSet` — pieces per sellable unit; `sellableUnits = Math.floor(totalPieces / itemsPerSet)`
+- `itemsPerSet` — pieces per sellable unit
 - `projectProductionCost`, `projectSellingPrice` — reference values passed in from the frontend
-- `settings` — for `electricity_price_kwh`; `risk_multiplier` defaults to 1; `material_waste_grams` defaults to 0
+- `actualSellingTotalInclVat` — Dirk's actual invoice total for the batch, incl. 21% VAT (optional; 0 = skip margin block)
+- `settings` — for `electricity_price_kwh` and `margin_green/orange_pct`; `risk_multiplier` defaults to 1; `material_waste_grams` defaults to 0
 
 **Returns:**
-`{ plateCosts, totalMachineCost, timeCost, suppliesCost, totalBatchCost, totalPieces, sellableUnits, actualCostPerUnit (Infinity when 0 sellable), vsProductionCost, vsSellingPrice }`
+`{ plateCosts, totalMachineCost, printingCost, timeCost, postProcessingCost, suppliesCost, totalBatchCost, totalPieces, sellableUnits, actualCostPerUnit, vsProductionCost, vsSellingPrice, actualMarginOnBatch }`
+
+`printingCost` and `totalMachineCost` are identical (aliases). `postProcessingCost` and `timeCost` are identical (aliases). Kept for backward compatibility.
 
 Each `vs*` comparison: `{ reference, delta (reference − actual; positive = cheaper), deltaPct, sign ('+'/'-'), indicator ('green'/'red') }`.
+
+`actualMarginOnBatch`: `{ actualSellingInclVat, netRevenue, absoluteMargin, marginPct, indicator }` or `null`.
 
 ### Backend — `POST /api/projects/:projectId/verify-batch`
 Sits behind `requireAuth`. No persistence.
 
-**Body:** `{ plates: Array<{printer_id, material_id, print_time_minutes, plastic_grams, items_per_plate}>, preProcessingMinutes, postProcessingMinutes, hourlyRate, supplies, itemsPerSet, projectProductionCost, projectSellingPrice }`
+**Body:** `{ plates: Array<{printer_id, material_id, print_time_minutes, plastic_grams, items_per_plate}>, preProcessingMinutes, postProcessingMinutes, hourlyRate, supplies, itemsPerSet, projectProductionCost, projectSellingPrice, actualSellingTotalInclVat? }`
 
-Route looks up printer and material from DB, calls `resolveKwh` (module-scope helper extracted to avoid duplication with `buildTestPrints`), then calls `calc.calculateVerification` and returns the result.
+Route looks up printer and material from DB, calls `resolveKwh`, calls `calc.calculateVerification`, returns the result.
 
-### Frontend
-- **Modal:** `<div id="verify-modal">` added to `index.html`, same `.modal-overlay` + `.modal-header` + `[data-close]` + Escape pattern as other modals.
-- **Trigger:** "Verify batch" button in `renderPricingSection()`.
-- **State:** `verifyProjectId`, `verifyProjectRef`, `verifyPlates[]`, `verifySupplies[]`, `verifyPreMinutes`, `verifyPostMinutes`, `verifyHourlyRate` in module-level state.
-- **Functions:** `openVerifyModal(projectId)`, `renderVerifyModal()`, `verifyHandleFiles(fileList)`, `runVerification()`, `renderVerifyResult(result, ref)` — plus small helpers for plate/supply CRUD.
-- **3MF parsing:** each uploaded file is POSTed to `POST /api/parse-3mf` (existing endpoint, no storage); printer and material are auto-matched using the same `norm()` fuzzy logic as the Import 3MF dialog.
+### Frontend (updated task #352)
+- **State (new):** `verifyActualSelling` — Dirk's actual batch selling price incl. VAT (reset to 0 in `openVerifyModal`).
+- **Multi-plate data model:** `verifyPlates` entries are now `{ filename, parsedResult, printerId, materialId, plateItems: number[] }`. `plateItems[i]` is the editable item count for `parsedResult.plates[i]`. Previously `itemsPerPlate` (single number, first plate only) — that was the bug.
+- **Per-plate breakdown table:** one file-level row (printer + material selects) followed by per-plate sub-rows (read-only print time + weight, editable item count). Header columns: File/Plate, Printer, Material, Print time, Weight, Items.
+- **"Total items in print file(s)":** summary line below the table showing Σ of all `plateItems` values across all files.
+- **"My Actual Selling Price" input:** new form group added to the modal; label "Whole batch, incl. VAT (€)"; stored in `verifyActualSelling`; sent as `actualSellingTotalInclVat` in the POST body.
+- **`verifySetPlateItemCount(fileIdx, plateIdx, value)`:** new helper to update `plateItems[plateIdx]` on a given file entry.
+- **Payload building:** `verifyRecompute` and `runVerification` now use `verifyPlates.flatMap(...)` to expand each file into per-plate rows — one row per plate per file, using that plate's own `printTimeMinutes` + `weightGrams`. Old code read only `parsedResult.plates[0]`.
+- **Label rename:** project's calculated/suggested price was labelled "Actual selling price" — renamed to **"Calculated selling price"** (task #352 requirement).
+- **Result display:** `renderVerifyResult` shows printing vs post-processing split in the cost sub-line (replacing Machine/Time/Supplies with Printing/Post-proc/Supplies). When `result.actualMarginOnBatch` is non-null, a prominent block with net revenue, absolute margin, and margin % is rendered above the comparison grid.
 - **`resolveKwh(db, printerId, materialType)`:** extracted as a module-scope function in `server.js` (was previously inlined inside `buildTestPrints`). The `buildTestPrints` inner usage was updated to call the module-scope version.
 
 ## Architecture guide

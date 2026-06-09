@@ -1420,6 +1420,7 @@ app.post('/api/projects/:projectId/verify-batch', (req, res) => {
     supplies = [],
     projectProductionCost = 0,
     projectSellingPrice = 0,
+    actualSellingTotalInclVat = 0,
     itemsPerSet = project.items_per_set || 1,
   } = req.body;
 
@@ -1477,6 +1478,7 @@ app.post('/api/projects/:projectId/verify-batch', (req, res) => {
     itemsPerSet: Number(itemsPerSet) || 1,
     projectProductionCost: Number(projectProductionCost) || 0,
     projectSellingPrice: Number(projectSellingPrice) || 0,
+    actualSellingTotalInclVat: Number(actualSellingTotalInclVat) || 0,
     settings,
   });
 

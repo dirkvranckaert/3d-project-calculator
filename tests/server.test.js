@@ -902,6 +902,120 @@ describe('POST /api/projects/:id/verify-batch', () => {
       .send({ plates: [], itemsPerSet: 1, projectProductionCost: 10, projectSellingPrice: 20 });
     expect(res.status).toBe(401);
   });
+
+  test('printingCost and postProcessingCost are distinct in response', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${pid}/verify-batch`)
+      .set('Cookie', cookie)
+      .send({
+        plates: [
+          { printer_id: printerId, material_id: materialId,
+            print_time_minutes: 120, plastic_grams: 50, items_per_plate: 2 },
+        ],
+        preProcessingMinutes: 10,
+        postProcessingMinutes: 20,
+        hourlyRate: 60,
+        supplies: [],
+        itemsPerSet: 1,
+        projectProductionCost: 10,
+        projectSellingPrice: 20,
+      });
+
+    expect(res.status).toBe(200);
+    // printingCost = machine cost only (no time)
+    expect(typeof res.body.printingCost).toBe('number');
+    expect(res.body.printingCost).toBeGreaterThan(0);
+    // postProcessingCost = (10+20)/60 * 60 = 30
+    expect(res.body.postProcessingCost).toBeCloseTo(30, 2);
+    // printingCost === totalMachineCost
+    expect(res.body.printingCost).toBeCloseTo(res.body.totalMachineCost, 6);
+    // postProcessingCost === timeCost
+    expect(res.body.postProcessingCost).toBeCloseTo(res.body.timeCost, 6);
+    // Regression fence: if post-proc were not separated, postProcessingCost would be 0
+    expect(res.body.postProcessingCost).toBeGreaterThan(0);
+    // totalBatchCost = printing + post-proc + supplies
+    expect(res.body.totalBatchCost).toBeCloseTo(
+      res.body.printingCost + res.body.postProcessingCost + res.body.suppliesCost, 2
+    );
+  });
+
+  test('multi-plate summed: 2 plates × 3 items each = 6 total items', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${pid}/verify-batch`)
+      .set('Cookie', cookie)
+      .send({
+        plates: [
+          { printer_id: printerId, material_id: materialId,
+            print_time_minutes: 60, plastic_grams: 30, items_per_plate: 3 },
+          { printer_id: printerId, material_id: materialId,
+            print_time_minutes: 45, plastic_grams: 20, items_per_plate: 3 },
+        ],
+        preProcessingMinutes: 0, postProcessingMinutes: 0,
+        hourlyRate: 40, supplies: [], itemsPerSet: 1,
+        projectProductionCost: 10, projectSellingPrice: 20,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.totalPieces).toBe(6);
+    expect(res.body.plateCosts).toHaveLength(2);
+    // Regression fence: if only first plate was counted, totalPieces would be 3
+    expect(res.body.totalPieces).not.toBe(3);
+    // totalMachineCost must be sum of both plate costs
+    const sumPlateCosts = res.body.plateCosts.reduce((s, pc) => s + pc.totalPlateCost, 0);
+    expect(res.body.totalMachineCost).toBeCloseTo(sumPlateCosts, 2);
+  });
+
+  test('actualMarginOnBatch computed when actualSellingTotalInclVat provided', async () => {
+    const actualSelling = 60.50; // incl. 21% VAT
+    const expectedNet = actualSelling / 1.21;
+
+    const res = await request(app)
+      .post(`/api/projects/${pid}/verify-batch`)
+      .set('Cookie', cookie)
+      .send({
+        plates: [
+          { printer_id: printerId, material_id: materialId,
+            print_time_minutes: 60, plastic_grams: 30, items_per_plate: 2 },
+        ],
+        preProcessingMinutes: 0, postProcessingMinutes: 0,
+        hourlyRate: 40, supplies: [], itemsPerSet: 1,
+        projectProductionCost: 5, projectSellingPrice: 10,
+        actualSellingTotalInclVat: actualSelling,
+      });
+
+    expect(res.status).toBe(200);
+    const amb = res.body.actualMarginOnBatch;
+    expect(amb).not.toBeNull();
+    // netRevenue = actualSelling / 1.21
+    expect(amb.netRevenue).toBeCloseTo(expectedNet, 2);
+    // absoluteMargin = netRevenue - totalBatchCost
+    expect(amb.absoluteMargin).toBeCloseTo(amb.netRevenue - res.body.totalBatchCost, 2);
+    // marginPct = absoluteMargin / netRevenue * 100
+    expect(amb.marginPct).toBeCloseTo((amb.absoluteMargin / amb.netRevenue) * 100, 2);
+    // Regression fence: if margin used inclVat instead of netRevenue, netRevenue would equal actualSelling
+    expect(amb.netRevenue).not.toBeCloseTo(actualSelling, 2);
+    // indicator is a string
+    expect(['green', 'orange', 'red']).toContain(amb.indicator);
+  });
+
+  test('actualMarginOnBatch is null when actualSellingTotalInclVat not provided', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${pid}/verify-batch`)
+      .set('Cookie', cookie)
+      .send({
+        plates: [
+          { printer_id: printerId, material_id: materialId,
+            print_time_minutes: 60, plastic_grams: 30, items_per_plate: 2 },
+        ],
+        preProcessingMinutes: 0, postProcessingMinutes: 0,
+        hourlyRate: 40, supplies: [], itemsPerSet: 1,
+        projectProductionCost: 5, projectSellingPrice: 10,
+        // no actualSellingTotalInclVat
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.actualMarginOnBatch).toBeNull();
+  });
 });
 
 /* ================================================================== */
