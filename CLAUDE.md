@@ -134,6 +134,13 @@ Deployed via the shared infrastructure repo: `../infrastructure/apps/project-cal
 - **Service worker:** network-only — the `fetch` handler is a no-op (always hits the network) and `activate` deletes all caches. No asset caching, so frontend changes ship without a cache-version bump.
 - **sharp native binaries:** `sharp` downloads platform-specific binaries on `npm install`. If deploying from a different OS/arch than the server, run `npm install` on the target.
 - **SQLite WAL mode:** the `data/` directory must be writable and on a local filesystem.
+- **Schema migrations are lazy — they run on the FIRST DB-touching request, not at boot.** `getDb()` defers `bootstrap()`/`migrate()` until first call. The deploy health checks (GET `/login`, plus a dummy POST `/login` that 401s against env-var creds) never touch the DB, so after a deploy a new column/migration is still PENDING until the first real authenticated DB request. Don't conclude "the migration failed" if you inspect the DB right after deploy and the column is missing — load any project page (or run `require('./db').getDb()` once) to apply it.
+- **Inspecting the live DB: use a normal (read-write) connection, never `readonly`.** Prod runs WAL. A `readonly` better-sqlite3 connection on a WAL DB only sees the last checkpoint in the main `.db` file and misses everything in `-wal` (recent writes, just-applied migrations) — so a `readonly` `PRAGMA table_info` can show a stale schema, and the main `.db` mtime/size can look old while `-wal` holds the live data. Open RW (do only SELECTs) to see true state.
+
+## Files section — sliced vs model 3MF (added 2026-06-17)
+
+- `project_files.is_sliced` (INTEGER, nullable): `NULL`=unknown/non-3mf, `0`=model file (raw, no slice data), `1`=sliced. Set on upload via `parse3mf()` (content-based — presence of `Metadata/slice_info.config`, NOT filename); `backfillSliced()` lazily fills pre-existing `NULL` rows inside `enrichProject` and `GET /files`.
+- Frontend (`renderFilesSection`): "Map Plates" / "Schedule Print" render only when `is_sliced===1`; an unsliced 3MF (`===0`) shows a muted `Model file` badge instead. Detection is content-based, so a `.3mf` without `.gcode` in its name can still be sliced (→ buttons).
 
 ## Design cost module (added 2026-06-02)
 
