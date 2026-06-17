@@ -234,6 +234,22 @@ app.delete('/api/extra-costs/:id', (req, res) => {
 function normName(s) { return String(s || '').toLowerCase().replace(/[\s\-_]+/g, '').replace('lab', ''); }
 
 /**
+ * Lazily backfill is_sliced for 3MF rows uploaded before the column existed.
+ * Mutates each file object in place and persists the detected value.
+ */
+function backfillSliced(db, files) {
+  for (const f of files) {
+    if (f.is_sliced !== null && f.is_sliced !== undefined) continue;
+    if (!f.filename || !f.filename.toLowerCase().endsWith('.3mf')) continue;
+    try {
+      const parsed = parse3mf(path.join(UPLOADS_DIR, f.filepath));
+      f.is_sliced = parsed.sliced ? 1 : 0;
+      db.prepare('UPDATE project_files SET is_sliced = ? WHERE id = ?').run(f.is_sliced, f.id);
+    } catch { /* best-effort; leaves is_sliced NULL */ }
+  }
+}
+
+/**
  * Resolve printer kwh_per_hour for a given printer_id + material_type.
  * Strategy: exact match → base type (first word) → PLA fallback.
  * Extracted at module scope so the verify-batch route can reuse it.
@@ -414,6 +430,7 @@ function enrichProject(db, project) {
     WHERE pf.project_id = ? AND (pf.plate_id IS NULL OR pp.is_test_print = 0)
     ORDER BY pf.uploaded_at DESC
   `).all(project.id);
+  backfillSliced(db, files);
   const images = db.prepare('SELECT * FROM project_images WHERE project_id = ? ORDER BY is_primary DESC, uploaded_at ASC').all(project.id);
 
   // Calculate
@@ -1093,6 +1110,15 @@ app.post('/api/projects/:projectId/files', express.raw({ type: 'application/octe
   const r = db.prepare('INSERT INTO project_files (project_id, plate_id, filename, filepath, size_bytes) VALUES (?,?,?,?,?)')
     .run(pid, plateId, filename, storedName, req.body.length);
 
+  // Detect whether the 3MF is sliced (has plate/slice data) or just a model file
+  if (ext === '.3mf') {
+    try {
+      const parsed = parse3mf(filepath);
+      db.prepare('UPDATE project_files SET is_sliced = ? WHERE id = ?')
+        .run(parsed.sliced ? 1 : 0, r.lastInsertRowid);
+    } catch { /* sliced detection is best-effort; leaves is_sliced NULL */ }
+  }
+
   // Auto-extract thumbnails from 3MF files
   if (ext === '.3mf') {
     try {
@@ -1114,12 +1140,15 @@ app.post('/api/projects/:projectId/files', express.raw({ type: 'application/octe
 });
 
 app.get('/api/projects/:projectId/files', (req, res) => {
-  const files = getDb().prepare(`
+  const db = getDb();
+  const files = db.prepare(`
     SELECT pf.* FROM project_files pf
     LEFT JOIN project_plates pp ON pf.plate_id = pp.id
     WHERE pf.project_id = ? AND (pf.plate_id IS NULL OR pp.is_test_print = 0)
     ORDER BY pf.uploaded_at DESC
   `).all(req.params.projectId);
+
+  backfillSliced(db, files);
   res.json(files);
 });
 

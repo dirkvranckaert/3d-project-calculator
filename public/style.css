@@ -637,6 +637,17 @@ body {
 }
 .file-name:hover { text-decoration: underline; }
 .file-size { color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
+.file-tag {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: var(--border);
+  color: var(--text-muted);
+}
 .file-progress {
   width: 80px;
   height: 6px;

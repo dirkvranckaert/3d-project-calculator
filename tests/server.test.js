@@ -810,6 +810,54 @@ describe('Design Cost Module', () => {
 });
 
 /* ================================================================== */
+/*  3MF sliced-vs-model detection (is_sliced)                          */
+/* ================================================================== */
+describe('Files — is_sliced detection', () => {
+  let pid;
+  beforeAll(async () => {
+    const res = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'Sliced Detection', customer_name: null, items_per_set: 1 });
+    pid = res.body.id;
+  });
+
+  test('uploading an unsliced 3MF marks it is_sliced=0 (model file)', async () => {
+    // A junk-but-named .3mf has no slice_info.config → parse3mf reports sliced=false
+    const res = await request(app)
+      .post(`/api/projects/${pid}/files`)
+      .set('Cookie', cookie)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Filename', 'model_only.3mf')
+      .send(Buffer.from('PK\x03\x04not-really-sliced'));
+    expect(res.status).toBe(201);
+    expect(res.body.is_sliced).toBe(0);
+  });
+
+  test('non-3MF uploads leave is_sliced NULL', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${pid}/files`)
+      .set('Cookie', cookie)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Filename', 'part.stl')
+      .send(Buffer.from('solid part'));
+    expect(res.status).toBe(201);
+    expect(res.body.is_sliced).toBeNull();
+  });
+
+  const SLICED_3MF = path.join(__dirname, 'fixtures', 'sliced_multiplate.3mf');
+  const hasFixture = fs.existsSync(SLICED_3MF);
+  (hasFixture ? test : test.skip)('uploading a sliced 3MF marks it is_sliced=1', async () => {
+    const res = await request(app)
+      .post(`/api/projects/${pid}/files`)
+      .set('Cookie', cookie)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Filename', 'sliced_multiplate.3mf')
+      .send(fs.readFileSync(SLICED_3MF));
+    expect(res.status).toBe(201);
+    expect(res.body.is_sliced).toBe(1);
+  });
+});
+
+/* ================================================================== */
 /*  POST /api/projects/:id/verify-batch                                */
 /* ================================================================== */
 describe('POST /api/projects/:id/verify-batch', () => {

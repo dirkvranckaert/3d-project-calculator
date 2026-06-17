@@ -1313,17 +1313,23 @@ async function deleteImage(imageId, projectId, e) {
 
 function renderFilesSection(p) {
   const files = p.files || [];
-  const fileRows = files.map(f => `
+  const fileRows = files.map(f => {
+    const is3mf = f.filename?.toLowerCase().endsWith('.3mf');
+    const isSliced = is3mf && f.is_sliced === 1;
+    const isModelFile = is3mf && f.is_sliced === 0;
+    return `
     <div class="file-row">
       <svg class="file-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       <a href="/api/files/${f.id}/download" class="file-name">${esc(f.filename)}</a>
       <span class="file-size">${fmtFileSize(f.size_bytes)}</span>
-      ${f.filename?.toLowerCase().endsWith('.3mf') ? `<button class="btn btn-sm" style="flex-shrink:0" onclick="mapPlatesToFile(${p.id}, ${f.id}, '${esc(f.filename)}')">Map Plates</button>` : ''}
-      ${plannerAvailable && f.filename?.toLowerCase().endsWith('.3mf') ? `<button class="btn btn-sm" style="flex-shrink:0" onclick="schedulePrint(${p.id}, ${f.id})">Schedule Print</button>` : ''}
+      ${isModelFile ? `<span class="file-tag" title="Unsliced 3MF — no plates or print data. Slice it first to map plates or schedule a print.">Model file</span>` : ''}
+      ${isSliced ? `<button class="btn btn-sm" style="flex-shrink:0" onclick="mapPlatesToFile(${p.id}, ${f.id}, '${esc(f.filename)}')">Map Plates</button>` : ''}
+      ${plannerAvailable && isSliced ? `<button class="btn btn-sm" style="flex-shrink:0" onclick="schedulePrint(${p.id}, ${f.id})">Schedule Print</button>` : ''}
       <button class="btn-icon" title="Delete" onclick="deleteFile(${f.id}, ${p.id})">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   return `<div class="extras-section">
     <div class="extras-section-header"><h3>Files</h3></div>

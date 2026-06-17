@@ -198,6 +198,8 @@ function migrate(db) {
   addCol('projects', 'design_notes', 'TEXT');
   addCol('project_extra_hours', 'actual_hours', 'TEXT');
   addCol('project_plates', 'test_print_id', 'INTEGER');
+  // Sliced-vs-model 3MF distinction (NULL = unknown/not a 3MF, 0 = model file, 1 = sliced)
+  addCol('project_files', 'is_sliced', 'INTEGER');
 }
 
 /* ------------------------------------------------------------------ */
