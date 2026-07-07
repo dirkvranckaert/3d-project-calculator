@@ -529,6 +529,40 @@ describe('calculateProject', () => {
     expect(result.extraHoursCost).toBe(0);
   });
 
+  test('per-item (÷ set size) derives from the per-set totals', () => {
+    const plates = [{
+      id: 1, name: 'Base',
+      print_time_minutes: 120, plastic_grams: 50,
+      items_per_plate: 1, risk_multiplier: 1,
+      pre_processing_minutes: 0, post_processing_minutes: 2,
+      printer_purchase_price: 812.43, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
+      material_price_per_kg: 17.38,
+    }];
+    const extras = [{ price_excl_vat: 1.00, quantity: 2 }]; // 2.00 flat per project
+    const setSize = 4;
+    const result = calc.calculateProject({ plates, extras, settings: defaultSettings, itemsPerSet: setSize });
+
+    // Base cost scales linearly with set size
+    expect(result.pricing.baseCostPerSet).toBeCloseTo(result.perItemCosts.totalPerItem * setSize, 6);
+
+    // The UI per-item production figure = productionCost / setSize
+    const perItemProduction = result.pricing.productionCost / setSize;
+    expect(perItemProduction).toBeCloseTo(
+      result.perItemCosts.totalPerItem + result.extraCostsTotal / setSize, 6
+    );
+  });
+
+  test('customLines fold into extraCostsTotal like supplies', () => {
+    const base = calc.calculateProject({ plates: [], extras: [], settings: defaultSettings, itemsPerSet: 1 });
+    const withCustom = calc.calculateProject({
+      plates: [], extras: [], customLines: [{ label: 'Bespoke jig', amount: 5 }],
+      settings: defaultSettings, itemsPerSet: 1,
+    });
+    expect(withCustom.customLinesTotal).toBeCloseTo(5, 6);
+    expect(withCustom.extraCostsTotal).toBeCloseTo(base.extraCostsTotal + 5, 6);
+    expect(withCustom.pricing.productionCost).toBeCloseTo(base.pricing.productionCost + 5, 6);
+  });
+
   test('calculateProject — extra hours add at cost, processing margin unchanged', () => {
     const plates = [{
       id: 1, name: 'Base',

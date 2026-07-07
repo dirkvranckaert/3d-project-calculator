@@ -1487,6 +1487,11 @@ function renderPricingSection(p) {
   const pr = c.pricing;
   const itemLabel = p.items_per_set > 1 ? `set of ${p.items_per_set}` : 'item';
 
+  // Per-item breakdown: only shown for sets (set size > 1). Single-item view unchanged.
+  const setSize = Number(p.items_per_set) || 1;
+  const isSet = setSize > 1;
+  const pi = (v) => `${fmt((Number(v) || 0) / setSize)} / item`;
+
   const greenPct = settings.margin_green_pct || 30;
   const vatMult = 1 + (settings.vat_rate || 21) / 100;
   const denominator = (1 / vatMult) - (greenPct / 100);
@@ -1501,6 +1506,7 @@ function renderPricingSection(p) {
       <div class="big-price">${fmt(p.actual_sales_price)}</div>
       <div class="sub">${fmt(am.actualExclVat)} excl. VAT</div>
       <div class="sub">Profit: ${fmt(am.profitAmount)} <span class="margin-badge ${c.actualIndicator}">${fmtPct(am.marginPct)}</span></div>
+      ${isSet ? `<div class="sub" style="opacity:.6">${pi(p.actual_sales_price)}</div>` : ''}
     </div>`;
   } else {
     actualBlock = `<div class="pricing-block">
@@ -1517,6 +1523,7 @@ function renderPricingSection(p) {
     <div class="pricing-block pricing-block--summary">
       <h4>Setup &amp; Design (one-time)</h4>
       <div class="big-price">${fmt(c.designCosts.designTotal)}</div>
+      ${isSet ? `<div class="sub" style="opacity:.6">${pi(c.designCosts.designTotal)}</div>` : ''}
       <div class="sub" style="opacity:.6">Not included in unit price — <a href="javascript:void(0)"
         onclick="switchDetailTab('design', ${p.id})" style="color:var(--primary);text-decoration:none">see Setup &amp; Design tab</a></div>
     </div>` : '';
@@ -1526,6 +1533,7 @@ function renderPricingSection(p) {
       <h4>Production Cost (${itemLabel})</h4>
       <div class="big-price">${fmt(pr.productionCost)}</div>
       <div class="sub">excl. VAT, no margins</div>
+      ${isSet ? `<div class="sub" style="opacity:.6">${pi(pr.productionCost)}</div>` : ''}
       ${minPriceForGreen > 0 ? `<div class="sub" style="margin-top:4px">Min. for ${greenPct}% margin: <strong>${fmt(minPriceForGreen)}</strong></div>` : ''}
     </div>
     <div class="pricing-block">
@@ -1534,12 +1542,14 @@ function renderPricingSection(p) {
       ${pr.extraHoursCost > 0 ? `<div class="sub">Extra hours: ${fmt(pr.extraHoursCost)}</div>` : ''}
       <div class="sub">+ VAT (${settings.vat_rate}%): ${fmt(pr.vatAmount)}</div>
       <div class="sub">Total incl. VAT: ${fmt(pr.totalInclVat)}</div>
+      ${isSet ? `<div class="sub" style="opacity:.6">${pi(pr.totalExclVat)} excl. &middot; ${pi(pr.totalInclVat)} incl. VAT</div>` : ''}
     </div>
     <div class="pricing-block">
       <h4>Suggested Price</h4>
       <div class="big-price">${fmt(pr.suggestedPrice)}</div>
       <div class="sub">${fmt(pr.suggestedExclVat)} excl. VAT</div>
       <div class="sub">Profit: ${fmt(pr.suggestedProfitAmount)} <span class="margin-badge ${c.suggestedIndicator}">${fmtPct(pr.suggestedMarginPct)}</span></div>
+      ${isSet ? `<div class="sub" style="opacity:.6">${pi(pr.suggestedPrice)}</div>` : ''}
     </div>
     ${actualBlock}
     ${designCostBlock}
