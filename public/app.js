@@ -1519,6 +1519,12 @@ function renderPricingSection(p) {
     </div>`;
   }
 
+  const basisActual = p.actual_sales_price > 0 && !!c.actualMargin;
+  const baseExclSet = basisActual ? c.actualMargin.actualExclVat : pr.suggestedExclVat;
+  const basisLabel = basisActual ? 'actual sales price' : 'suggested price';
+  const allInExclSet = baseExclSet + (c.designCosts?.designTotal || 0);
+  const allInInclSet = allInExclSet * vatMult;
+
   const designCostBlock = p.is_custom && c.designCosts?.designTotal > 0 ? `
     <div class="pricing-block pricing-block--summary">
       <h4>Setup &amp; Design (one-time)</h4>
@@ -1526,6 +1532,8 @@ function renderPricingSection(p) {
       ${isSet ? `<div class="sub" style="opacity:.6">${pi(c.designCosts.designTotal)}</div>` : ''}
       <div class="sub" style="opacity:.6">Not included in unit price — <a href="javascript:void(0)"
         onclick="switchDetailTab('design', ${p.id})" style="color:var(--primary);text-decoration:none">see Setup &amp; Design tab</a></div>
+      <div class="sub" style="margin-top:4px"><strong>All-in / item incl. setup &amp; design: ${fmt(allInExclSet / setSize)} excl. &middot; ${fmt(allInInclSet / setSize)} incl. VAT</strong></div>
+      <div class="sub" style="opacity:.55">Based on ${basisLabel} + one-time setup &amp; design spread over ${setSize} item${setSize > 1 ? 's' : ''}</div>
     </div>` : '';
 
   return `<div class="pricing-section"><div class="pricing-grid">
