@@ -1506,7 +1506,7 @@ function renderPricingSection(p) {
       <div class="big-price">${fmt(p.actual_sales_price)}</div>
       <div class="sub">${fmt(am.actualExclVat)} excl. VAT</div>
       <div class="sub">Profit: ${fmt(am.profitAmount)} <span class="margin-badge ${c.actualIndicator}">${fmtPct(am.marginPct)}</span></div>
-      ${isSet ? `<div class="sub" style="opacity:.6">${pi(p.actual_sales_price)}</div>` : ''}
+      ${isSet ? `<div class="sub" style="opacity:.6">${pi(am.actualExclVat)} excl. &middot; ${pi(p.actual_sales_price)} incl. VAT</div>` : ''}
     </div>`;
   } else {
     actualBlock = `<div class="pricing-block">
@@ -1549,7 +1549,7 @@ function renderPricingSection(p) {
       <div class="big-price">${fmt(pr.suggestedPrice)}</div>
       <div class="sub">${fmt(pr.suggestedExclVat)} excl. VAT</div>
       <div class="sub">Profit: ${fmt(pr.suggestedProfitAmount)} <span class="margin-badge ${c.suggestedIndicator}">${fmtPct(pr.suggestedMarginPct)}</span></div>
-      ${isSet ? `<div class="sub" style="opacity:.6">${pi(pr.suggestedPrice)}</div>` : ''}
+      ${isSet ? `<div class="sub" style="opacity:.6">${pi(pr.suggestedExclVat)} excl. &middot; ${pi(pr.suggestedPrice)} incl. VAT</div>` : ''}
     </div>
     ${actualBlock}
     ${designCostBlock}
