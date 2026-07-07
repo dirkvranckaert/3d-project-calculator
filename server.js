@@ -423,6 +423,11 @@ function enrichProject(db, project) {
     'SELECT * FROM project_design_extras WHERE project_id = ? ORDER BY sort_order, id'
   ).all(project.id);
 
+  // Custom one-off lines (project-specific, not in the supplies catalog)
+  const customLines = db.prepare(
+    'SELECT * FROM project_custom_lines WHERE project_id = ? ORDER BY sort_order, id'
+  ).all(project.id);
+
   // Files & images — exclude test-print files
   const files = db.prepare(`
     SELECT pf.* FROM project_files pf
@@ -443,6 +448,7 @@ function enrichProject(db, project) {
     extraHours,
     designHours,
     designExtras,
+    customLines,
     testPrints,
     isCustom: !!project.is_custom,
     settings,
@@ -457,6 +463,7 @@ function enrichProject(db, project) {
     extra_hours: extraHours,
     design_hours: designHours,
     design_extras: designExtras,
+    custom_lines: customLines,
     test_prints: testPrints,
     test_print_plates: testPrintPlates,
     files,
@@ -525,6 +532,10 @@ function enrichProjectLite(db, project) {
     'SELECT * FROM project_design_extras WHERE project_id = ? ORDER BY sort_order, id'
   ).all(project.id);
 
+  const customLines = db.prepare(
+    'SELECT * FROM project_custom_lines WHERE project_id = ? ORDER BY sort_order, id'
+  ).all(project.id);
+
   const images = db.prepare('SELECT id, is_primary FROM project_images WHERE project_id = ? ORDER BY is_primary DESC LIMIT 1').all(project.id);
 
   const settings = getAllSettings(db);
@@ -536,6 +547,7 @@ function enrichProjectLite(db, project) {
     extraHours,
     designHours,
     designExtras,
+    customLines,
     testPrints,
     isCustom: !!project.is_custom,
     settings,
@@ -924,6 +936,37 @@ app.put('/api/projects/:projectId/design-extras', (req, res) => {
   res.json(enrichProject(db, fullProject));
 });
 
+/**
+ * Replace-all custom one-off cost lines for a project. These are project-specific
+ * lines (label + amount) billed like supplies but NOT saved to the supplies catalog.
+ */
+app.put('/api/projects/:projectId/custom-lines', (req, res) => {
+  const db = getDb();
+  const pid = req.params.projectId;
+  const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(pid);
+  if (!project) return res.status(404).json({ error: 'Not found' });
+
+  const items = Array.isArray(req.body) ? req.body : [];
+
+  db.prepare('DELETE FROM project_custom_lines WHERE project_id = ?').run(pid);
+  const ins = db.prepare(
+    'INSERT INTO project_custom_lines (project_id, label, amount, sort_order) VALUES (?,?,?,?)'
+  );
+  let order = 0;
+  for (const it of items) {
+    const label = String(it.label || '').trim();
+    if (!label) continue;
+    const amount = Number(it.amount) || 0;
+    const sortOrder = Number.isFinite(Number(it.sort_order)) ? Number(it.sort_order) : order;
+    ins.run(pid, label.slice(0, 200), amount, sortOrder);
+    order++;
+  }
+
+  db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
+  const fullProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  res.json(enrichProject(db, fullProject));
+});
+
 /* ------------------------------------------------------------------ */
 /*  Test-print upload                                                  */
 /* ------------------------------------------------------------------ */
@@ -959,9 +1002,12 @@ app.post('/api/projects/:projectId/test-print', express.raw({ type: 'application
   try {
     const result = parse3mf(req.body);
     if (result.plates && result.plates.length > 0) {
-      const first = result.plates[0];
+      // A test-print 3MF is a single test print spanning ALL its plates — sum
+      // every plate's print time and weight for the total cost (not just plate 1).
+      const totalTime = result.plates.reduce((sum, p) => sum + (p.printTimeMinutes || 0), 0);
+      const totalGrams = result.plates.reduce((sum, p) => sum + (p.weightGrams || 0), 0);
       db.prepare('UPDATE project_plates SET print_time_minutes=?, plastic_grams=? WHERE id=?')
-        .run(first.printTimeMinutes || 0, first.weightGrams || 0, plateId);
+        .run(totalTime, totalGrams, plateId);
     }
   } catch { /* parsing is best-effort */ }
 
@@ -1057,9 +1103,12 @@ app.post('/api/projects/:projectId/test-prints/:tpId/attach', express.raw({ type
   try {
     parsedResult = parse3mf(req.body);
     if (parsedResult.plates && parsedResult.plates.length > 0) {
-      const first = parsedResult.plates[0];
+      // A test-print 3MF is a single test print spanning ALL its plates — sum
+      // every plate's print time and weight for the total cost (not just plate 1).
+      const totalTime = parsedResult.plates.reduce((sum, p) => sum + (p.printTimeMinutes || 0), 0);
+      const totalGrams = parsedResult.plates.reduce((sum, p) => sum + (p.weightGrams || 0), 0);
       db.prepare('UPDATE project_plates SET print_time_minutes=?, plastic_grams=? WHERE id=?')
-        .run(first.printTimeMinutes || 0, first.weightGrams || 0, plateId);
+        .run(totalTime, totalGrams, plateId);
     }
     // Auto-fill printer_id
     if (parsedResult.printerName) {

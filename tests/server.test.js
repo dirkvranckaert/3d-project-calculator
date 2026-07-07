@@ -1142,6 +1142,128 @@ describe('Test-print processing inputs + risk-lock', () => {
   });
 });
 
+/* ================================================================== */
+/*  Test-print 3MF must SUM all plates (not just plate 1)             */
+/* ================================================================== */
+describe('Test-print 3MF aggregates all plates', () => {
+  const os = require('os');
+  const { execSync } = require('child_process');
+  let pid;
+
+  // Build a synthetic multi-plate sliced 3MF (a ZIP with Metadata/slice_info.config).
+  function buildMultiPlate3mf(plates) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tp3mf-'));
+    fs.mkdirSync(path.join(dir, 'Metadata'), { recursive: true });
+    const plateXml = plates.map(pl => `  <plate>
+    <metadata key="index" value="${pl.index}"/>
+    <metadata key="prediction" value="${pl.seconds}"/>
+    <metadata key="weight" value="${pl.grams}"/>
+    <object name="obj${pl.index}" />
+  </plate>`).join('\n');
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<config>\n${plateXml}\n</config>`;
+    fs.writeFileSync(path.join(dir, 'Metadata', 'slice_info.config'), xml);
+    execSync('zip -q -r test.3mf Metadata', { cwd: dir, stdio: 'ignore' });
+    return fs.readFileSync(path.join(dir, 'test.3mf'));
+  }
+
+  beforeAll(async () => {
+    const pr = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'Multi-plate TP', items_per_set: 1 });
+    pid = pr.body.id;
+  });
+
+  afterAll(async () => {
+    await request(app).delete(`/api/projects/${pid}`).set('Cookie', cookie);
+  });
+
+  test('attaching a 3-plate 3MF sums print time + grams across ALL plates', async () => {
+    // Plate 1: 3600s=60min, 100g. Plate 2: 1800s=30min, 50g. Plate 3: 600s=10min, 20g.
+    // Summed total: 100 min, 170 g. (Plate 1 alone would be 60 / 100.)
+    const buf = buildMultiPlate3mf([
+      { index: 1, seconds: 3600, grams: 100 },
+      { index: 2, seconds: 1800, grams: 50 },
+      { index: 3, seconds: 600, grams: 20 },
+    ]);
+
+    const tp = await request(app).post(`/api/projects/${pid}/test-prints`).set('Cookie', cookie)
+      .send({ description: 'Multi', estimated_cost: 0 });
+    expect(tp.status).toBe(201);
+    const tpId = tp.body.test_prints[0].id;
+
+    const attach = await request(app)
+      .post(`/api/projects/${pid}/test-prints/${tpId}/attach`)
+      .set('Cookie', cookie)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Filename', 'multi.3mf')
+      .send(buf);
+    expect(attach.status).toBe(201);
+
+    const get = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    expect(get.status).toBe(200);
+    const tp0 = get.body.test_prints.find(t => t.id === tpId);
+    expect(tp0).toBeDefined();
+    expect(tp0.attachmentBreakdowns.length).toBe(1);
+    const ab = tp0.attachmentBreakdowns[0];
+    // Summed, not just plate 1
+    expect(ab.print_time_minutes).toBeCloseTo(100, 5);
+    expect(ab.plastic_grams).toBeCloseTo(170, 5);
+
+    // And the stored plate row reflects the sum
+    const plate = get.body.test_print_plates.find(p => p.id === ab.plateId);
+    expect(plate.print_time_minutes).toBeCloseTo(100, 5);
+    expect(plate.plastic_grams).toBeCloseTo(170, 5);
+  });
+});
+
+/* ================================================================== */
+/*  Custom one-off project lines                                      */
+/* ================================================================== */
+describe('Custom one-off project lines', () => {
+  let pid;
+
+  beforeAll(async () => {
+    const pr = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'Custom line project', items_per_set: 1 });
+    pid = pr.body.id;
+  });
+
+  afterAll(async () => {
+    await request(app).delete(`/api/projects/${pid}`).set('Cookie', cookie);
+  });
+
+  test('a custom line adds its amount to the project cost', async () => {
+    const before = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    const beforeExtra = before.body.calculation.extraCostsTotal;
+    const beforeProd = before.body.calculation.pricing.productionCost;
+
+    const res = await request(app).put(`/api/projects/${pid}/custom-lines`).set('Cookie', cookie)
+      .send([{ label: 'Bespoke acrylic jig', amount: 12.5, sort_order: 0 }]);
+    expect(res.status).toBe(200);
+    expect(res.body.custom_lines.length).toBe(1);
+    expect(res.body.custom_lines[0].label).toBe('Bespoke acrylic jig');
+
+    // Contributes like a supply: extraCostsTotal + productionCost both +12.5
+    expect(res.body.calculation.customLinesTotal).toBeCloseTo(12.5, 5);
+    expect(res.body.calculation.extraCostsTotal).toBeCloseTo(beforeExtra + 12.5, 5);
+    expect(res.body.calculation.pricing.productionCost).toBeCloseTo(beforeProd + 12.5, 5);
+  });
+
+  test('a custom line is NOT written to the supplies catalog', async () => {
+    const catalog = await request(app).get('/api/extra-costs').set('Cookie', cookie);
+    expect(catalog.status).toBe(200);
+    const hit = catalog.body.find(e => e.name === 'Bespoke acrylic jig');
+    expect(hit).toBeUndefined();
+  });
+
+  test('replace-all semantics: empty payload clears custom lines', async () => {
+    const res = await request(app).put(`/api/projects/${pid}/custom-lines`).set('Cookie', cookie)
+      .send([]);
+    expect(res.status).toBe(200);
+    expect(res.body.custom_lines.length).toBe(0);
+    expect(res.body.calculation.customLinesTotal).toBeCloseTo(0, 5);
+  });
+});
+
 // Clean up
 afterAll(() => {
   removeDbFiles(testDbPath);

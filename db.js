@@ -157,6 +157,16 @@ function bootstrap(db) {
       created_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    /* ---- Project custom one-off cost lines (project-specific, NOT saved to supplies catalog) ---- */
+    CREATE TABLE IF NOT EXISTS project_custom_lines (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      label       TEXT NOT NULL,
+      amount      REAL NOT NULL DEFAULT 0,
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     /* ---- Test prints — manual entry with estimate (custom projects) ---- */
     CREATE TABLE IF NOT EXISTS project_test_prints (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,

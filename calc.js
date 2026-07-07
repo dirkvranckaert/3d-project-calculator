@@ -411,8 +411,13 @@ function calculateProject(opts) {
   // Profit margins
   const profits = applyProfitMargins(perItemCosts, s);
 
+  // Custom one-off lines (project-specific, not saved to the supplies catalog).
+  // Billed like supplies — folded into the extra-costs total.
+  const customLinesTotal = (opts.customLines || [])
+    .reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
+
   // Extra costs
-  const extraCostsTotal = calculateExtraCosts(extras);
+  const extraCostsTotal = calculateExtraCosts(extras) + customLinesTotal;
 
   // Extra hours (project-level human-time, no margin)
   const extraHoursCost = calculateExtraHoursCost(extraHours);
@@ -456,6 +461,7 @@ function calculateProject(opts) {
     profits,
     extraCostsTotal,
     extraHoursCost,
+    customLinesTotal,
     designCosts,
     pricing,
     suggestedIndicator,

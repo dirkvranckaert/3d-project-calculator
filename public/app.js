@@ -486,7 +486,7 @@ function renderDetailView(p) {
       <button class="btn btn-sm ${p.is_custom ? 'btn-active' : ''}"
         onclick="toggleCustomFlag(${p.id})"
         title="${p.is_custom ? 'Custom project (click to turn off)' : 'Mark as custom project'}">
-        ${p.is_custom ? 'Custom ✓' : 'Custom'}
+        ${p.is_custom ? 'Include setup & design work ✓' : 'Include setup & design work'}
       </button>
       <button class="btn btn-sm" onclick="openProjectModal(${p.id})">Edit</button>
       <button class="btn btn-sm btn-danger" onclick="deleteProject(${p.id},event)">Delete</button>
@@ -1170,6 +1170,16 @@ function renderExtrasSection(p) {
       <button class="btn btn-sm btn-primary" onclick="addExtraFromSelect(${p.id})">Add</button>
     </div>` : '';
 
+  // ── Custom one-off lines (project-specific, not saved to the supplies catalog) ──
+  const customLines = (p.custom_lines || []).slice().sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+  const customTotal = customLines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  const clRows = customLines.map((l, i) => `<tr data-cl-row="${i}">
+    <td class="ec-name"><input type="text" class="eh-input cl-input-label" value="${esc(l.label || '')}" maxlength="200" onchange="commitCustomLines(${p.id})"></td>
+    <td class="ec-total num"><input type="number" class="eh-input num" min="0" step="0.01" value="${Number(l.amount) || 0}" onchange="commitCustomLines(${p.id})"></td>
+    <td class="ec-action"><button class="btn-icon" title="Remove" onclick="removeCustomLineRow(${p.id}, ${i})">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+    </button></td></tr>`).join('');
+
   return `<div class="extras-section">
     <div class="extras-section-header"><h3>Supplies &amp; Packaging</h3><span class="ec-total-badge">Total: ${fmt(total)}</span></div>
     ${activeItems.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
@@ -1178,7 +1188,67 @@ function renderExtrasSection(p) {
       <tfoot><tr><td colspan="3" style="text-align:right;font-weight:600">Total excl. VAT</td><td class="num" style="font-weight:700">${fmt(total)}</td><td></td></tr></tfoot>
     </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No supplies added yet.</p>'}
     ${addSelect}
+
+    <h4 style="font-size:13px;margin:12px 0 4px;color:var(--text-muted)">Custom one-off lines</h4>
+    <div data-custom-lines-panel="${p.id}">
+      ${customLines.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
+        <thead><tr><th>Description</th><th>Amount</th><th></th></tr></thead>
+        <tbody>${clRows}</tbody>
+        <tfoot><tr><td style="text-align:right;font-weight:600">Total excl. VAT</td><td class="num" style="font-weight:700">${fmt(customTotal)}</td><td></td></tr></tfoot>
+      </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No custom lines added yet.</p>'}
+      <div class="ec-add-row">
+        <button class="btn btn-sm btn-primary" onclick="addCustomLineRow(${p.id})">+ Add custom line</button>
+      </div>
+    </div>
   </div>`;
+}
+
+async function commitCustomLines(projectId) {
+  const panel = document.querySelector(`[data-custom-lines-panel="${projectId}"]`);
+  if (!panel) return;
+  const rows = panel.querySelectorAll('tbody tr[data-cl-row]');
+  const items = [];
+  let order = 0;
+  for (const row of rows) {
+    const label = row.querySelector('.cl-input-label')?.value || '';
+    const amount = parseFloat(row.querySelector('.eh-input.num')?.value) || 0;
+    items.push({ label, amount, sort_order: order++ });
+  }
+  await PUT(`/api/projects/${projectId}/custom-lines`, items);
+  await reloadSingleProject(projectId);
+}
+
+async function addCustomLineRow(projectId) {
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return;
+  const existing = (p.custom_lines || []).map((e, i) => ({
+    label: e.label,
+    amount: Number(e.amount) || 0,
+    sort_order: e.sort_order ?? i,
+  }));
+  existing.push({ label: 'Custom line', amount: 0, sort_order: existing.length });
+  await PUT(`/api/projects/${projectId}/custom-lines`, existing);
+  await reloadSingleProject(projectId);
+  const panel = document.querySelector(`[data-custom-lines-panel="${projectId}"]`);
+  const rows = panel?.querySelectorAll('tbody tr[data-cl-row]') || [];
+  const last = rows[rows.length - 1];
+  const input = last?.querySelector('.cl-input-label');
+  if (input) { input.focus(); input.select(); }
+}
+
+async function removeCustomLineRow(projectId, idx) {
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return;
+  const items = (p.custom_lines || []).map((e, i) => ({
+    label: e.label,
+    amount: Number(e.amount) || 0,
+    sort_order: e.sort_order ?? i,
+  }));
+  if (idx < 0 || idx >= items.length) return;
+  items.splice(idx, 1);
+  items.forEach((e, i) => { e.sort_order = i; });
+  await PUT(`/api/projects/${projectId}/custom-lines`, items);
+  await reloadSingleProject(projectId);
 }
 
 /* ================================================================== */
