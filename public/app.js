@@ -1258,7 +1258,8 @@ function renderImagesSection(p) {
   const images = p.images || [];
   const thumbs = images.map(img => `
     <div class="image-thumb ${img.is_primary ? 'image-thumb-primary' : ''}">
-      <img src="/api/images/${img.id}" alt="${esc(img.filename)}" loading="lazy">
+      <img src="/api/images/${img.id}" alt="${esc(img.filename)}" loading="lazy"
+        title="Click to enlarge" onclick="openLightbox(${p.id}, ${img.id})">
       <div class="image-thumb-actions">
         ${!img.is_primary ? `<button class="btn-icon" title="Set as primary" onclick="setPrimaryImage(${img.id},${p.id})">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
@@ -1281,6 +1282,70 @@ function renderImagesSection(p) {
       </div>
     </div>
   </div>`;
+}
+
+/* ================================================================== */
+/*  Image lightbox (click a thumbnail to enlarge)                      */
+/* ================================================================== */
+let _lightboxState = null;
+
+function openLightbox(projectId, imageId) {
+  const p = projects.find(x => x.id === projectId);
+  const imgs = p?.images || [];
+  if (!imgs.length) return;
+  let idx = imgs.findIndex(im => im.id === imageId);
+  if (idx < 0) idx = 0;
+  const urls = imgs.map(im => ({ src: `/api/images/${im.id}`, name: im.filename || '' }));
+
+  closeLightbox(); // ensure a single instance
+
+  const overlay = document.createElement('div');
+  overlay.className = 'lightbox-overlay';
+  overlay.id = 'lightbox-overlay';
+  overlay.innerHTML = `
+    <button class="lightbox-close" title="Close" aria-label="Close">&times;</button>
+    ${urls.length > 1 ? '<button class="lightbox-nav lightbox-prev" title="Previous" aria-label="Previous">&#8249;</button>' : ''}
+    <img class="lightbox-img" src="" alt="">
+    ${urls.length > 1 ? '<button class="lightbox-nav lightbox-next" title="Next" aria-label="Next">&#8250;</button>' : ''}`;
+  document.body.appendChild(overlay);
+
+  _lightboxState = { urls, idx };
+  _renderLightbox();
+
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeLightbox(); });
+  overlay.querySelector('.lightbox-close').addEventListener('click', closeLightbox);
+  overlay.querySelector('.lightbox-prev')?.addEventListener('click', (e) => { e.stopPropagation(); _lightboxStep(-1); });
+  overlay.querySelector('.lightbox-next')?.addEventListener('click', (e) => { e.stopPropagation(); _lightboxStep(1); });
+  document.addEventListener('keydown', _lightboxKeydown);
+}
+
+function _renderLightbox() {
+  const overlay = document.getElementById('lightbox-overlay');
+  if (!overlay || !_lightboxState) return;
+  const cur = _lightboxState.urls[_lightboxState.idx];
+  const imgEl = overlay.querySelector('.lightbox-img');
+  imgEl.src = cur.src;
+  imgEl.alt = cur.name;
+}
+
+function _lightboxStep(delta) {
+  if (!_lightboxState) return;
+  const n = _lightboxState.urls.length;
+  _lightboxState.idx = (_lightboxState.idx + delta + n) % n;
+  _renderLightbox();
+}
+
+function _lightboxKeydown(e) {
+  if (e.key === 'Escape') closeLightbox();
+  else if (e.key === 'ArrowLeft') _lightboxStep(-1);
+  else if (e.key === 'ArrowRight') _lightboxStep(1);
+}
+
+function closeLightbox() {
+  const overlay = document.getElementById('lightbox-overlay');
+  if (overlay) overlay.remove();
+  document.removeEventListener('keydown', _lightboxKeydown);
+  _lightboxState = null;
 }
 
 async function extractAndUploadThumbnails(projectId, file3mfBlob) {

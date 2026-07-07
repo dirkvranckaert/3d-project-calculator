@@ -1077,6 +1077,58 @@ select.inline-input { width: auto !important; max-width: 160px; text-align: left
   border-radius: 4px;
   padding: 3px;
 }
+.image-thumb img { cursor: zoom-in; }
+
+/* Image lightbox (full-size overlay) */
+.lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 500;
+  padding: 32px;
+}
+.lightbox-img {
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+  border-radius: var(--radius);
+  box-shadow: 0 8px 40px rgba(0,0,0,.5);
+}
+.lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0,0,0,.5);
+  color: #fff;
+  font-size: 30px;
+  line-height: 1;
+  cursor: pointer;
+}
+.lightbox-close:hover { background: rgba(0,0,0,.85); }
+.lightbox-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 52px;
+  height: 52px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0,0,0,.5);
+  color: #fff;
+  font-size: 38px;
+  line-height: 1;
+  cursor: pointer;
+}
+.lightbox-nav:hover { background: rgba(0,0,0,.85); }
+.lightbox-prev { left: 16px; }
+.lightbox-next { right: 16px; }
 
 /* Drop zones */
 .drop-zone {
