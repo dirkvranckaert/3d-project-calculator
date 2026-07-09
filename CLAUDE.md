@@ -130,6 +130,9 @@ Deployed via the shared infrastructure repo: `../infrastructure/apps/project-cal
 - **Domain:** `3dprojects.app3.be` (NOT `calculator.app3.be` — that subdomain 404s)
 - **PM2 name:** `project-calculator`
 - **Server:** `app3-node-01` (142.93.105.91)
+- **Auto-deploy is standing-authorised** (Dirk, 2026-07-09): merged + pushed work ships to production without a per-deploy confirmation, unless he asks to hold. Always push to `origin/main` before deploying — the engine rsyncs the working tree, so an unpushed tree silently ships something `origin` doesn't have.
+- rsync-releases pattern (no server-side `git pull`): rsync → `releases/<ts>/` → `npm ci --omit=dev` → flip `current` symlink → pm2 `delete + start` (not restart) → health check `/login` 200 + dummy-creds POST 401. **Auto-rollback on a failed health check**; manual rollback via `deploy.sh --rollback`.
+- Prod `.env` and `data/` are symlinked from `shared/` and are never overwritten by a deploy.
 
 ## Gotchas
 
