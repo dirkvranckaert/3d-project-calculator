@@ -603,12 +603,16 @@ function renderCostSection(p) {
   const pr = c.profits;
   return `<div class="cost-section"><div class="cost-grid">
     <div class="cost-card"><h4>Material Cost</h4><div class="value">${fmt(pi.materialCost * p.items_per_set)}</div>
+      <div class="detail" style="opacity:.6">excl. VAT</div>
       <div class="detail">+ ${fmtPct(settings.material_profit_pct)} profit: ${fmt(pr.materialProfit * p.items_per_set)}</div></div>
     <div class="cost-card"><h4>Processing Cost</h4><div class="value">${fmt(pi.processingCost * p.items_per_set)}</div>
+      <div class="detail" style="opacity:.6">excl. VAT</div>
       <div class="detail">+ ${fmtPct(settings.processing_profit_pct)} profit: ${fmt(pr.processingProfit * p.items_per_set)}</div></div>
     <div class="cost-card"><h4>Electricity Cost</h4><div class="value">${fmt(pi.electricityCost * p.items_per_set)}</div>
+      <div class="detail" style="opacity:.6">excl. VAT</div>
       <div class="detail">+ ${fmtPct(settings.electricity_profit_pct)} profit: ${fmt(pr.electricityProfit * p.items_per_set)}</div></div>
     <div class="cost-card"><h4>Printer Usage Cost</h4><div class="value">${fmt(pi.printerUsageCost * p.items_per_set)}</div>
+      <div class="detail" style="opacity:.6">excl. VAT</div>
       <div class="detail">+ ${fmtPct(settings.printer_cost_profit_pct)} profit: ${fmt(pr.printerCostProfit * p.items_per_set)}</div></div>
   </div></div>`;
 }
@@ -678,7 +682,7 @@ function renderExtraHoursSection(p) {
   return `<div class="extras-section" data-extra-hours-panel="${p.id}">
     <div class="extras-section-header"><h3>Extra Hours</h3><span class="ec-total-badge">Total: ${fmt(total)}</span></div>
     ${items.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
-      <thead><tr><th>Description</th><th>Hours</th><th>Rate (${settings.currency_symbol || '€'}/h)</th><th>Subtotal</th><th></th></tr></thead>
+      <thead><tr><th>Description</th><th>Hours</th><th>Rate (${settings.currency_symbol || '€'}/h) (excl. VAT)</th><th>Subtotal</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
       <tfoot><tr><td colspan="3" style="text-align:right;font-weight:600">Total excl. VAT</td><td class="num" style="font-weight:700">${fmt(total)}</td><td></td></tr></tfoot>
     </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No extra hours added yet.</p>'}
@@ -927,7 +931,7 @@ function renderDesignCostSection(p) {
     <h4 style="font-size:13px;margin:8px 0 4px;color:var(--text-muted)">Design Hours</h4>
     <div data-design-hours-panel="${p.id}">
       ${designHoursItems.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
-        <thead><tr><th>Description</th><th>Hours (billed)</th><th>Rate (${currSym}/h)</th><th>Subtotal</th><th>Actual</th><th>Δ</th><th></th></tr></thead>
+        <thead><tr><th>Description</th><th>Hours (billed)</th><th>Rate (${currSym}/h) (excl. VAT)</th><th>Subtotal</th><th>Actual</th><th>Δ</th><th></th></tr></thead>
         <tbody>${dhRows}</tbody>
         <tfoot><tr><td colspan="3" style="text-align:right;font-weight:600">Subtotal</td><td class="num" style="font-weight:700">${fmt(dc.designHoursSubtotal || 0)}</td><td colspan="3"></td></tr></tfoot>
       </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No design hours added yet.</p>'}
@@ -938,7 +942,7 @@ function renderDesignCostSection(p) {
 
     <h4 style="font-size:13px;margin:12px 0 4px;color:var(--text-muted)">Test Prints</h4>
     ${testPrintsList.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
-      <thead><tr><th>Description</th><th>Estimated (${currSym})</th><th>Actual (${currSym})</th><th>Printer</th><th>Material</th><th>Pre (min)</th><th>Post (min)</th><th>Δ</th><th></th></tr></thead>
+      <thead><tr><th>Description</th><th>Estimated (${currSym}) (excl. VAT)</th><th>Actual (${currSym})</th><th>Printer</th><th>Material</th><th>Pre (min)</th><th>Post (min)</th><th>Δ</th><th></th></tr></thead>
       <tbody>${tpRows}</tbody>
       <tfoot><tr><td style="text-align:right;font-weight:600">Subtotal (estimated)</td><td class="num" style="font-weight:700">${fmt(dc.testPrintsSubtotal || 0)}</td><td colspan="7"></td></tr></tfoot>
     </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No test prints added yet.</p>'}
@@ -950,7 +954,7 @@ function renderDesignCostSection(p) {
     <h4 style="font-size:13px;margin:12px 0 4px;color:var(--text-muted)">Other Setup &amp; Design Costs</h4>
     <div data-design-extras-panel="${p.id}">
       ${designExtrasItems.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
-        <thead><tr><th>Description</th><th>Amount (${currSym})</th><th></th></tr></thead>
+        <thead><tr><th>Description</th><th>Amount (${currSym}) (excl. VAT)</th><th></th></tr></thead>
         <tbody>${deRows}</tbody>
         <tfoot><tr><td style="text-align:right;font-weight:600">Subtotal</td><td class="num" style="font-weight:700">${fmt(dc.extrasSubtotal || 0)}</td><td></td></tr></tfoot>
       </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No extra design costs added yet.</p>'}
@@ -1225,7 +1229,7 @@ function renderExtrasSection(p) {
     <h4 style="font-size:13px;margin:12px 0 4px;color:var(--text-muted)">Custom one-off lines</h4>
     <div data-custom-lines-panel="${p.id}">
       ${customLines.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
-        <thead><tr><th>Description</th><th>Amount</th><th></th></tr></thead>
+        <thead><tr><th>Description</th><th>Amount (excl. VAT)</th><th></th></tr></thead>
         <tbody>${clRows}</tbody>
         <tfoot><tr><td style="text-align:right;font-weight:600">Total excl. VAT</td><td class="num" style="font-weight:700">${fmt(customTotal)}</td><td></td></tr></tfoot>
       </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No custom lines added yet.</p>'}
@@ -1535,7 +1539,7 @@ function renderPricingSection(p) {
   if (p.actual_sales_price > 0 && c.actualMargin) {
     const am = c.actualMargin;
     actualBlock = `<div class="pricing-block">
-      <h4>Actual Sales Price</h4>
+      <h4>Actual Sales Price (incl. VAT)</h4>
       <div class="big-price">${fmt(p.actual_sales_price)}</div>
       <div class="sub">${fmt(am.actualExclVat)} excl. VAT</div>
       <div class="sub">Profit: ${fmt(am.profitAmount)} <span class="margin-badge ${c.actualIndicator}">${fmtPct(am.marginPct)}</span></div>
@@ -1543,7 +1547,7 @@ function renderPricingSection(p) {
     </div>`;
   } else {
     actualBlock = `<div class="pricing-block">
-      <h4>Actual Sales Price</h4>
+      <h4>Actual Sales Price (incl. VAT)</h4>
       <div class="actual-price-wrap">
         <input type="number" class="actual-price-input" value="${p.actual_sales_price || ''}"
           placeholder="Enter price..." onchange="updateActualPrice(${p.id}, this.value)" step="0.01" min="0">
@@ -2483,13 +2487,13 @@ function renderSettingsTab(tab) {
 
 function renderGeneralSettings() {
   return `
-    <div class="settings-row"><label>Hourly Processing Rate (${settings.currency_symbol || '\u20ac'})</label>
+    <div class="settings-row"><label>Hourly Processing Rate (${settings.currency_symbol || '\u20ac'}) (excl. VAT)</label>
       <input type="number" value="${settings.hourly_rate || 40}" step="0.01" onchange="saveSetting('hourly_rate', this.value)"></div>
-    <div class="settings-row"><label>Default Hour Rate (${settings.currency_symbol || '\u20ac'}/h)</label>
+    <div class="settings-row"><label>Default Hour Rate (${settings.currency_symbol || '\u20ac'}/h) (excl. VAT)</label>
       <input type="number" value="${settings.extra_uren_default_rate ?? 60}" step="0.01" onchange="saveSetting('extra_uren_default_rate', this.value)"></div>
-    <div class="settings-row"><label>Design Hourly Rate (${settings.currency_symbol || '\u20ac'}/h) \u2014 custom projects</label>
+    <div class="settings-row"><label>Design Hourly Rate (${settings.currency_symbol || '\u20ac'}/h) (excl. VAT) \u2014 custom projects</label>
       <input type="number" value="${settings.design_hourly_rate ?? 65}" step="0.01" onchange="saveSetting('design_hourly_rate', this.value)"></div>
-    <div class="settings-row"><label>Electricity Price (${settings.currency_symbol || '\u20ac'}/kWh)</label>
+    <div class="settings-row"><label>Electricity Price (${settings.currency_symbol || '\u20ac'}/kWh) (excl. VAT)</label>
       <input type="number" value="${settings.electricity_price_kwh || 0.40}" step="0.01" onchange="saveSetting('electricity_price_kwh', this.value)"></div>
     <div class="settings-row"><label>VAT Rate (%)</label>
       <input type="number" value="${settings.vat_rate || 21}" step="0.1" onchange="saveSetting('vat_rate', this.value)"></div>
@@ -2539,7 +2543,7 @@ window.editPrinter = function(id) {
   document.getElementById('edit-dialog-title').textContent = p ? 'Edit Printer' : 'Add Printer';
   document.getElementById('edit-dialog-body').innerHTML = `<div class="form-grid">
     <div class="form-group"><label>Name</label><input type="text" id="pe-name" value="${esc(p?.name || '')}"></div>
-    <div class="form-group"><label>Purchase Price</label><input type="number" id="pe-price" step="0.01" value="${p?.purchase_price || 0}"></div>
+    <div class="form-group"><label>Purchase Price (excl. VAT)</label><input type="number" id="pe-price" step="0.01" value="${p?.purchase_price || 0}"></div>
     <div class="form-group"><label>Expected Prints</label><input type="number" id="pe-prints" value="${p?.expected_prints || 5000}"></div>
     <div class="form-group"><label>Payback Months</label><input type="number" id="pe-months" value="${p?.earn_back_months || 24}"></div>
   </div><label style="margin-top:12px">Electricity Profiles</label><div id="pe-elec">${elecRows}</div>
@@ -3542,7 +3546,7 @@ function renderVerifyModal() {
 
     <h4 style="margin:0 0 6px">Hourly Rate Override</h4>
     <div class="form-group" style="max-width:180px;margin-bottom:12px">
-      <label>€/h (time cost only)</label>
+      <label>€/h (time cost only) (excl. VAT)</label>
       <input type="number" min="0" step="0.01" value="${verifyHourlyRate}" class="eh-input"
         onchange="verifyHourlyRate=+this.value||0;verifyScheduleRecompute()">
     </div>
