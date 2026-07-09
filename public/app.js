@@ -630,24 +630,38 @@ function renderMaterialRequirements(p) {
   const totalGrams = reqs.reduce((s, r) => s + (Number(r.grams) || 0), 0);
 
   const rows = reqs.map(r => {
-    const label = r.materialName
-      ? `${esc(r.materialName)}${r.materialColor ? ` — ${esc(r.materialColor)}` : ''}`
-      : '<span style="color:var(--text-muted)">No material assigned</span>';
-    const spools = r.spools != null ? `≈ ${Number(r.spools).toFixed(1)} spools` : '';
-    return `<tr>
-      <td>${label}</td>
-      <td class="num">${fmtGrams(r.grams)}</td>
-      <td class="num col-hide-mobile" style="color:var(--text-muted)">${spools}</td>
-    </tr>`;
+    // Swatch — real colour for grams-split rows; a neutral placeholder for
+    // legacy plates that carry no per-filament colour data.
+    const swatch = r.colorHex
+      ? `<span class="color-swatch" style="background:${esc(r.colorHex)}" title="${esc(r.materialColor || r.colorHex)}"></span>`
+      : '<span class="color-swatch mr-swatch-none" title="No per-colour data — re-import this plate to split by colour"></span>';
+
+    // Label: "Brand Type — Colour" for split rows, full material name for legacy.
+    const nameBits = r.colorHex
+      ? [r.brand, r.materialType].filter(Boolean).join(' ')
+      : (r.materialName || [r.materialType].filter(Boolean).join(' '));
+    let label;
+    if (r.materialId == null && !r.colorHex) {
+      label = '<span style="color:var(--text-muted)">No material assigned</span>';
+    } else {
+      label = esc(nameBits || 'Material');
+      if (r.materialColor) label += ` — ${esc(r.materialColor)}`;
+    }
+
+    // Spools only when meaningful (>= 0.1 roll) — otherwise noise like "0.0 spools".
+    const spools = (r.spools != null && r.spools >= 0.1)
+      ? `<span class="mr-spools">≈ ${Number(r.spools).toFixed(1)} spools</span>` : '';
+
+    return `<div class="mr-row">
+      <span class="mr-label">${swatch}<span>${label}</span></span>
+      <span class="mr-grams">${fmtGrams(r.grams)}${spools}</span>
+    </div>`;
   }).join('');
 
-  return `<div class="extras-section">
-    <div class="extras-section-header"><h3>Material Required</h3><span class="ec-total-badge">Total: ${fmtGrams(totalGrams)}</span></div>
-    <div class="plates-table-wrap"><table class="ec-table">
-      <thead><tr><th>Brand · Type · Color</th><th>Required</th><th class="col-hide-mobile">Spools</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div>
-  </div>`;
+  return `<div class="cost-section"><div class="mr-card">
+    <div class="mr-card-head"><h4>Material Required</h4><span class="mr-total">${fmtGrams(totalGrams)}</span></div>
+    <div class="mr-rows">${rows}</div>
+  </div></div>`;
 }
 
 /* ================================================================== */
@@ -2302,6 +2316,7 @@ async function confirm3mfImport() {
         color: hex,
         name: fmMatch?.colorName || hexToName(hex),
         brand: fmMatch?.brand || brand,
+        grams: f.usedGrams,   // per-filament grams — enables per-colour Material Required split
       };
     });
     platesToImport.push({
@@ -3227,6 +3242,7 @@ async function confirmSchedulePrint() {
           name: fmMatch?.colorName || hexToName(hex),
           brand: fmMatch?.brand || brand,
           extruder: isDual && f.extruder ? (f.extruder === 1 ? 'L' : 'R') : null,
+          grams: f.usedGrams,   // per-filament grams — enables per-colour Material Required split
         };
       });
       return {

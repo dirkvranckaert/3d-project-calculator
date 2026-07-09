@@ -344,43 +344,86 @@ function calculateDesignCosts(opts) {
 /* ------------------------------------------------------------------ */
 
 /**
- * Aggregate total filament grams per material needed to print the whole project.
+ * Aggregate total filament grams needed to print the whole project.
  *
- * Groups enabled (non-test-print) plate breakdowns by their material record and
- * sums the grams. Grams per plate are scaled identically to the Material Cost
- * figure: (totalPlasticGrams / items_per_plate) × itemsPerSet — i.e. per-item
- * plastic × project item count. This keeps the total consistent with
- * perItemCosts.materialCost × itemsPerSet.
+ * Grams per plate are scaled identically to the Material Cost figure:
+ * (totalPlasticGrams / items_per_plate) × itemsPerSet — i.e. per-item plastic ×
+ * project item count. This authoritative plate figure ALWAYS drives the total,
+ * keeping Σ(grams × price_per_kg) consistent with materialCost × itemsPerSet.
+ *
+ * Two shapes are supported and may co-exist in one project (mixed DB state):
+ *   - Plate WITH per-filament grams (`colors[].grams`, captured from the 3MF at
+ *     import) → split the authoritative plate grams across colours in proportion
+ *     to their used-gram ratio (NOT even division), one row per brand+type+colour.
+ *     Σ of the split equals the plate total exactly, so the material-cost total
+ *     is unchanged.
+ *   - Plate WITHOUT per-filament grams (legacy) → a single row keyed on the
+ *     material record, exactly the pre-colour behaviour. Never divided evenly,
+ *     never dropped, never shown as 0g.
  *
  * @param {Array<object>} enabledPlates – plate breakdowns, already filtered to
  *   enabled & non-test, each carrying { itemsPerPlate, totalPlasticGrams,
- *   materialId, materialName, materialType, materialColor, materialRollWeightG }
+ *   materialId, materialName, materialType, materialColor, materialRollWeightG,
+ *   colors: Array<{color, name, brand, grams}> }
  * @param {number} itemsPerSet – project item count
- * @returns {Array<{materialId, materialName, materialType, materialColor,
- *   rollWeightG, grams, spools}>} one row per material, sorted by grams desc.
- *   Plates with no material are grouped under materialId=null. `spools` is the
- *   grams / rollWeightG estimate, or null when the roll weight is unknown.
+ * @returns {Array<object>} rows { materialId, materialName, materialType,
+ *   materialColor, colorHex, brand, rollWeightG, grams, spools, colorSplit },
+ *   sorted by grams desc. `spools` = grams / rollWeightG, or null when unknown.
  */
 function aggregateMaterialRequirements(enabledPlates, itemsPerSet = 1) {
   const groups = new Map();
+  const ensure = (key, seed) => {
+    let g = groups.get(key);
+    if (!g) { g = seed; groups.set(key, g); }
+    return g;
+  };
+
   for (const p of enabledPlates) {
     const items = p.itemsPerPlate || 1;
-    const grams = ((p.totalPlasticGrams || 0) / items) * itemsPerSet;
-    const key = p.materialId != null ? `id:${p.materialId}` : 'none';
-    let g = groups.get(key);
-    if (!g) {
-      g = {
+    // Authoritative plate grams — the figure the material cost is built from.
+    const plateGrams = ((p.totalPlasticGrams || 0) / items) * itemsPerSet;
+
+    const colours = (p.colors || [])
+      .map(c => ({ ...c, g: Number(c.grams) }))
+      .filter(c => Number.isFinite(c.g) && c.g > 0);
+    const sumUsed = colours.reduce((s, c) => s + c.g, 0);
+
+    if (colours.length && sumUsed > 0) {
+      // Split the authoritative plate grams by the per-filament ratio.
+      for (const c of colours) {
+        const hex = c.color || null;
+        const key = `mat:${p.materialId ?? 'none'}|hex:${hex ?? ''}|name:${c.name ?? ''}`;
+        const g = ensure(key, {
+          materialId: p.materialId != null ? p.materialId : null,
+          materialName: p.materialName || null,
+          materialType: p.materialType || null,
+          materialColor: c.name || hex || (p.materialColor || null),
+          colorHex: hex,
+          brand: c.brand || null,
+          rollWeightG: p.materialRollWeightG || null,
+          grams: 0,
+          colorSplit: true,
+        });
+        g.grams += plateGrams * (c.g / sumUsed);
+      }
+    } else {
+      // Legacy fallback — one row per material record (pre-colour behaviour).
+      const key = p.materialId != null ? `id:${p.materialId}` : 'none';
+      const g = ensure(key, {
         materialId: p.materialId != null ? p.materialId : null,
         materialName: p.materialName || null,
         materialType: p.materialType || null,
         materialColor: p.materialColor || null,
+        colorHex: null,
+        brand: null,
         rollWeightG: p.materialRollWeightG || null,
         grams: 0,
-      };
-      groups.set(key, g);
+        colorSplit: false,
+      });
+      g.grams += plateGrams;
     }
-    g.grams += grams;
   }
+
   const list = [...groups.values()];
   for (const g of list) {
     g.spools = g.rollWeightG > 0 ? g.grams / g.rollWeightG : null;
@@ -488,6 +531,7 @@ function calculateProject(opts) {
       materialType: plate.material_type || null,
       materialColor: plate.material_color || null,
       materialRollWeightG: Number(plate.material_roll_weight_g) || null,
+      colors: Array.isArray(plate.colors) ? plate.colors : [],
     };
   });
 

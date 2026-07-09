@@ -665,6 +665,45 @@ describe('calculateProject', () => {
     const gramsCost = result.materialRequirements.reduce((s, r) => s + r.grams * (20 / 1000), 0);
     expect(gramsCost).toBeCloseTo(result.perItemCosts.materialCost * itemsPerSet, 6);
   });
+
+  test('materialRequirements — mixed legacy + grams-carrying plates keep totals exact', () => {
+    const matA = {
+      material_id: 1, material_name: 'Bambulab - Generic (PLA Basic)', material_type: 'PLA Basic',
+      material_color: 'Red', material_roll_weight_g: 1000, material_price_per_kg: 20,
+    };
+    const plates = [
+      // Legacy plate — no per-filament colour data at all
+      { id: 1, name: 'Legacy', print_time_minutes: 60, plastic_grams: 100, items_per_plate: 1,
+        risk_multiplier: 1, pre_processing_minutes: 0, post_processing_minutes: 0,
+        printer_purchase_price: 800, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
+        enabled: 1, ...matA },
+      // Grams-carrying plate — same material, split across two colours (3:1)
+      { id: 2, name: 'Multi', print_time_minutes: 60, plastic_grams: 40, items_per_plate: 1,
+        risk_multiplier: 1, pre_processing_minutes: 0, post_processing_minutes: 0,
+        printer_purchase_price: 800, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
+        enabled: 1, ...matA,
+        colors: [
+          { color: '#ffffff', name: 'White', brand: 'Bambulab', grams: 3 },
+          { color: '#0000ff', name: 'Blue',  brand: 'Bambulab', grams: 1 },
+        ] },
+    ];
+    const itemsPerSet = 1;
+    const result = calc.calculateProject({ plates, extras: [], settings: defaultSettings, itemsPerSet });
+    const reqs = result.materialRequirements;
+
+    // Legacy → 1 aggregate material row (100g); Multi → 2 colour rows (30g / 10g)
+    expect(reqs).toHaveLength(3);
+    const legacy = reqs.find(r => !r.colorSplit);
+    expect(legacy.grams).toBeCloseTo(100, 6);
+    const white = reqs.find(r => r.colorHex === '#ffffff');
+    const blue  = reqs.find(r => r.colorHex === '#0000ff');
+    expect(white.grams).toBeCloseTo(30, 6); // 40 × 3/4
+    expect(blue.grams).toBeCloseTo(10, 6);  // 40 × 1/4
+
+    // Consistency STILL holds across the mix: Σ grams × price = materialCost × itemsPerSet
+    const gramsCost = reqs.reduce((s, r) => s + r.grams * (20 / 1000), 0);
+    expect(gramsCost).toBeCloseTo(result.perItemCosts.materialCost * itemsPerSet, 6);
+  });
 });
 
 /* ================================================================== */
@@ -707,6 +746,43 @@ describe('aggregateMaterialRequirements', () => {
 
   test('empty input returns empty array', () => {
     expect(calc.aggregateMaterialRequirements([], 5)).toEqual([]);
+  });
+
+  test('splits a plate with per-filament grams by colour, preserving the plate total', () => {
+    const enabled = [{
+      itemsPerPlate: 1, totalPlasticGrams: 100, materialId: 1,
+      materialName: 'Bambulab - Generic (PLA Basic)', materialType: 'PLA Basic',
+      materialColor: null, materialRollWeightG: 1000,
+      colors: [
+        { color: '#ffffff', name: 'White', brand: 'Bambulab', grams: 3 },
+        { color: '#0000ff', name: 'Blue',  brand: 'Bambulab', grams: 1 },
+      ],
+    }];
+    const reqs = calc.aggregateMaterialRequirements(enabled, 1);
+    expect(reqs).toHaveLength(2);
+    const white = reqs.find(r => r.colorHex === '#ffffff');
+    const blue  = reqs.find(r => r.colorHex === '#0000ff');
+    // plate grams = 100; split 3:1 (NOT even) → 75 / 25
+    expect(white.grams).toBeCloseTo(75, 6);
+    expect(blue.grams).toBeCloseTo(25, 6);
+    expect(white.colorSplit).toBe(true);
+    expect(white.brand).toBe('Bambulab');
+    // Total preserved exactly
+    expect(white.grams + blue.grams).toBeCloseTo(100, 6);
+  });
+
+  test('plate with colours but no grams falls back to a single material row', () => {
+    const enabled = [{
+      itemsPerPlate: 1, totalPlasticGrams: 50, materialId: 1,
+      materialName: 'Bambulab - Generic (PLA Basic)', materialType: 'PLA Basic',
+      materialColor: 'Red', materialRollWeightG: 1000,
+      colors: [{ color: '#ff0000', name: 'Red', brand: 'Bambulab' }], // no grams
+    }];
+    const reqs = calc.aggregateMaterialRequirements(enabled, 1);
+    expect(reqs).toHaveLength(1);
+    expect(reqs[0].grams).toBeCloseTo(50, 6);
+    expect(reqs[0].colorSplit).toBe(false);
+    expect(reqs[0].colorHex).toBeNull();
   });
 });
 

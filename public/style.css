@@ -472,6 +472,68 @@ body {
   margin-top: 4px;
 }
 
+/* Material Required — card idiom matching the cost cards */
+.mr-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+.mr-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.mr-card-head h4 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-muted);
+}
+.mr-total {
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.mr-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mr-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+.mr-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.mr-label > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mr-grams {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.mr-spools {
+  color: var(--text-muted);
+  font-weight: 400;
+  margin-left: 6px;
+}
+.mr-swatch-none {
+  background: repeating-linear-gradient(45deg, var(--border), var(--border) 3px, transparent 3px, transparent 6px);
+}
+
 /* ================================================================== */
 /*  Pricing summary                                                    */
 /* ================================================================== */
