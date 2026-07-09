@@ -680,7 +680,7 @@ function renderExtraHoursSection(p) {
   }).join('');
 
   return `<div class="extras-section" data-extra-hours-panel="${p.id}">
-    <div class="extras-section-header"><h3>Extra Hours</h3><span class="ec-total-badge">Total: ${fmt(total)}</span></div>
+    <div class="extras-section-header"><h3>Extra Hours</h3><span class="ec-total-badge">Total (excl. VAT): ${fmt(total)}</span></div>
     ${items.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
       <thead><tr><th>Description</th><th>Hours</th><th>Rate (${settings.currency_symbol || '€'}/h) (excl. VAT)</th><th>Subtotal</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
@@ -1218,9 +1218,9 @@ function renderExtrasSection(p) {
     </button></td></tr>`).join('');
 
   return `<div class="extras-section">
-    <div class="extras-section-header"><h3>Supplies &amp; Packaging</h3><span class="ec-total-badge">Total: ${fmt(total)}</span></div>
+    <div class="extras-section-header"><h3>Supplies &amp; Packaging</h3><span class="ec-total-badge">Total (excl. VAT): ${fmt(total)}</span></div>
     ${activeItems.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
-      <thead><tr><th>Item</th><th>Unit Price</th><th>Qty</th><th>Total</th><th></th></tr></thead>
+      <thead><tr><th>Item</th><th>Unit Price (excl. VAT)</th><th>Qty</th><th>Total</th><th></th></tr></thead>
       <tbody>${rows.join('')}</tbody>
       <tfoot><tr><td colspan="3" style="text-align:right;font-weight:600">Total excl. VAT</td><td class="num" style="font-weight:700">${fmt(total)}</td><td></td></tr></tfoot>
     </table></div>` : '<p style="color:var(--text-muted);font-size:13px;padding:4px 0">No supplies added yet.</p>'}
@@ -2528,7 +2528,7 @@ function renderThemeSettings() {
 function renderPrintersSettings() {
   let html = printers.map(p => `<div class="settings-list-item"><div>
     <div class="name">${esc(p.name)}</div>
-    <div class="meta">${fmt(p.purchase_price)} | ${p.expected_prints} prints | ${p.earn_back_months}mo payback${p.electricity?.map(e => ` | ${e.material_type}: ${e.kwh_per_hour} kWh`).join('') || ''}</div>
+    <div class="meta">${fmt(p.purchase_price)} excl. VAT | ${p.expected_prints} prints | ${p.earn_back_months}mo payback${p.electricity?.map(e => ` | ${e.material_type}: ${e.kwh_per_hour} kWh`).join('') || ''}</div>
   </div><div style="display:flex;gap:4px">
     <button class="btn btn-sm" onclick="editPrinter(${p.id})">Edit</button>
     <button class="btn btn-sm btn-danger" onclick="deletePrinterItem(${p.id},event)">Del</button>
@@ -2564,7 +2564,7 @@ window.deletePrinterItem = async function(id, e) { const a = e?.currentTarget||e
 function renderMaterialsSettings() {
   let html = materials.map(m => `<div class="settings-list-item"><div>
     <div class="name">${esc(m.name)}${m.color ? ` <span style="color:var(--text-muted)">(${esc(m.color)})</span>`:''}</div>
-    <div class="meta">${m.material_type} | ${fmt(m.price_per_kg)}/kg | ${fmtWeight(m.roll_weight_g)} roll</div>
+    <div class="meta">${m.material_type} | ${fmt(m.price_per_kg)}/kg excl. VAT | ${fmtWeight(m.roll_weight_g)} roll</div>
   </div><div style="display:flex;gap:4px">
     <button class="btn btn-sm" onclick="showPriceImpact(${m.id})">What-if</button>
     <button class="btn btn-sm" onclick="editMaterial(${m.id})">Edit</button>
@@ -2599,8 +2599,8 @@ window.showPriceImpact = async function(materialId) {
   document.getElementById('edit-dialog-body').innerHTML = `
     <div class="price-impact-form">
       <p style="margin-bottom:12px">Simulate a price change for <strong>${esc(m.name)}</strong> and see how it affects all projects using this material.</p>
-      <div class="settings-row"><label>Current price/kg</label><span style="font-weight:600">${fmt(m.price_per_kg)}</span></div>
-      <div class="settings-row"><label>New price/kg</label><input type="number" id="pi-new-price" step="0.01" value="${m.price_per_kg}"></div>
+      <div class="settings-row"><label>Current price/kg (excl. VAT)</label><span style="font-weight:600">${fmt(m.price_per_kg)}</span></div>
+      <div class="settings-row"><label>New price/kg (excl. VAT)</label><input type="number" id="pi-new-price" step="0.01" value="${m.price_per_kg}"></div>
       <div style="margin-top:12px"><button class="btn btn-primary" onclick="runPriceImpact(${materialId})">Simulate</button></div>
     </div>
     <div id="pi-results"></div>`;
@@ -2644,7 +2644,7 @@ function renderPriceImpactResults() {
         ${archivedHidden || priceImpactShowArchived ? `<label class="archive-toggle"><input type="checkbox" ${priceImpactShowArchived ? 'checked' : ''} onchange="togglePiArchived(this.checked)"> Include archived (${archivedHidden})</label>` : ''}
       </div>
       ${filtered.length ? `<table class="ec-table">
-        <thead><tr><th>Project</th><th>Production</th><th>Suggested</th><th>Margin</th><th>Change</th></tr></thead>
+        <thead><tr><th>Project</th><th>Production (excl. VAT)</th><th>Suggested (incl. VAT)</th><th>Margin</th><th>Change</th></tr></thead>
         <tbody>${filtered.map(i => {
           const marginDiff = (i.simulated.marginPct || 0) - (i.current.marginPct || 0);
           const indicator = marginDiff < -2 ? 'red' : marginDiff < 0 ? 'orange' : 'green';
