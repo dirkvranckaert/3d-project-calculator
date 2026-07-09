@@ -624,6 +624,90 @@ describe('calculateProject', () => {
     expect(single.extraHoursCost).toBeCloseTo(60, 6);
     expect(set5.extraHoursCost).toBeCloseTo(60, 6);
   });
+
+  test('materialRequirements — grams consistent with material cost, excludes disabled/test', () => {
+    const baseMat = {
+      material_id: 1, material_name: 'Bambulab - Generic (ABS)', material_type: 'ABS',
+      material_color: 'Red', material_roll_weight_g: 1000, material_price_per_kg: 20,
+    };
+    const plates = [
+      { id: 1, name: 'A', print_time_minutes: 60, plastic_grams: 100, items_per_plate: 8,
+        risk_multiplier: 1, pre_processing_minutes: 0, post_processing_minutes: 0,
+        printer_purchase_price: 800, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
+        enabled: 1, ...baseMat },
+      { id: 2, name: 'B', print_time_minutes: 30, plastic_grams: 40, items_per_plate: 4,
+        risk_multiplier: 1, pre_processing_minutes: 0, post_processing_minutes: 0,
+        printer_purchase_price: 800, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
+        enabled: 1, ...baseMat },
+      // Disabled plate — must NOT contribute
+      { id: 3, name: 'Disabled', print_time_minutes: 30, plastic_grams: 999, items_per_plate: 1,
+        risk_multiplier: 1, pre_processing_minutes: 0, post_processing_minutes: 0,
+        printer_purchase_price: 800, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
+        enabled: 0, ...baseMat },
+      // Test-print plate — must NOT contribute
+      { id: 4, name: 'Test', print_time_minutes: 30, plastic_grams: 500, items_per_plate: 1,
+        risk_multiplier: 1, pre_processing_minutes: 0, post_processing_minutes: 0,
+        printer_purchase_price: 800, printer_earn_back_months: 24, printer_kwh_per_hour: 0.11,
+        enabled: 1, is_test_print: 1, ...baseMat },
+    ];
+    const itemsPerSet = 8;
+    const result = calc.calculateProject({ plates, extras: [], settings: defaultSettings, itemsPerSet });
+
+    expect(result.materialRequirements).toHaveLength(1);
+    const req = result.materialRequirements[0];
+    // grams = (100/8 + 40/4) × 8 = (12.5 + 10) × 8 = 180
+    expect(req.grams).toBeCloseTo(180, 6);
+    expect(req.materialName).toBe('Bambulab - Generic (ABS)');
+    expect(req.materialColor).toBe('Red');
+    expect(req.spools).toBeCloseTo(0.18, 6);
+
+    // Consistency: Σ(grams × price_per_kg / 1000) === perItemCosts.materialCost × itemsPerSet
+    const gramsCost = result.materialRequirements.reduce((s, r) => s + r.grams * (20 / 1000), 0);
+    expect(gramsCost).toBeCloseTo(result.perItemCosts.materialCost * itemsPerSet, 6);
+  });
+});
+
+/* ================================================================== */
+/*  aggregateMaterialRequirements                                      */
+/* ================================================================== */
+describe('aggregateMaterialRequirements', () => {
+  test('groups by material, sums grams, computes spools, sorts desc', () => {
+    const enabled = [
+      { itemsPerPlate: 8, totalPlasticGrams: 100, materialId: 1, materialName: 'Bambulab - Generic (ABS)', materialType: 'ABS', materialColor: 'Red', materialRollWeightG: 1000 },
+      { itemsPerPlate: 4, totalPlasticGrams: 40,  materialId: 1, materialName: 'Bambulab - Generic (ABS)', materialType: 'ABS', materialColor: 'Red', materialRollWeightG: 1000 },
+      { itemsPerPlate: 2, totalPlasticGrams: 30,  materialId: 2, materialName: 'Prusament - Generic (PETG)', materialType: 'PETG', materialColor: null, materialRollWeightG: 1000 },
+    ];
+    const reqs = calc.aggregateMaterialRequirements(enabled, 8);
+    expect(reqs).toHaveLength(2);
+
+    const abs = reqs.find(r => r.materialId === 1);
+    // (100/8)×8 + (40/4)×8 = 100 + 80 = 180
+    expect(abs.grams).toBeCloseTo(180, 6);
+    expect(abs.spools).toBeCloseTo(0.18, 6);
+    expect(abs.materialColor).toBe('Red');
+
+    const petg = reqs.find(r => r.materialId === 2);
+    // (30/2)×8 = 120
+    expect(petg.grams).toBeCloseTo(120, 6);
+
+    // sorted by grams descending
+    expect(reqs[0].grams).toBeGreaterThanOrEqual(reqs[1].grams);
+  });
+
+  test('unassigned material grouped under id=null with spools=null', () => {
+    const enabled = [
+      { itemsPerPlate: 1, totalPlasticGrams: 25, materialId: null, materialName: null, materialType: null, materialColor: null, materialRollWeightG: null },
+    ];
+    const reqs = calc.aggregateMaterialRequirements(enabled, 1);
+    expect(reqs).toHaveLength(1);
+    expect(reqs[0].materialId).toBeNull();
+    expect(reqs[0].grams).toBeCloseTo(25, 6);
+    expect(reqs[0].spools).toBeNull();
+  });
+
+  test('empty input returns empty array', () => {
+    expect(calc.aggregateMaterialRequirements([], 5)).toEqual([]);
+  });
 });
 
 /* ================================================================== */

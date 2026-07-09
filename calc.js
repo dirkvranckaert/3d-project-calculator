@@ -340,6 +340,56 @@ function calculateDesignCosts(opts) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Material requirements (filament grams per material, whole project) */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Aggregate total filament grams per material needed to print the whole project.
+ *
+ * Groups enabled (non-test-print) plate breakdowns by their material record and
+ * sums the grams. Grams per plate are scaled identically to the Material Cost
+ * figure: (totalPlasticGrams / items_per_plate) × itemsPerSet — i.e. per-item
+ * plastic × project item count. This keeps the total consistent with
+ * perItemCosts.materialCost × itemsPerSet.
+ *
+ * @param {Array<object>} enabledPlates – plate breakdowns, already filtered to
+ *   enabled & non-test, each carrying { itemsPerPlate, totalPlasticGrams,
+ *   materialId, materialName, materialType, materialColor, materialRollWeightG }
+ * @param {number} itemsPerSet – project item count
+ * @returns {Array<{materialId, materialName, materialType, materialColor,
+ *   rollWeightG, grams, spools}>} one row per material, sorted by grams desc.
+ *   Plates with no material are grouped under materialId=null. `spools` is the
+ *   grams / rollWeightG estimate, or null when the roll weight is unknown.
+ */
+function aggregateMaterialRequirements(enabledPlates, itemsPerSet = 1) {
+  const groups = new Map();
+  for (const p of enabledPlates) {
+    const items = p.itemsPerPlate || 1;
+    const grams = ((p.totalPlasticGrams || 0) / items) * itemsPerSet;
+    const key = p.materialId != null ? `id:${p.materialId}` : 'none';
+    let g = groups.get(key);
+    if (!g) {
+      g = {
+        materialId: p.materialId != null ? p.materialId : null,
+        materialName: p.materialName || null,
+        materialType: p.materialType || null,
+        materialColor: p.materialColor || null,
+        rollWeightG: p.materialRollWeightG || null,
+        grams: 0,
+      };
+      groups.set(key, g);
+    }
+    g.grams += grams;
+  }
+  const list = [...groups.values()];
+  for (const g of list) {
+    g.spools = g.rollWeightG > 0 ? g.grams / g.rollWeightG : null;
+  }
+  list.sort((a, b) => b.grams - a.grams);
+  return list;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Full project calculation (orchestrator)                            */
 /* ------------------------------------------------------------------ */
 
@@ -401,12 +451,23 @@ function calculateProject(opts) {
       plateName: plate.name || '',
       enabled: plate.enabled !== undefined ? !!plate.enabled : true,
       isTestPrint: !!plate.is_test_print,
+      materialId: plate.material_id != null ? plate.material_id : null,
+      materialName: plate.material_name || null,
+      materialType: plate.material_type || null,
+      materialColor: plate.material_color || null,
+      materialRollWeightG: Number(plate.material_roll_weight_g) || null,
     };
   });
 
   // Per-item costs (only enabled, non-test-print plates)
   const enabledPlates = plateBreakdowns.filter(p => p.enabled && !p.isTestPrint);
   const perItemCosts = calculatePerItemCosts(enabledPlates);
+
+  // Material requirements — total filament grams per material needed for the whole
+  // project. Same enabled/non-test filter and same (÷ items_per_plate × items_per_set)
+  // scaling as the Material Cost figure, so Σ(grams × price_per_kg / 1000) equals
+  // perItemCosts.materialCost × itemsPerSet.
+  const materialRequirements = aggregateMaterialRequirements(enabledPlates, itemsPerSet);
 
   // Profit margins
   const profits = applyProfitMargins(perItemCosts, s);
@@ -458,6 +519,7 @@ function calculateProject(opts) {
   return {
     plateBreakdowns,
     perItemCosts,
+    materialRequirements,
     profits,
     extraCostsTotal,
     extraHoursCost,
@@ -626,6 +688,7 @@ module.exports = {
   VERIFY_VAT_RATE,
   calculatePlateCosts,
   calculatePerItemCosts,
+  aggregateMaterialRequirements,
   applyProfitMargins,
   calculateExtraCosts,
   calculateExtraHoursCost,

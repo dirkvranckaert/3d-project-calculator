@@ -365,7 +365,8 @@ function enrichProject(db, project) {
     SELECT pp.*,
       p.name as printer_name, p.purchase_price as printer_purchase_price,
       p.earn_back_months as printer_earn_back_months, p.expected_prints as printer_expected_prints,
-      m.name as material_name, m.material_type, m.price_per_kg as material_price_per_kg
+      m.name as material_name, m.material_type, m.price_per_kg as material_price_per_kg,
+      m.color as material_color, m.roll_weight_g as material_roll_weight_g
     FROM project_plates pp
     LEFT JOIN printers p ON pp.printer_id = p.id
     LEFT JOIN materials m ON pp.material_id = m.id

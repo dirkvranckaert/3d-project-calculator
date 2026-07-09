@@ -498,6 +498,7 @@ function renderDetailView(p) {
   ${renderProjectNotes(p)}
   ${renderPlatesSection(p)}
   ${renderCostSection(p)}
+  ${renderMaterialRequirements(p)}
   ${renderExtraHoursSection(p)}
   ${renderExtrasSection(p)}
   ${renderImagesSection(p)}
@@ -517,6 +518,7 @@ function renderDetailView(p) {
     ${renderProjectNotes(p)}
     ${renderPlatesSection(p)}
     ${renderCostSection(p)}
+    ${renderMaterialRequirements(p)}
     ${renderExtraHoursSection(p)}
     ${renderExtrasSection(p)}
     ${renderImagesSection(p)}
@@ -609,6 +611,37 @@ function renderCostSection(p) {
     <div class="cost-card"><h4>Printer Usage Cost</h4><div class="value">${fmt(pi.printerUsageCost * p.items_per_set)}</div>
       <div class="detail">+ ${fmtPct(settings.printer_cost_profit_pct)} profit: ${fmt(pr.printerCostProfit * p.items_per_set)}</div></div>
   </div></div>`;
+}
+
+/* ================================================================== */
+/*  Material required (total filament per material for the project)    */
+/* ================================================================== */
+function renderMaterialRequirements(p) {
+  const c = p.calculation;
+  if (!c || !(p.plates || []).some(pl => !pl.is_test_print)) return '';
+  const reqs = c.materialRequirements || [];
+  if (reqs.length === 0) return '';
+  const totalGrams = reqs.reduce((s, r) => s + (Number(r.grams) || 0), 0);
+
+  const rows = reqs.map(r => {
+    const label = r.materialName
+      ? `${esc(r.materialName)}${r.materialColor ? ` — ${esc(r.materialColor)}` : ''}`
+      : '<span style="color:var(--text-muted)">No material assigned</span>';
+    const spools = r.spools != null ? `≈ ${Number(r.spools).toFixed(1)} spools` : '';
+    return `<tr>
+      <td>${label}</td>
+      <td class="num">${fmtGrams(r.grams)}</td>
+      <td class="num col-hide-mobile" style="color:var(--text-muted)">${spools}</td>
+    </tr>`;
+  }).join('');
+
+  return `<div class="extras-section">
+    <div class="extras-section-header"><h3>Material Required</h3><span class="ec-total-badge">Total: ${fmtGrams(totalGrams)}</span></div>
+    <div class="plates-table-wrap"><table class="ec-table">
+      <thead><tr><th>Brand · Type · Color</th><th>Required</th><th class="col-hide-mobile">Spools</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  </div>`;
 }
 
 /* ================================================================== */
