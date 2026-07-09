@@ -614,6 +614,8 @@ function renderCostSection(p) {
     <div class="cost-card"><h4>Printer Usage Cost</h4><div class="value">${fmt(pi.printerUsageCost * p.items_per_set)}</div>
       <div class="detail" style="opacity:.6">excl. VAT</div>
       <div class="detail">+ ${fmtPct(settings.printer_cost_profit_pct)} profit: ${fmt(pr.printerCostProfit * p.items_per_set)}</div></div>
+    <div class="cost-card"><h4>Total Print Time</h4><div class="value">${fmtTime(c.totalPrintTimeMinutes || 0)}</div>
+      <div class="detail" style="opacity:.6">whole project</div></div>
   </div></div>`;
 }
 

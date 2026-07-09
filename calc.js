@@ -390,6 +390,38 @@ function aggregateMaterialRequirements(enabledPlates, itemsPerSet = 1) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Total print time (whole project)                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Total print time (minutes) to produce the whole project.
+ *
+ * For each enabled, non-test plate the printer must run the plate
+ * ceil(itemsPerSet / items_per_plate) times. A partially-filled final plate
+ * still occupies a FULL print run, so the plate-print count is ROUNDED UP —
+ * this deliberately diverges from material grams/cost, which scale linearly.
+ * Total = Σ (per-plate time × plate-print count). Uses raw print_time_minutes
+ * (no risk multiplier), matching the Time column in the plates table.
+ *
+ * @param {Array<object>} plates – raw plate objects
+ *   ({ print_time_minutes, items_per_plate, enabled, is_test_print })
+ * @param {number} itemsPerSet
+ * @returns {number} total print time in minutes
+ */
+function calculateTotalPrintTime(plates, itemsPerSet = 1) {
+  let totalMinutes = 0;
+  for (const plate of plates) {
+    const enabled = plate.enabled !== undefined ? !!plate.enabled : true;
+    if (!enabled || plate.is_test_print) continue;
+    const perPlateMinutes = plate.print_time_minutes || 0;
+    const itemsPerPlate = plate.items_per_plate || 1;
+    const platePrints = Math.ceil((itemsPerSet || 1) / itemsPerPlate);
+    totalMinutes += perPlateMinutes * platePrints;
+  }
+  return totalMinutes;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Full project calculation (orchestrator)                            */
 /* ------------------------------------------------------------------ */
 
@@ -469,6 +501,9 @@ function calculateProject(opts) {
   // perItemCosts.materialCost × itemsPerSet.
   const materialRequirements = aggregateMaterialRequirements(enabledPlates, itemsPerSet);
 
+  // Total print time for the whole project (enabled non-test plates, ceil per plate)
+  const totalPrintTimeMinutes = calculateTotalPrintTime(plates, itemsPerSet);
+
   // Profit margins
   const profits = applyProfitMargins(perItemCosts, s);
 
@@ -520,6 +555,7 @@ function calculateProject(opts) {
     plateBreakdowns,
     perItemCosts,
     materialRequirements,
+    totalPrintTimeMinutes,
     profits,
     extraCostsTotal,
     extraHoursCost,
@@ -538,13 +574,6 @@ function calculateProject(opts) {
 /* ------------------------------------------------------------------ */
 
 /**
- * Belgian standard VAT rate used for the actual-selling-price net-of-VAT
- * computation in calculateVerification. Defined as a named constant so it
- * can be changed in one place without hunting for 0.21 literals.
- */
-const VERIFY_VAT_RATE = 0.21;
-
-/**
  * Orchestrates a batch verification entirely in memory — no project, no DB.
  * Used by the Verify Batch modal and the POST /api/projects/:id/verify-batch route.
  *
@@ -557,7 +586,7 @@ const VERIFY_VAT_RATE = 0.21;
  *   actualCostPerUnit = totalBatchCost / sellableUnits
  *
  * Actual revenue (when actualSellingTotalInclVat is provided):
- *   netRevenue        = actualSellingTotalInclVat / (1 + VERIFY_VAT_RATE)
+ *   netRevenue        = actualSellingTotalInclVat / (1 + settings.vat_rate / 100)
  *   absoluteMargin    = netRevenue - totalBatchCost
  *   marginPct         = absoluteMargin / netRevenue * 100
  *
@@ -650,10 +679,13 @@ function calculateVerification(opts) {
     return { reference, delta, deltaPct, sign, indicator };
   }
 
-  // Actual revenue margin (only when caller supplies an actual selling price incl. VAT)
+  // Actual revenue margin (only when caller supplies an actual selling price incl. VAT).
+  // VAT rate comes from settings.vat_rate (percentage, e.g. 21), same source as
+  // calculateProject — never a hardcoded constant.
+  const vatRate = Number(settings.vat_rate) || 21;
   let actualMarginOnBatch = null;
   if (actualSellingTotalInclVat > 0) {
-    const netRevenue = actualSellingTotalInclVat / (1 + VERIFY_VAT_RATE);
+    const netRevenue = actualSellingTotalInclVat / (1 + vatRate / 100);
     const absoluteMargin = netRevenue - totalBatchCost;
     const marginPct = netRevenue > 0 ? (absoluteMargin / netRevenue) * 100 : 0;
     actualMarginOnBatch = {
@@ -685,10 +717,10 @@ function calculateVerification(opts) {
 }
 
 module.exports = {
-  VERIFY_VAT_RATE,
   calculatePlateCosts,
   calculatePerItemCosts,
   aggregateMaterialRequirements,
+  calculateTotalPrintTime,
   applyProfitMargins,
   calculateExtraCosts,
   calculateExtraHoursCost,

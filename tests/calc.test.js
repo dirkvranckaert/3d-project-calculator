@@ -711,6 +711,49 @@ describe('aggregateMaterialRequirements', () => {
 });
 
 /* ================================================================== */
+/*  calculateTotalPrintTime                                            */
+/* ================================================================== */
+describe('calculateTotalPrintTime', () => {
+  test('single plate, 1 item/plate, 1 item/set — time = plate time', () => {
+    const plates = [{ print_time_minutes: 90, items_per_plate: 1 }];
+    expect(calc.calculateTotalPrintTime(plates, 1)).toBe(90);
+  });
+
+  test('ceil per plate — 100 items @ 8/plate = 13 prints (12.5 rounded up)', () => {
+    const plates = [{ print_time_minutes: 60, items_per_plate: 8 }];
+    // ceil(100/8) = ceil(12.5) = 13 → 13 × 60 = 780
+    expect(calc.calculateTotalPrintTime(plates, 100)).toBe(780);
+  });
+
+  test('even division does not round up — 8 items @ 8/plate = 1 print', () => {
+    const plates = [{ print_time_minutes: 60, items_per_plate: 8 }];
+    expect(calc.calculateTotalPrintTime(plates, 8)).toBe(60);
+  });
+
+  test('multiple plates summed', () => {
+    const plates = [
+      { print_time_minutes: 30, items_per_plate: 1 },
+      { print_time_minutes: 45, items_per_plate: 2 },
+    ];
+    // set=2: plate A ceil(2/1)=2 → 60; plate B ceil(2/2)=1 → 45; total 105
+    expect(calc.calculateTotalPrintTime(plates, 2)).toBe(105);
+  });
+
+  test('excludes disabled and test-print plates', () => {
+    const plates = [
+      { print_time_minutes: 30, items_per_plate: 1, enabled: 1 },
+      { print_time_minutes: 30, items_per_plate: 1, enabled: 0 },              // disabled
+      { print_time_minutes: 30, items_per_plate: 1, enabled: 1, is_test_print: 1 }, // test
+    ];
+    expect(calc.calculateTotalPrintTime(plates, 1)).toBe(30);
+  });
+
+  test('empty input returns 0', () => {
+    expect(calc.calculateTotalPrintTime([], 5)).toBe(0);
+  });
+});
+
+/* ================================================================== */
 /*  calculateDesignCosts                                               */
 /* ================================================================== */
 describe('calculateDesignCosts', () => {
@@ -1414,7 +1457,7 @@ describe('calculateVerification — actual margin on batch', () => {
     expect(result.actualMarginOnBatch).toBeNull();
   });
 
-  test('netRevenue = actualSellingTotalInclVat / 1.21 (VERIFY_VAT_RATE = 0.21)', () => {
+  test('netRevenue = actualSellingTotalInclVat / 1.21 (vat_rate = 21 from settings)', () => {
     const inclVat = 121; // convenient: 121 / 1.21 = 100.00 exactly
     const result = calc.calculateVerification({
       plates: [simplePlate],
@@ -1428,6 +1471,22 @@ describe('calculateVerification — actual margin on batch', () => {
     expect(result.actualMarginOnBatch.netRevenue).toBeCloseTo(100, 6);
     // Regression fence: if VAT rate were wrong (e.g. 0), netRevenue would equal inclVat
     expect(result.actualMarginOnBatch.netRevenue).toBeLessThan(inclVat);
+  });
+
+  test('netRevenue uses settings.vat_rate — non-21% rate flows through (no hardcode)', () => {
+    const inclVat = 110; // at 10% VAT: 110 / 1.10 = 100.00 exactly
+    const result = calc.calculateVerification({
+      plates: [simplePlate],
+      preProcessingMinutes: 0, postProcessingMinutes: 0,
+      hourlyRate: 40, supplies: [], itemsPerSet: 1,
+      projectProductionCost: 5, projectSellingPrice: 10,
+      actualSellingTotalInclVat: inclVat,
+      settings: { ...defaultSettings, vat_rate: 10 },
+    });
+    // vat_rate is a percentage (10), so divisor is 1 + 10/100 = 1.10 — NOT 1 + 10.
+    expect(result.actualMarginOnBatch.netRevenue).toBeCloseTo(100, 6);
+    // Regression fence: a hardcoded 21% would give 110 / 1.21 = 90.909, not 100.
+    expect(result.actualMarginOnBatch.netRevenue).not.toBeCloseTo(inclVat / 1.21, 2);
   });
 
   test('absoluteMargin = netRevenue - totalBatchCost', () => {
@@ -1481,11 +1540,6 @@ describe('calculateVerification — actual margin on batch', () => {
     expect(result.actualMarginOnBatch.indicator).toBe('red');
     // Regression fence: if negative margin was suppressed to 0, this would fail
     expect(result.actualMarginOnBatch.absoluteMargin).not.toBe(0);
-  });
-
-  test('VERIFY_VAT_RATE constant is exported and equals 0.21', () => {
-    // This test fails if someone changes the constant to something else without noticing
-    expect(calc.VERIFY_VAT_RATE).toBeCloseTo(0.21, 6);
   });
 });
 
