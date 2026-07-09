@@ -710,7 +710,7 @@ describe('calculateProject', () => {
 /*  aggregateMaterialRequirements                                      */
 /* ================================================================== */
 describe('aggregateMaterialRequirements', () => {
-  test('groups by material, sums grams, computes spools, sorts desc', () => {
+  test('groups by material, sums grams, computes spools, sorts by type', () => {
     const enabled = [
       { itemsPerPlate: 8, totalPlasticGrams: 100, materialId: 1, materialName: 'Bambulab - Generic (ABS)', materialType: 'ABS', materialColor: 'Red', materialRollWeightG: 1000 },
       { itemsPerPlate: 4, totalPlasticGrams: 40,  materialId: 1, materialName: 'Bambulab - Generic (ABS)', materialType: 'ABS', materialColor: 'Red', materialRollWeightG: 1000 },
@@ -729,8 +729,39 @@ describe('aggregateMaterialRequirements', () => {
     // (30/2)×8 = 120
     expect(petg.grams).toBeCloseTo(120, 6);
 
-    // sorted by grams descending
-    expect(reqs[0].grams).toBeGreaterThanOrEqual(reqs[1].grams);
+    // sorted by material type: ABS before PETG (not by grams)
+    expect(reqs[0].materialType).toBe('ABS');
+    expect(reqs[1].materialType).toBe('PETG');
+  });
+
+  test('sorts by type → model → colour, deterministically; null keys last', () => {
+    const enabled = [
+      // PLA model with two colours (split path) — expect Alpha before Zink
+      { itemsPerPlate: 1, totalPlasticGrams: 20, materialId: 1, materialName: 'REAL - Generic (PLA)', materialType: 'PLA', materialColor: null, materialRollWeightG: 1000,
+        colors: [ { color: '#111', name: 'Zink', grams: 1 }, { color: '#222', name: 'Alpha', grams: 1 } ] },
+      // ABS legacy — type A < P, so first overall (not clumped despite being legacy)
+      { itemsPerPlate: 1, totalPlasticGrams: 10, materialId: 2, materialName: 'Bambulab - Generic (ABS)', materialType: 'ABS', materialColor: 'Red', materialRollWeightG: 1000 },
+      // PLA Basic legacy — sorts after plain PLA (type string "pla basic" > "pla")
+      { itemsPerPlate: 1, totalPlasticGrams: 10, materialId: 3, materialName: 'Bambulab - Generic (PLA Basic)', materialType: 'PLA Basic', materialColor: 'Blue', materialRollWeightG: 1000 },
+    ];
+    const reqs = calc.aggregateMaterialRequirements(enabled, 1);
+    const order = reqs.map(r => `${r.materialType}|${r.materialColor}`);
+    expect(order).toEqual([
+      'ABS|Red',
+      'PLA|Alpha',
+      'PLA|Zink',
+      'PLA Basic|Blue',
+    ]);
+  });
+
+  test('rows with a null material type sort after named types', () => {
+    const enabled = [
+      { itemsPerPlate: 1, totalPlasticGrams: 10, materialId: null, materialName: null, materialType: null, materialColor: null, materialRollWeightG: null },
+      { itemsPerPlate: 1, totalPlasticGrams: 10, materialId: 1, materialName: 'Bambulab - Generic (PLA Basic)', materialType: 'PLA Basic', materialColor: 'Blue', materialRollWeightG: 1000 },
+    ];
+    const reqs = calc.aggregateMaterialRequirements(enabled, 1);
+    expect(reqs[0].materialType).toBe('PLA Basic');
+    expect(reqs[1].materialType).toBeNull();
   });
 
   test('unassigned material grouped under id=null with spools=null', () => {

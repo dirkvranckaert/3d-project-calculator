@@ -428,7 +428,22 @@ function aggregateMaterialRequirements(enabledPlates, itemsPerSet = 1) {
   for (const g of list) {
     g.spools = g.rollWeightG > 0 ? g.grams / g.rollWeightG : null;
   }
-  list.sort((a, b) => b.grams - a.grams);
+  // Sort: material type → model (material record name) → colour → hex tiebreak.
+  // The full material_type string sorted alphabetically keeps every variant of a
+  // type adjacent (ABS, PETG, PLA, PLA Basic, PLA Mat), so all ABS rows group and
+  // all PLA* rows group. Rows with a null/empty value at a given level sort AFTER
+  // named rows at that level (nullRank), so a material-less row never clumps in
+  // the middle. Fully deterministic — never depends on Map insertion order.
+  const nullRank = (v) => (v == null || v === '' ? 1 : 0);
+  const key = (v) => String(v == null ? '' : v).toLowerCase();
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  const by = (a, b, f) => (nullRank(a[f]) - nullRank(b[f])) || cmp(key(a[f]), key(b[f]));
+  list.sort((a, b) =>
+    by(a, b, 'materialType') ||
+    by(a, b, 'materialName') ||
+    by(a, b, 'materialColor') ||
+    by(a, b, 'colorHex')
+  );
   return list;
 }
 
