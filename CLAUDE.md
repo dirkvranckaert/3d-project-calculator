@@ -114,10 +114,13 @@ PATH="/opt/homebrew/bin:$PATH" pm2 save
 ## Tests
 
 ```bash
-npm test
+npx jest --runInBand    # serial — reliable
+npm test                # parallel — flaky, see below
 ```
 
-65+ tests covering the calculation engine and all API endpoints.
+~272 tests covering the calculation engine and all API endpoints.
+
+**Parallel runs are flaky (pre-existing, 2026-07-09).** The full parallel `jest` run fails a rotating handful of `server.test.js` cases with `socket hang up` / 404. Cause: the integration suites share one SQLite/WAL test DB + express socket lifecycle across jest's parallel workers. Serial (`--runInBand`) and per-suite runs are deterministic and green. Don't chase a "new" failure until you've reproduced it serially. Real fix (unassigned): give each worker its own `DB_PATH`, or pin `--runInBand` in the `test` script.
 
 ## Deploy
 
@@ -274,9 +277,9 @@ Pure function exported from `calc.js`. Orchestrates batch cost independently of 
 - `sellableUnits` = `Math.floor(totalPieces / itemsPerSet)`
 - `actualCostPerUnit` = `totalBatchCost / sellableUnits` (Infinity when 0 sellable)
 
-**Actual revenue margin (new, task #352):**
-- `VERIFY_VAT_RATE = 0.21` — exported constant, Belgian standard VAT rate. Change here only.
-- `netRevenue = actualSellingTotalInclVat / (1 + VERIFY_VAT_RATE)`
+**Actual revenue margin (task #352; VAT source fixed 2026-07-09):**
+- VAT rate comes from the `vat_rate` **setting** (percentage, e.g. `21`), same source as `calculateProject`. The old hardcoded `VERIFY_VAT_RATE = 0.21` constant is **removed** — do not reintroduce it.
+- `netRevenue = actualSellingTotalInclVat / (1 + vat_rate / 100)` — note `/100`: setting is a percentage, not a fraction.
 - `absoluteMargin = netRevenue - totalBatchCost`
 - `marginPct = absoluteMargin / netRevenue * 100`
 - `actualMarginOnBatch = null` when `actualSellingTotalInclVat` is 0 or not provided.
@@ -318,6 +321,31 @@ Route looks up printer and material from DB, calls `resolveKwh`, calls `calc.cal
 - **Label rename:** project's calculated/suggested price was labelled "Actual selling price" — renamed to **"Calculated selling price"** (task #352 requirement).
 - **Result display:** `renderVerifyResult` shows printing vs post-processing split in the cost sub-line (replacing Machine/Time/Supplies with Printing/Post-proc/Supplies). When `result.actualMarginOnBatch` is non-null, a prominent block with net revenue, absolute margin, and margin % is rendered above the comparison grid.
 - **`resolveKwh(db, printerId, materialType)`:** extracted as a module-scope function in `server.js` (was previously inlined inside `buildTestPrints`). The `buildTestPrints` inner usage was updated to call the module-scope version.
+
+## Material Required + Total Print Time + VAT labeling (2026-07-09)
+
+### VAT model (whole app)
+Every **cost input** is excl. VAT. Margins apply on the excl. base. VAT applied **once**, at the end → suggested/actual selling price is **incl. VAT**. `projects.actual_sales_price` and the Verify "actual selling total" are incl. VAT (both divided by `1 + vat_rate/100`). All money inputs, table headers, section totals and summary cards carry an explicit `excl. VAT` / `incl. VAT` label. Deliberately unlabeled: per-plate cost columns (cards above already say it), gram-only figures, catalog-picker dropdown prices.
+
+### `materialRequirements` — grams per brand + type + colour
+`calc.js` `aggregateMaterialRequirements(enabledPlates, itemsPerSet)`, returned by `calculateProject`. Enabled non-test plates only (`enabled && !isTestPrint`), same filter and same `(totalPlasticGrams / items_per_plate) × itemsPerSet` scaling as Material Cost.
+
+- **The plate total is authoritative.** Per-filament `used_g` values only set the **ratio** by which a plate's grams split across colours (`plateGrams × grams_i / Σgrams`). So purge/flush/rounding waste can never drift the cost total, and Σ colour grams === plate `plastic_grams` by construction.
+- **Two DB shapes coexist** (capture-only rollout, no backfill — Dirk's call 2026-07-09):
+  - `project_plates.colors[]` **with** `grams` → one row per colour.
+  - `colors[]` **without** `grams` (legacy plates) → single row keyed on `material_id`, old behaviour. Never divided evenly, never dropped. Rendered with a hatched placeholder swatch + "re-import this plate to split by colour" tooltip.
+  - Old plates only gain the split when their .3mf is **re-imported**.
+- Grams captured at import in `public/app.js` (`colors.map` in both the import path and the planner path — keep the two in sync). `parse3mf.js` has always produced `filaments[].usedGrams`; it used to be discarded.
+- Sort order: `materials.material_type` → `materials.name` → colour name → `colorHex`. Null keys sort after named ones (`nullRank`), so a type never fragments.
+- Spool estimate uses `materials.roll_weight_g` (default 1000) and is only shown from ≥0.1 roll.
+
+### `totalPrintTimeMinutes`
+`calc.js` `calculateTotalPrintTime(plates, itemsPerSet)`, rendered as a 5th summary card. Enabled non-test plates only.
+
+**Plate-print count is `Math.ceil(itemsPerSet / items_per_plate)`** — a partly-filled final plate still runs a full print (100 items @ 8/plate = 13 prints, not 12.5). This **deliberately diverges** from grams/cost, which scale linearly. Dirk confirmed 2026-07-09.
+
+### `fmtTime`
+Single shared helper (`public/app.js`). ≥24h → `Dd Hh Mm` with zero components dropped (`485h 46m` → `20d 5h 46m`, `48h` → `2d`). <24h unchanged. `formatHoursMinutes` (H:MM rate inputs) is a separate concern — leave it alone.
 
 ## Architecture guide
 
