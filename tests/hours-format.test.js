@@ -53,11 +53,12 @@ vm.createContext(sandbox);
 vm.runInContext(
   extractFn('parseHoursMinutes') + '\n' +
   extractFn('formatHoursMinutes') + '\n' +
+  extractFn('fmtTime') + '\n' +
   extractRenderGeneralSettings(),
   sandbox
 );
 
-const { parseHoursMinutes, formatHoursMinutes, renderGeneralSettings } = sandbox;
+const { parseHoursMinutes, formatHoursMinutes, fmtTime, renderGeneralSettings } = sandbox;
 
 /* ================================================================== */
 /*  parseHoursMinutes                                                  */
@@ -119,6 +120,47 @@ describe('formatHoursMinutes', () => {
   });
   test('rounds to nearest minute (0.7501 -> 0:45)', () => {
     expect(formatHoursMinutes(0.7501)).toBe('0:45');
+  });
+});
+
+/* ================================================================== */
+/*  fmtTime — duration display (days / hours / minutes)               */
+/* ================================================================== */
+describe('fmtTime', () => {
+  // Short cases (< 24h) must be unchanged from the original formatter.
+  test('minutes only: 31 -> "31m"', () => {
+    expect(fmtTime(31)).toBe('31m');
+  });
+  test('hours + minutes: 367 -> "6h 7m"', () => {
+    expect(fmtTime(367)).toBe('6h 7m');
+  });
+  test('zero -> "0m"', () => {
+    expect(fmtTime(0)).toBe('0m');
+  });
+
+  // Boundary at 24h.
+  test('just under 24h stays in hours: 1439 -> "23h 59m"', () => {
+    expect(fmtTime(1439)).toBe('23h 59m');
+  });
+  test('exactly 24h -> "1d"', () => {
+    expect(fmtTime(24 * 60)).toBe('1d');
+  });
+
+  // Multi-day, with and without zero hour / minute components.
+  test('485h 46m -> "20d 5h 46m"', () => {
+    expect(fmtTime(485 * 60 + 46)).toBe('20d 5h 46m');
+  });
+  test('Dirk plate 31h 15m -> "1d 7h 15m"', () => {
+    expect(fmtTime(31 * 60 + 15)).toBe('1d 7h 15m');
+  });
+  test('zero hours omitted: 2d 0h 5m -> "2d 5m"', () => {
+    expect(fmtTime(2 * 24 * 60 + 5)).toBe('2d 5m');
+  });
+  test('zero minutes omitted: 48h 0m -> "2d"', () => {
+    expect(fmtTime(48 * 60)).toBe('2d');
+  });
+  test('both present: 2d 3h 4m', () => {
+    expect(fmtTime(2 * 24 * 60 + 3 * 60 + 4)).toBe('2d 3h 4m');
   });
 });
 

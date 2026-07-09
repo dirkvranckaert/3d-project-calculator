@@ -57,9 +57,20 @@ function fmt(n, decimals = 2) {
 }
 function fmtPct(n) { return `${Number(n || 0).toFixed(2)}%`; }
 function fmtTime(minutes) {
-  const h = Math.floor(minutes / 60);
-  const m = Math.round(minutes % 60);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  const total = Math.round(minutes || 0);   // whole minutes
+  const m = total % 60;
+  const totalHours = Math.floor(total / 60);
+  // 24h+ → days + hours + minutes, zero components omitted (2d 0h 5m → "2d 5m",
+  // 48h → "2d"). Below 24h keeps the original "Hh Mm" / "Mm" output unchanged.
+  if (totalHours >= 24) {
+    const d = Math.floor(totalHours / 24);
+    const h = totalHours % 24;
+    const parts = [`${d}d`];
+    if (h > 0) parts.push(`${h}h`);
+    if (m > 0) parts.push(`${m}m`);
+    return parts.join(' ');
+  }
+  return totalHours > 0 ? `${totalHours}h ${m}m` : `${m}m`;
 }
 
 /**
