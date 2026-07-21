@@ -2037,6 +2037,18 @@ function openProjectModal(id = null) {
   document.getElementById('proj-name').focus();
 }
 
+// The edit modal has no inputs for actual_sales_price or notes, so a PUT has to
+// carry the stored values through untouched. Returns null when the project can't
+// be resolved — the caller must abort, because sending nulls wipes both fields.
+// `??` not `||`: a sales price of exactly 0 is real data, not absence.
+function preservedProjectFields(existing) {
+  if (!existing) return null;
+  return {
+    actual_sales_price: existing.actual_sales_price ?? null,
+    notes: existing.notes ?? null,
+  };
+}
+
 document.getElementById('btn-save-project').addEventListener('click', async () => {
   const data = {
     name: document.getElementById('proj-name').value.trim(),
@@ -2046,9 +2058,15 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
   };
   if (!data.name) return;
   if (editingProjectId) {
-    const existing = findProject(editingProjectId);
-    data.actual_sales_price = existing?.actual_sales_price || null;
-    data.notes = existing?.notes || null;
+    const preserved = preservedProjectFields(findProject(editingProjectId));
+    if (!preserved) {
+      await showAlert({
+        title: 'Could not save',
+        message: 'This project is no longer loaded, so saving now would clear its actual sales price and notes. Reload the page and try again.',
+      });
+      return;
+    }
+    Object.assign(data, preserved);
     await PUT(`/api/projects/${editingProjectId}`, data);
     closeModal('project-modal');
     await reloadSingleProject(editingProjectId);
