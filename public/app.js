@@ -389,8 +389,7 @@ function render() {
     currentView = 'detail';
     currentProjectId = route.projectId;
     newBtn.style.display = 'none';
-    const p = findProject(route.projectId)
-      || (detachedProject && detachedProject.id === route.projectId ? detachedProject : null);
+    const p = findProject(route.projectId);
     // Not in the loaded list (archived projects are filtered out of it), or only
     // lite data (no full extras/plates) — fetch the full project by id.
     if (!p || !p._full) {
@@ -2999,9 +2998,8 @@ async function mapPlatesToFile(projectId, fileId, filename) {
   if (!project?._full) {
     const full = await GET(`/api/projects/${projectId}`);
     if (!full) return; // 401 — api() is redirecting to /login
-    storeLoadedProject(full);
-    // Keep any already-held reference in sync; adopt the fetched copy otherwise.
-    if (project) Object.assign(project, full); else project = full;
+    // The helper returns the stored object, so there is only ever one live copy.
+    project = storeLoadedProject(full);
   }
 
   document.getElementById('edit-dialog-title').textContent = `Map Plates — ${esc(filename)}`;
