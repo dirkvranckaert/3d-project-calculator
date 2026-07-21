@@ -42,7 +42,12 @@ async function api(path, opts = {}) {
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   if (res.status === 401) { window.location.replace('/login'); return null; }
-  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    const err = new Error(e.error || res.statusText);
+    err.status = res.status;
+    throw err;
+  }
   return res.json();
 }
 const GET = (p) => api(p);
@@ -346,10 +351,16 @@ async function reloadProjects() {
 // held aside instead of injected, so the list keeps showing exactly what the API
 // returned for the current archive filter.
 function storeLoadedProject(full) {
+  if (!full) return null; // api() returns null on 401 and redirects to /login
   full._full = true;
   const idx = projects.findIndex(p => p.id === full.id);
-  if (idx >= 0) projects[idx] = full;
-  else detachedProject = full;
+  if (idx >= 0) {
+    projects[idx] = full;
+    // It's in the list now, so a copy held aside earlier is stale.
+    if (detachedProject && detachedProject.id === full.id) detachedProject = null;
+  } else {
+    detachedProject = full;
+  }
   return full;
 }
 
@@ -377,10 +388,14 @@ function render() {
     if (!p || !p._full) {
       el.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div>`;
       GET(`/api/projects/${route.projectId}`).then(full => {
+        if (!full) return; // 401 — api() is redirecting to /login
         storeLoadedProject(full);
         render();
-      }).catch(() => {
-        el.innerHTML = `<div class="empty-state"><p>Project not found.</p><button class="btn btn-primary" onclick="navigate('#/')">Back to list</button></div>`;
+      }).catch(err => {
+        const msg = err && err.status === 404
+          ? 'Project not found.'
+          : `Could not load this project. ${esc(err?.message || 'Please try again.')}`;
+        el.innerHTML = `<div class="empty-state"><p>${msg}</p><button class="btn btn-primary" onclick="navigate('#/')">Back to list</button></div>`;
       });
       return;
     }
@@ -1001,7 +1016,7 @@ function renderDesignCostSection(p) {
       </div>
     </div>
 
-    <div style="margin-top:12px;padding:10px;background:var(--bg-card);border-radius:6px;border:1px solid var(--border)">
+    <div style="margin-top:12px;padding:10px;background:var(--surface-hover);border-radius:6px;border:1px solid var(--border)">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <span style="font-weight:600">Setup &amp; Design Total (one-time, excl. VAT)</span>
         <span style="font-size:18px;font-weight:700">${fmt(dc.designTotal || 0)}</span>
@@ -3496,7 +3511,7 @@ function renderVerifyModal() {
       ? file.parsedResult.plates
       : [{ printTimeMinutes: 0, weightGrams: 0, index: 1 }];
     // File-level row: filename + printer/material selects + remove button
-    platesRows += `<tr style="background:var(--bg-subtle,#f8f8f8)">
+    platesRows += `<tr style="background:var(--surface-hover)">
       <td style="font-size:12px;word-break:break-all"><strong>${esc(file.filename)}</strong>
         <span style="font-size:11px;color:var(--text-muted);margin-left:4px">(${srcPlates.length} plate${srcPlates.length !== 1 ? 's' : ''})</span>
       </td>
@@ -3780,7 +3795,7 @@ async function verifyRecompute() {
 
     renderVerifyResult(result, verifyProjectRef);
   } catch (err) {
-    if (resultDiv) resultDiv.innerHTML = `<span style="color:var(--red)">Error: ${esc(err.message)}</span>`;
+    if (resultDiv) resultDiv.innerHTML = `<span style="color:var(--danger)">Error: ${esc(err.message)}</span>`;
   }
 }
 
@@ -3838,7 +3853,7 @@ async function runVerification() {
 
     renderVerifyResult(result, ref);
   } catch (err) {
-    if (resultDiv) resultDiv.innerHTML = `<span style="color:var(--red)">Error: ${esc(err.message)}</span>`;
+    if (resultDiv) resultDiv.innerHTML = `<span style="color:var(--danger)">Error: ${esc(err.message)}</span>`;
   }
 }
 
@@ -3847,7 +3862,7 @@ function renderVerifyResult(result, ref) {
   if (!resultDiv) return;
 
   if (result.sellableUnits === 0) {
-    resultDiv.innerHTML = `<div class="pricing-block" style="color:var(--red)">
+    resultDiv.innerHTML = `<div class="pricing-block" style="color:var(--danger)">
       <strong>Not enough pieces for a complete set.</strong>
       Got ${result.totalPieces} piece(s), need ${ref.itemsPerSet} per set.
     </div>`;
