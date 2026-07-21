@@ -347,6 +347,14 @@ async function reloadProjects() {
   render();
 }
 
+// Resolve a project by id. Always use this instead of `projects.find(...)`: an
+// archived project opened directly is held in `detachedProject`, outside the list.
+// Returns the live object, so in-place mutations reach whichever store holds it.
+function findProject(id) {
+  return projects.find(p => p.id === id)
+    || (detachedProject && detachedProject.id === id ? detachedProject : null);
+}
+
 // Store a freshly fetched full project. If it isn't part of the loaded list it is
 // held aside instead of injected, so the list keeps showing exactly what the API
 // returned for the current archive filter.
@@ -381,7 +389,7 @@ function render() {
     currentView = 'detail';
     currentProjectId = route.projectId;
     newBtn.style.display = 'none';
-    const p = projects.find(x => x.id === route.projectId)
+    const p = findProject(route.projectId)
       || (detachedProject && detachedProject.id === route.projectId ? detachedProject : null);
     // Not in the loaded list (archived projects are filtered out of it), or only
     // lite data (no full extras/plates) — fetch the full project by id.
@@ -770,7 +778,7 @@ async function commitExtraHours(projectId) {
 }
 
 async function addExtraHourRow(projectId, defaultRate) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   if (!p) return;
   const existing = (p.extra_hours || []).map((e, i) => ({
     description: e.description,
@@ -798,7 +806,7 @@ async function addExtraHourRow(projectId, defaultRate) {
 }
 
 async function removeExtraHourRow(projectId, idx) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   if (!p) return;
   const items = (p.extra_hours || []).map((e, i) => ({
     description: e.description,
@@ -1052,7 +1060,7 @@ async function commitDesignHours(projectId) {
 }
 
 async function addDesignHourRow(projectId, defaultRate) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   if (!p) return;
   const existing = (p.design_hours || []).map((e, i) => ({
     description: e.description,
@@ -1078,7 +1086,7 @@ async function addDesignHourRow(projectId, defaultRate) {
 }
 
 async function removeDesignHourRow(projectId, idx) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   if (!p) return;
   const items = (p.design_hours || []).map((e, i) => ({
     description: e.description,
@@ -1110,7 +1118,7 @@ async function commitDesignExtras(projectId) {
 }
 
 async function addDesignExtraRow(projectId) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   if (!p) return;
   const existing = (p.design_extras || []).map((e, i) => ({
     description: e.description,
@@ -1128,7 +1136,7 @@ async function addDesignExtraRow(projectId) {
 }
 
 async function removeDesignExtraRow(projectId, idx) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   if (!p) return;
   const items = (p.design_extras || []).map((e, i) => ({
     description: e.description,
@@ -1309,7 +1317,7 @@ async function commitCustomLines(projectId) {
 }
 
 async function addCustomLineRow(projectId) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   if (!p) return;
   const existing = (p.custom_lines || []).map((e, i) => ({
     label: e.label,
@@ -1327,7 +1335,7 @@ async function addCustomLineRow(projectId) {
 }
 
 async function removeCustomLineRow(projectId, idx) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   if (!p) return;
   const items = (p.custom_lines || []).map((e, i) => ({
     label: e.label,
@@ -1380,7 +1388,7 @@ function renderImagesSection(p) {
 let _lightboxState = null;
 
 function openLightbox(projectId, imageId) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   const imgs = p?.images || [];
   if (!imgs.length) return;
   let idx = imgs.findIndex(im => im.id === imageId);
@@ -1672,7 +1680,7 @@ function renderProjectNotes(p) {
 }
 
 async function saveProjectNotes(projectId, value) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   if (!p) return;
   if ((p.notes || '') === value) return; // no change
   await PUT(`/api/projects/${projectId}`, {
@@ -1684,7 +1692,7 @@ async function saveProjectNotes(projectId, value) {
 }
 
 async function saveDesignNotes(projectId, value) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   if (!p) return;
   if ((p.design_notes || '') === value) return; // no change
   await PUT(`/api/projects/${projectId}`, {
@@ -1709,7 +1717,7 @@ function showProjectContextMenu(e, projectId, fromButton) {
   const menu = document.createElement('div');
   menu.className = 'context-menu';
   menu.id = 'context-menu';
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   const archiveLabel = p?.archived ? 'Unarchive' : 'Archive';
   menu.innerHTML = `
     <button onclick="navigateToProject(${projectId})">Open</button>
@@ -1740,7 +1748,7 @@ async function toggleArchive(id) {
 }
 
 async function toggleCustomFlag(projectId) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   if (p?.is_custom && currentDetailTab === 'design') {
     currentDetailTab = 'print';
   }
@@ -2019,7 +2027,7 @@ const tagsWidget = (function createTagsWidget() {
 /* ================================================================== */
 function openProjectModal(id = null) {
   editingProjectId = id;
-  const p = id ? projects.find(x => x.id === id) : null;
+  const p = id ? findProject(id) : null;
   document.getElementById('project-modal-title').textContent = p ? 'Edit Project' : 'New Project';
   document.getElementById('proj-name').value = p?.name || '';
   document.getElementById('proj-customer').value = p?.customer_name || '';
@@ -2039,7 +2047,7 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
   };
   if (!data.name) return;
   if (editingProjectId) {
-    const existing = projects.find(x => x.id === editingProjectId);
+    const existing = findProject(editingProjectId);
     data.actual_sales_price = existing?.actual_sales_price || null;
     data.notes = existing?.notes || null;
     await PUT(`/api/projects/${editingProjectId}`, data);
@@ -2060,6 +2068,7 @@ async function deleteProject(id, e) {
   if (!await showConfirm({ title: 'Delete project?', message: 'This will remove the project and all its plates. This cannot be undone.', okText: 'Delete' })) return;
   // Remove from UI immediately
   projects = projects.filter(p => p.id !== id);
+  if (detachedProject && detachedProject.id === id) detachedProject = null;
   archivedCountCache = projects.filter(p => p.archived).length;
   window.location.hash = '#/';
   render();
@@ -2068,7 +2077,7 @@ async function deleteProject(id, e) {
 }
 
 async function updateActualPrice(projectId, value) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   if (!p) return;
   await PUT(`/api/projects/${projectId}`, {
     name: p.name, customer_name: p.customer_name,
@@ -2107,7 +2116,7 @@ async function addExtraFromSelect(projectId) {
 }
 
 async function updateExtraQty(projectId, extraCostId, quantity) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   if (!p) return;
   const currentExtras = {};
   (p.extras || []).forEach(e => { currentExtras[e.extra_cost_id] = e.quantity; });
@@ -2403,7 +2412,7 @@ async function confirm3mfImport() {
 function openPlateModal(projectId, plateId = null) {
   editingPlateProjectId = projectId;
   editingPlateId = plateId;
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   const plate = plateId ? p?.plates?.find(x => x.id === plateId) : null;
 
   document.getElementById('plate-modal-title').textContent = plate ? 'Edit Plate' : 'Add Plate';
@@ -2475,7 +2484,7 @@ document.getElementById('btn-save-plate').addEventListener('click', async () => 
 });
 
 async function duplicatePlate(projectId, plateId) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   const plate = p?.plates?.find(x => x.id === plateId);
   if (!plate) return;
   await POST(`/api/projects/${projectId}/plates`, {
@@ -2986,13 +2995,13 @@ async function mapPlatesToFile(projectId, fileId, filename) {
   mapAbortController = new AbortController();
   const signal = mapAbortController.signal;
 
-  const project = projects.find(p => p.id === projectId);
+  let project = findProject(projectId);
   if (!project?._full) {
     const full = await GET(`/api/projects/${projectId}`);
-    full._full = true;
-    const idx = projects.findIndex(x => x.id === full.id);
-    if (idx >= 0) projects[idx] = full;
-    Object.assign(project, full);
+    if (!full) return; // 401 — api() is redirecting to /login
+    storeLoadedProject(full);
+    // Keep any already-held reference in sync; adopt the fetched copy otherwise.
+    if (project) Object.assign(project, full); else project = full;
   }
 
   document.getElementById('edit-dialog-title').textContent = `Map Plates — ${esc(filename)}`;
@@ -3116,7 +3125,8 @@ async function confirmPlateMapping() {
 async function schedulePrint(projectId, fileId) {
   if (!plannerAvailable || !plannerPublicUrl) { await showAlert({ title: 'Scheduler', message: 'PrintFarm Planner not available.' }); return; }
 
-  const project = projects.find(p => p.id === projectId);
+  const project = findProject(projectId);
+  if (!project) { await showAlert({ title: 'Scheduler', message: 'Could not resolve this project. Reload the page and try again.' }); return; }
   document.getElementById('edit-dialog-title').textContent = 'Schedule Print...';
   document.getElementById('edit-dialog-body').innerHTML = `<div style="text-align:center;padding:24px"><p>Fetching 3MF file...</p></div>`;
   document.getElementById('btn-edit-dialog-save').style.display = 'none';
@@ -3391,7 +3401,7 @@ function attachLongPress() {
 }
 
 function showProjectBottomSheet(projectId) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   if (!p) return;
   const archiveLabel = p.archived ? 'Unarchive' : 'Archive';
   showBottomSheet(`
@@ -3460,7 +3470,7 @@ document.addEventListener('drop', e => {
 /* ================================================================== */
 
 function openVerifyModal(projectId) {
-  const p = projects.find(x => x.id === projectId);
+  const p = findProject(projectId);
   if (!p) return;
 
   verifyProjectId = projectId;
