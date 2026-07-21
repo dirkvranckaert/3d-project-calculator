@@ -17,6 +17,9 @@ let archivedCountCache = 0;
 let currentView = 'list'; // 'list' or 'detail'
 let currentProjectId = null;
 let currentDetailTab = 'print'; // 'print' | 'design'
+// Project fetched by id but absent from `projects` (e.g. an archived project on a
+// direct load / refresh). Kept out of `projects` so the list stays API-filtered.
+let detachedProject = null;
 
 // Verify Batch modal state
 let verifyProjectId = null;
@@ -339,12 +342,19 @@ async function reloadProjects() {
   render();
 }
 
+// Store a freshly fetched full project. If it isn't part of the loaded list it is
+// held aside instead of injected, so the list keeps showing exactly what the API
+// returned for the current archive filter.
+function storeLoadedProject(full) {
+  full._full = true;
+  const idx = projects.findIndex(p => p.id === full.id);
+  if (idx >= 0) projects[idx] = full;
+  else detachedProject = full;
+  return full;
+}
+
 async function reloadSingleProject(id) {
-  const updated = await GET(`/api/projects/${id}`);
-  updated._full = true;
-  const idx = projects.findIndex(p => p.id === id);
-  if (idx >= 0) projects[idx] = updated;
-  else projects.unshift(updated);
+  storeLoadedProject(await GET(`/api/projects/${id}`));
   render();
 }
 
@@ -360,16 +370,17 @@ function render() {
     currentView = 'detail';
     currentProjectId = route.projectId;
     newBtn.style.display = 'none';
-    const p = projects.find(x => x.id === route.projectId);
-    if (!p) { el.innerHTML = `<div class="empty-state"><p>Project not found.</p><button class="btn btn-primary" onclick="navigate('#/')">Back to list</button></div>`; return; }
-    // If lite data (no full extras/plates), fetch full project
-    if (!p._full) {
+    const p = projects.find(x => x.id === route.projectId)
+      || (detachedProject && detachedProject.id === route.projectId ? detachedProject : null);
+    // Not in the loaded list (archived projects are filtered out of it), or only
+    // lite data (no full extras/plates) — fetch the full project by id.
+    if (!p || !p._full) {
       el.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div>`;
       GET(`/api/projects/${route.projectId}`).then(full => {
-        full._full = true;
-        const idx = projects.findIndex(x => x.id === full.id);
-        if (idx >= 0) projects[idx] = full; else projects.unshift(full);
+        storeLoadedProject(full);
         render();
+      }).catch(() => {
+        el.innerHTML = `<div class="empty-state"><p>Project not found.</p><button class="btn btn-primary" onclick="navigate('#/')">Back to list</button></div>`;
       });
       return;
     }
@@ -877,7 +888,7 @@ function renderDesignCostSection(p) {
       const dlLink = ab.file_id ? `<a href="/api/files/${ab.file_id}/download" title="Download ${esc(ab.filename || 'file')}" style="display:inline-flex;align-items:center;color:var(--text-muted)" target="_blank"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></a>` : '';
       const preVal  = ab.pre_processing_minutes  ?? 0;
       const postVal = ab.post_processing_minutes ?? 0;
-      return `<tr style="background:var(--bg-muted,#f7f7f8);font-size:12px">
+      return `<tr style="background:var(--surface-hover);font-size:12px">
         <td style="padding-left:24px;color:var(--text-muted)">${esc(ab.name || plate.name || 'Attached .3mf')} ${dlLink}</td>
         <td>${timeGramsCaption}</td>
         <td class="num">${fmt(ab.totalPlateCost)}</td>
@@ -893,7 +904,7 @@ function renderDesignCostSection(p) {
     }).join('');
 
     // Attach .3mf button (hidden for orphans)
-    const attachBtn = tp.isOrphan ? '' : `<tr style="background:var(--bg-muted,#f7f7f8)">
+    const attachBtn = tp.isOrphan ? '' : `<tr style="background:var(--surface-hover)">
       <td colspan="9" style="padding-left:24px">
         <label class="btn btn-sm" style="cursor:pointer;font-size:11px">
           + Attach .3mf
