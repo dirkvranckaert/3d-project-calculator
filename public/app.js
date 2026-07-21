@@ -2307,7 +2307,7 @@ function show3mfPreview(parsed) {
           <div class="import-name-field"><label>Name</label><input type="text" data-import-name="${i}" value="${esc(nameDefault)}"></div>
         </div>
         <div class="form-group"><label>Print Time</label><span style="font-size:14px;font-weight:600;padding:8px 0;display:block">${fmtTime(pl.printTimeMinutes)}</span></div>
-        <div class="form-group"><label>Plastic (g)</label><span style="font-size:14px;font-weight:600;padding:8px 0;display:block">${fmtGrams(pl.weightGrams)}</span></div>
+        <div class="form-group"><label>Plastic</label><span style="font-size:14px;font-weight:600;padding:8px 0;display:block">${fmtGrams(pl.weightGrams)}</span></div>
         <div class="form-group"><label>Items per Plate</label><input type="number" min="1" value="${pl.objectCount || 1}" data-import-items="${i}"></div>
         <div class="form-group"></div>
         <div class="form-group"><label>Printer</label><select data-import-printer="${i}">
@@ -2319,7 +2319,7 @@ function show3mfPreview(parsed) {
           ${materials.map(m => `<option value="${m.id}">${esc(m.name)}${m.color ? ` (${esc(m.color)})` : ''}</option>`).join('')}
         </select></div>
       </div>
-      ${pl.filaments.length > 1 ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Filaments: ${pl.filaments.map(f => `${f.color ? `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${f.color};vertical-align:middle;margin-right:2px"></span>` : ''}${f.usedGrams}g`).join(', ')}</div>` : ''}
+      ${pl.filaments.length > 1 ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Filaments: ${pl.filaments.map(f => `${f.color ? `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${f.color};vertical-align:middle;margin-right:2px"></span>` : ''}${fmtGrams(f.usedGrams)}`).join(', ')}</div>` : ''}
     </div>`;
   });
 
