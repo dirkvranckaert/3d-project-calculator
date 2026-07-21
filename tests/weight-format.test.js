@@ -42,16 +42,16 @@ describe('fmtGrams', () => {
   });
 
   test('exactly 1000 g switches to kg', () => {
-    expect(fmtGrams(1000)).toBe('1.00 kg');
+    expect(fmtGrams(1000)).toBe('1.00kg');
   });
 
   test('formats a per-material total in kg', () => {
-    expect(fmtGrams(1999.47)).toBe('2.00 kg');
-    expect(fmtGrams(11809.03)).toBe('11.81 kg');
+    expect(fmtGrams(1999.47)).toBe('2.00kg');
+    expect(fmtGrams(11809.03)).toBe('11.81kg');
   });
 
   test('formats a project total in kg', () => {
-    expect(fmtGrams(13808.5)).toBe('13.81 kg');
+    expect(fmtGrams(13808.5)).toBe('13.81kg');
   });
 
   test('zero and nullish render as grams', () => {

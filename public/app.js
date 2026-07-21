@@ -146,14 +146,14 @@ function formatHoursMinutes(hours) {
 /**
  * Format a plastic weight for display.
  * Below 1000 g -> grams with 2 decimals ("845.30g").
- * From 1000 g up -> kilograms with 2 decimals ("13.81 kg").
+ * From 1000 g up -> kilograms with 2 decimals ("13.81kg").
  *
  * @param {number} g weight in grams
  * @returns {string}
  */
 function fmtGrams(g) {
   const n = Number(g || 0);
-  if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(2)} kg`;
+  if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(2)}kg`;
   return `${n.toFixed(2)}g`;
 }
 function fmtWeight(g) {
