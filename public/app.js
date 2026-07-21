@@ -1024,7 +1024,7 @@ function renderDesignCostSection(p) {
       </div>
     </div>
 
-    <div style="margin-top:12px;padding:10px;background:var(--surface-hover);border-radius:6px;border:1px solid var(--border)">
+    <div style="margin-top:12px;padding:10px;background:var(--bg);border-radius:6px;border:1px solid var(--border)">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <span style="font-weight:600">Setup &amp; Design Total (one-time, excl. VAT)</span>
         <span style="font-size:18px;font-weight:700">${fmt(dc.designTotal || 0)}</span>
