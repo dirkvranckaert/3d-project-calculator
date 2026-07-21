@@ -73,6 +73,16 @@ project-calculator/
 - **No CSS framework** — custom CSS with variables. Do not install Tailwind/Bootstrap.
 - **No native `confirm()`** — use custom modal dialogs
 
+## Ship order (standing rule, Dirk 2026-07-21)
+
+Code ships in a fixed order: **code → review round → reviewer signoff (`APPROVED`) → push → deploy.**
+
+- The review round starts automatically once a coder lands a commit — no need to ask for it.
+- The coder never pushes and never deploys.
+- `CHANGES REQUESTED` sends it back to the coder and the review round repeats.
+- Once the reviewer returns `APPROVED`, push and deploy proceed without waiting on Dirk — he is informed of the result afterwards.
+- Applies to every change size, trivial one-liners included.
+
 ## Running locally
 
 ```bash
