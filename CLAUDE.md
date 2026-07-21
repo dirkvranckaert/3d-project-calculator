@@ -73,15 +73,16 @@ project-calculator/
 - **No CSS framework** — custom CSS with variables. Do not install Tailwind/Bootstrap.
 - **No native `confirm()`** — use custom modal dialogs
 
-## Ship order (standing rule, Dirk 2026-07-21)
+## Ship order — this repo only (Dirk 2026-07-21)
 
 Code ships in a fixed order: **code → review round → reviewer signoff (`APPROVED`) → push → deploy.**
 
 - The review round starts automatically once a coder lands a commit — no need to ask for it.
-- The coder never pushes and never deploys.
+- The coder never pushes and never deploys. The **reviewer** pushes, once they have signed off.
 - `CHANGES REQUESTED` sends it back to the coder and the review round repeats.
-- Once the reviewer returns `APPROVED`, push and deploy proceed without waiting on Dirk — he is informed of the result afterwards.
+- After `APPROVED`, push and deploy proceed without waiting on Dirk — unless he asks to hold (see Deploy). He is informed of the result afterwards.
 - Applies to every change size, trivial one-liners included.
+- Scoped to `project-calculator`. Do not assume it holds for the other Printseed repos.
 
 ## Running locally
 
@@ -140,7 +141,7 @@ Deployed via the shared infrastructure repo: `../infrastructure/apps/project-cal
 - **Domain:** `3dprojects.app3.be` (NOT `calculator.app3.be` — that subdomain 404s)
 - **PM2 name:** `project-calculator`
 - **Server:** `app3-node-01` (142.93.105.91)
-- **Auto-deploy is standing-authorised** (Dirk, 2026-07-09): merged + pushed work ships to production without a per-deploy confirmation, unless he asks to hold. Always push to `origin/main` before deploying — the engine rsyncs the working tree, so an unpushed tree silently ships something `origin` doesn't have.
+- **Auto-deploy is standing-authorised** (Dirk, 2026-07-09): merged + pushed work ships to production without a per-deploy confirmation, unless he asks to hold. This authority starts *after* a reviewer returns `APPROVED` — see "Ship order"; it is not a licence to push unreviewed work. Always push to `origin/main` before deploying — the engine rsyncs the working tree, so an unpushed tree silently ships something `origin` doesn't have.
 - rsync-releases pattern (no server-side `git pull`): rsync → `releases/<ts>/` → `npm ci --omit=dev` → flip `current` symlink → pm2 `delete + start` (not restart) → health check `/login` 200 + dummy-creds POST 401. **Auto-rollback on a failed health check**; manual rollback via `deploy.sh --rollback`.
 - Prod `.env` and `data/` are symlinked from `shared/` and are never overwritten by a deploy.
 
