@@ -588,8 +588,13 @@ app.post('/api/projects', (req, res) => {
   const { name, customer_name = null, items_per_set = 1, tags = '', notes = null, is_custom = 0, design_notes = null } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
 
-  const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set, tags, notes, is_custom, design_notes) VALUES (?,?,?,?,?,?,?)')
-    .run(name, customer_name, items_per_set, tags, notes, is_custom ? 1 : 0, design_notes);
+  // Seed the project's own target margin from the settings default. Stored, not
+  // referenced: changing the default later must never move an existing project
+  // (Dirk 2026-07-22). `/duplicate` already copies the source project's target.
+  const seededTarget = Number(getSetting(db, 'default_target_margin_pct')) || 40;
+
+  const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, target_margin_pct) VALUES (?,?,?,?,?,?,?,?)')
+    .run(name, customer_name, items_per_set, tags, notes, is_custom ? 1 : 0, design_notes, seededTarget);
   const projectId = r.lastInsertRowid;
 
   // Auto-add default extra cost items
@@ -1677,6 +1682,11 @@ app.post('/api/projects/:projectId/verify-batch', (req, res) => {
     projectProductionCost: Number(projectProductionCost) || 0,
     projectSellingPrice: Number(projectSellingPrice) || 0,
     actualSellingTotalInclVat: Number(actualSellingTotalInclVat) || 0,
+    // The batch margin badge is coloured against THIS project's target, not the
+    // global default — the default only seeds new projects.
+    targetMarginPct: project.target_margin_pct != null
+      ? Number(project.target_margin_pct)
+      : (Number(getSetting(db, 'default_target_margin_pct')) || 40),
     settings,
   });
 

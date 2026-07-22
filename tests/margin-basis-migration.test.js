@@ -36,12 +36,24 @@ function withFreshDbModule(fn) {
 }
 
 /** Rewind a bootstrapped DB to how it looked before this migration existed. */
+/**
+ * Put the DB back to how it looked BEFORE both margin migrations.
+ *
+ * `beforeEach` boots the app once to get a schema, which runs every migration —
+ * including the per-project-target one, which renames the threshold keys and
+ * stamps its marker. So rewinding only the ex-VAT marker is not enough: the old
+ * keys no longer exist, the `UPDATE`s below would hit zero rows, and a test
+ * would then pass against values nothing had actually rewound. Both markers go,
+ * and the old key pair is written back explicitly.
+ */
 function rewindToOldBasis(vatRate = 21) {
   const raw = new Database(dbPath);
   raw.prepare("DELETE FROM settings WHERE key = 'margin_basis_ex_vat'").run();
+  raw.prepare("DELETE FROM settings WHERE key = 'target_margin_per_project'").run();
   raw.prepare("UPDATE settings SET value = ? WHERE key = 'vat_rate'").run(String(vatRate));
-  raw.prepare("UPDATE settings SET value = '30' WHERE key = 'margin_green_pct'").run();
-  raw.prepare("UPDATE settings SET value = '5' WHERE key = 'margin_orange_pct'").run();
+  raw.prepare("DELETE FROM settings WHERE key IN ('default_target_margin_pct', 'lowest_target_margin_pct')").run();
+  raw.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('margin_green_pct', '30')").run();
+  raw.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('margin_orange_pct', '5')").run();
   raw.close();
 }
 
@@ -151,13 +163,19 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
     }
   });
 
-  test('leaves projects without a pin alone', () => {
+  test('does not invent a pin for a project that had none', () => {
     rewindToOldBasis(21);
     const id = seedProject('Unpinned', null);
 
     withFreshDbModule(() => {});
 
-    expect(readProject(id).target_margin_pct).toBeNull();
+    // The ex-VAT conversion itself only multiplies existing pins — it must not
+    // manufacture one. The value seen here is 40 because the per-project-target
+    // migration backfills the default in the same boot (see its own tests);
+    // what matters for THIS migration is that it is not 60.5, i.e. nothing was
+    // converted. Asserting NULL stopped being possible once every project
+    // started carrying its own target.
+    expect(readProject(id).target_margin_pct).toBe(40);
   });
 
   test('sets the colour thresholds to the ex-VAT 40 / 25', () => {
@@ -165,8 +183,13 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
 
     withFreshDbModule(() => {});
 
-    expect(readSetting('margin_green_pct')).toBe('40');
-    expect(readSetting('margin_orange_pct')).toBe('25');
+    // The ex-VAT migration writes margin_green_pct/margin_orange_pct; the
+    // per-project-target migration then renames them in the same boot, so the
+    // values land under the new keys and the old ones are gone.
+    expect(readSetting('default_target_margin_pct')).toBe('40');
+    expect(readSetting('lowest_target_margin_pct')).toBe('25');
+    expect(readSetting('margin_green_pct')).toBeNull();
+    expect(readSetting('margin_orange_pct')).toBeNull();
   });
 
   test('runs exactly once — a second boot does not convert again', () => {
@@ -186,18 +209,67 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
     withFreshDbModule(() => {});
 
     const raw = new Database(dbPath);
-    raw.prepare("UPDATE settings SET value = '55' WHERE key = 'margin_green_pct'").run();
+    raw.prepare("UPDATE settings SET value = '55' WHERE key = 'default_target_margin_pct'").run();
     raw.close();
 
     withFreshDbModule(() => {});
 
-    expect(readSetting('margin_green_pct')).toBe('55');
+    expect(readSetting('default_target_margin_pct')).toBe('55');
   });
 
   test('a fresh DB is seeded on the new basis and marked as migrated', () => {
     // beforeEach already bootstrapped a brand-new DB.
     expect(readSetting('margin_basis_ex_vat')).toBe('1');
-    expect(readSetting('margin_green_pct')).toBe('40');
-    expect(readSetting('margin_orange_pct')).toBe('25');
+    expect(readSetting('default_target_margin_pct')).toBe('40');
+    expect(readSetting('lowest_target_margin_pct')).toBe('25');
+  });
+});
+
+describe('per-project target margin migration (#732)', () => {
+  test('renames the settings pair and removes the old keys', () => {
+    rewindToOldBasis(21);
+    withFreshDbModule(() => {});
+
+    expect(readSetting('default_target_margin_pct')).toBe('40');
+    expect(readSetting('lowest_target_margin_pct')).toBe('25');
+    // Removed, not merely unread — a leftover key nothing consults is the trap
+    // this rename exists to close.
+    expect(readSetting('margin_green_pct')).toBeNull();
+    expect(readSetting('margin_orange_pct')).toBeNull();
+    expect(readSetting('target_margin_per_project')).toBe('1');
+  });
+
+  test('backfills every project without a target, so the default stops mattering', () => {
+    rewindToOldBasis(21);
+    const unpinned = seedProject('No pin', null);
+    const pinned = seedProject('Pinned 50', 50);
+
+    withFreshDbModule(() => {});
+
+    // The unpinned project now owns a stored 40 rather than deferring to the
+    // settings default — editing that default later must not move its price.
+    expect(readProject(unpinned).target_margin_pct).toBe(40);
+    // An existing pin is a real decision and is left alone (converted by the
+    // ex-VAT migration, not overwritten by the backfill).
+    expect(readProject(pinned).target_margin_pct).toBeCloseTo(60.5, 6);
+  });
+
+  test('runs exactly once — repeated boots do not re-stamp targets', () => {
+    rewindToOldBasis(21);
+    const id = seedProject('No pin', null);
+
+    withFreshDbModule(() => {});
+
+    const raw = new Database(dbPath);
+    raw.prepare('UPDATE projects SET target_margin_pct = 72 WHERE id = ?').run(id);
+    raw.prepare("UPDATE settings SET value = '55' WHERE key = 'default_target_margin_pct'").run();
+    raw.close();
+
+    withFreshDbModule(() => {});
+    withFreshDbModule(() => {});
+
+    // Neither the project's own edit nor the default edit is stomped.
+    expect(readProject(id).target_margin_pct).toBe(72);
+    expect(readSetting('default_target_margin_pct')).toBe('55');
   });
 });

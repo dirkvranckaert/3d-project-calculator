@@ -299,6 +299,7 @@ function calculateFinalPricing(opts) {
     itemsPerSet = 1,
     vatRate = 21,
     priceRounding = 0.99,
+    targetMarginPct = null,
   } = opts;
 
   // Scale per-item to per-set
@@ -309,6 +310,13 @@ function calculateFinalPricing(opts) {
   const productionCost = baseCostPerSet + extraCostsTotal + extraHoursCost;
 
   // Total excl VAT = base costs + profits + extras + extra hours (no margin on hours)
+  //
+  // This is the OLD per-component pricing engine (material x 200%, printer
+  // amortisation x 50%, processing and electricity x 0%). Since the target
+  // margin drives the suggested price it no longer determines what Dirk is
+  // advised to charge — it is kept because the "Total excl. VAT" card still
+  // reports it and nothing was asked to retire it. Note the two are now two
+  // pricing systems side by side; see the task report.
   const totalExclVat = baseCostPerSet + profitPerSet + extraCostsTotal + extraHoursCost;
 
   // VAT amount
@@ -317,8 +325,26 @@ function calculateFinalPricing(opts) {
   // Total incl VAT
   const totalInclVat = totalExclVat + vatAmount;
 
-  // Suggested price (round up to rounding target)
-  const suggestedPrice = roundToPriceEnding(totalInclVat, priceRounding);
+  // Suggested price — driven by the project's target margin, measured ex-VAT on
+  // the production cost, then VAT added and the price ending applied.
+  //
+  //   price_ex = production_cost / (1 - target)   ->   price_incl = price_ex * (1 + vat)
+  //
+  // REPLACE semantics (Dirk 2026-07-22): the target sets the suggested price
+  // outright rather than acting as a floor under the old component markups. A
+  // project needing more than the default gets its own higher target. The price
+  // ending stays here — nice pricing is a suggested-price device; a locked
+  // ACTUAL price is exact to the cent (see `calculateLockedPrice`).
+  // `Number(null)` and `Number('')` are 0, which would silently price at a 0%
+  // margin — i.e. at cost. Treat absent as absent, same guard as
+  // `calculateLockedPrice`. Absent falls back to the old component engine.
+  const target = (targetMarginPct === null || targetMarginPct === undefined || targetMarginPct === '')
+    ? NaN
+    : Number(targetMarginPct);
+  const targetUsable = Number.isFinite(target) && target < MAX_MARGIN_PCT && productionCost > 0;
+  const suggestedPrice = targetUsable
+    ? roundToPriceEnding((productionCost / (1 - target / 100)) * (1 + vatRate / 100), priceRounding)
+    : roundToPriceEnding(totalInclVat, priceRounding);
 
   // Sales excl VAT
   const suggestedExclVat = suggestedPrice / (1 + vatRate / 100);
@@ -368,10 +394,18 @@ function calculateActualMargin(actualSalesPrice, productionCost, vatRate) {
  * both ex-VAT), so green means "at least what an industrial operator earns"
  * rather than a number carried over from the old incl-VAT basis.
  */
-function marginIndicator(marginPct, greenThreshold = 40, orangeThreshold = 25) {
-  if (marginPct >= greenThreshold) return 'green';
-  if (marginPct >= orangeThreshold) return 'orange';
-  return 'red';
+function marginIndicator(marginPct, targetPct = 40, lowestPct = 25) {
+  // RED IS CHECKED FIRST, AND THAT ORDERING IS LOAD-BEARING.
+  //
+  // `lowestPct` is a global floor; `targetPct` is per project and may legally be
+  // set BELOW that floor. Testing green first would then colour a margin that
+  // sits under the floor green merely because it beat its own low target — e.g.
+  // target 20, lowest 25, margin 22 reads "green" while being below the floor.
+  // Checking red first makes the floor win, and the orange band simply comes out
+  // empty for such a project, which is the correct degenerate case.
+  if (marginPct < lowestPct) return 'red';
+  if (marginPct < targetPct) return 'orange';
+  return 'green';
 }
 
 /* ------------------------------------------------------------------ */
@@ -576,6 +610,11 @@ function calculateTotalPrintTime(plates, itemsPerSet = 1) {
  *   - settings:  All settings object
  *   - itemsPerSet: number
  *   - actualSalesPrice: number | null
+ *   - targetMarginPct: number | null — the PROJECT's target margin. Drives the
+ *     suggested price and the colour bands. Falls back to the
+ *     `default_target_margin_pct` setting only when the project has no stored
+ *     value (rows predating the column); a stored value always wins, so editing
+ *     the global default never moves an existing project.
  *   - testPrints: Array<{estimated_cost, attachmentBreakdowns}> (custom projects)
  * @returns {object} full breakdown
  */
@@ -600,9 +639,17 @@ function calculateProject(opts) {
     electricity_profit_pct: Number(settings.electricity_profit_pct) || 0,
     printer_cost_profit_pct: Number(settings.printer_cost_profit_pct) || 0,
     price_rounding: Number(settings.price_rounding) || 0.99,
-    margin_green_pct: Number(settings.margin_green_pct) || 40,
-    margin_orange_pct: Number(settings.margin_orange_pct) || 25,
+    default_target_margin_pct: Number(settings.default_target_margin_pct) || 40,
+    lowest_target_margin_pct: Number(settings.lowest_target_margin_pct) || 25,
   };
+
+  // The project's own target. A stored value always wins — the global default is
+  // a SEED for new projects, never a live threshold (Dirk 2026-07-22).
+  // Same absent-vs-zero guard: '' and null must not read as a 0% target.
+  const rawTarget = (targetMarginPct === null || targetMarginPct === undefined || targetMarginPct === '')
+    ? NaN
+    : Number(targetMarginPct);
+  const projectTarget = Number.isFinite(rawTarget) ? rawTarget : s.default_target_margin_pct;
 
   const {
     designHours = [],
@@ -677,11 +724,12 @@ function calculateProject(opts) {
     itemsPerSet,
     vatRate: s.vat_rate,
     priceRounding: s.price_rounding,
+    targetMarginPct: projectTarget,
   });
 
   // Suggested margin indicator
   const suggestedIndicator = marginIndicator(
-    pricing.suggestedMarginPct, s.margin_green_pct, s.margin_orange_pct
+    pricing.suggestedMarginPct, projectTarget, s.lowest_target_margin_pct
   );
 
   // Margin lock: the target percentage drives the price, not the other way
@@ -693,9 +741,9 @@ function calculateProject(opts) {
     // No `price_rounding` here on purpose — the price ending is for the
     // suggested price only; a locked actual price is exact to the cent.
     const lock = calculateLockedPrice(
-      pricing.productionCost, targetMarginPct, s.vat_rate
+      pricing.productionCost, projectTarget, s.vat_rate
     );
-    marginLock = { locked: true, targetPct: Number(targetMarginPct), ...lock };
+    marginLock = { locked: true, targetPct: projectTarget, ...lock };
     // A lock with no derivable price falls back to no actual price at all
     // rather than silently reverting to the stale manual one.
     effectiveSalesPrice = lock.price;
@@ -709,7 +757,7 @@ function calculateProject(opts) {
       effectiveSalesPrice, pricing.productionCost, s.vat_rate
     );
     actualIndicator = marginIndicator(
-      actualMargin.marginPct, s.margin_green_pct, s.margin_orange_pct
+      actualMargin.marginPct, projectTarget, s.lowest_target_margin_pct
     );
   }
 
@@ -729,6 +777,7 @@ function calculateProject(opts) {
     actualIndicator,
     marginLock,
     effectiveSalesPrice,
+    targetMarginPct: projectTarget,
     settings: s,
   };
 }
@@ -769,7 +818,12 @@ function calculateProject(opts) {
  *   - projectProductionCost      {number}  reference from existing calculation
  *   - projectSellingPrice        {number}  actual_sales_price or suggestedPrice (labelled "Calculated selling price" in UI)
  *   - actualSellingTotalInclVat  {number}  Dirk's actual invoice total for this batch, incl. VAT (optional)
- *   - settings                   {object}  for marginIndicator thresholds
+ *   - targetMarginPct            {number}  the PROJECT's target margin — the green
+ *                                          boundary for the batch margin badge.
+ *                                          Passed explicitly rather than read off
+ *                                          `settings`: the global default is a seed
+ *                                          for new projects, not a threshold.
+ *   - settings                   {object}  electricity price, VAT, waste, risk
  *
  * @returns {object}
  *   { plateCosts, totalMachineCost, printingCost, timeCost, postProcessingCost,
@@ -790,6 +844,7 @@ function calculateVerification(opts) {
     projectProductionCost = 0,
     projectSellingPrice = 0,
     actualSellingTotalInclVat = 0,
+    targetMarginPct = null,
     settings = {},
   } = opts;
 
@@ -857,9 +912,11 @@ function calculateVerification(opts) {
       netRevenue,
       absoluteMargin,
       marginPct,
-      indicator: marginIndicator(marginPct,
-        (settings.margin_green_pct  || 40),
-        (settings.margin_orange_pct || 25)),
+      indicator: marginIndicator(
+        marginPct,
+        Number.isFinite(Number(targetMarginPct)) ? Number(targetMarginPct) : 40,
+        Number(settings.lowest_target_margin_pct) || 25
+      ),
     };
   }
 
