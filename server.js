@@ -455,6 +455,8 @@ function enrichProject(db, project) {
     settings,
     itemsPerSet: project.items_per_set,
     actualSalesPrice: project.actual_sales_price,
+    marginLocked: !!project.margin_locked,
+    targetMarginPct: project.target_margin_pct,
   });
 
   return {
@@ -554,6 +556,8 @@ function enrichProjectLite(db, project) {
     settings,
     itemsPerSet: project.items_per_set,
     actualSalesPrice: project.actual_sales_price,
+    marginLocked: !!project.margin_locked,
+    targetMarginPct: project.target_margin_pct,
   });
 
   return {
@@ -601,17 +605,78 @@ app.post('/api/projects', (req, res) => {
 
 app.put('/api/projects/:id', (req, res) => {
   const db = getDb();
-  const { name, customer_name, items_per_set, actual_sales_price, tags, notes, is_custom, design_notes } = req.body;
-  // Read current is_custom if not supplied in body, to avoid resetting it on ordinary edits
-  const existing = db.prepare('SELECT is_custom FROM projects WHERE id = ?').get(req.params.id);
+  const { name, customer_name, items_per_set, actual_sales_price, tags, notes, is_custom, design_notes,
+    margin_locked, target_margin_pct } = req.body;
+  // Read current is_custom / margin lock if not supplied in body, to avoid resetting them on ordinary edits
+  const existing = db.prepare('SELECT is_custom, margin_locked, target_margin_pct FROM projects WHERE id = ?').get(req.params.id);
   const isCustomVal = is_custom !== undefined ? (is_custom ? 1 : 0) : (existing?.is_custom ?? 0);
+  const marginLockedVal = margin_locked !== undefined ? (margin_locked ? 1 : 0) : (existing?.margin_locked ?? 0);
+  const targetMarginVal = target_margin_pct !== undefined
+    ? (target_margin_pct === null ? null : Number(target_margin_pct))
+    : (existing?.target_margin_pct ?? null);
   db.prepare(`UPDATE projects SET name=?, customer_name=?, items_per_set=?, actual_sales_price=?, tags=?, notes=?,
-    is_custom=?, design_notes=?, updated_at=datetime('now') WHERE id=?`)
+    is_custom=?, design_notes=?, margin_locked=?, target_margin_pct=?, updated_at=datetime('now') WHERE id=?`)
     .run(name, customer_name, items_per_set, actual_sales_price ?? null, tags ?? '', notes ?? null,
-      isCustomVal, design_notes ?? null, req.params.id);
+      isCustomVal, design_notes ?? null, marginLockedVal, targetMarginVal, req.params.id);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Not found' });
   res.json(enrichProject(db, project));
+});
+
+/**
+ * Lock or unlock the target margin.
+ * Body: `{ locked: boolean, target_margin_pct?: number }`.
+ *
+ * Locking requires a target percentage below the VAT ceiling (see
+ * `calc.maxReachableMarginPct`) — above it no price can produce that margin.
+ * Unlocking keeps the stored percentage so re-locking is one click.
+ */
+app.patch('/api/projects/:id/margin-lock', (req, res) => {
+  const db = getDb();
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Not found' });
+
+  const locked = !!req.body?.locked;
+  let target = project.target_margin_pct;
+  if (req.body?.target_margin_pct !== undefined && req.body.target_margin_pct !== null) {
+    target = Number(req.body.target_margin_pct);
+  }
+
+  if (locked) {
+    const vatRate = Number(getAllSettings(db).vat_rate) || 21;
+    const maxPct = calc.maxReachableMarginPct(vatRate);
+    if (!Number.isFinite(target)) {
+      return res.status(400).json({ error: 'A target margin percentage is required to lock' });
+    }
+    if (target >= maxPct) {
+      return res.status(400).json({
+        error: `Target margin must be below ${maxPct.toFixed(2)}% at ${vatRate}% VAT`,
+        maxMarginPct: maxPct,
+      });
+    }
+  }
+
+  db.prepare("UPDATE projects SET margin_locked=?, target_margin_pct=?, updated_at=datetime('now') WHERE id=?")
+    .run(locked ? 1 : 0, Number.isFinite(target) ? target : null, req.params.id);
+
+  const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+  res.json(enrichProject(db, updated));
+});
+
+/**
+ * Full reset of the price state: clears the manual actual sales price AND the
+ * margin lock (flag + stored percentage), back to the default derived state.
+ */
+app.patch('/api/projects/:id/clear-price', (req, res) => {
+  const db = getDb();
+  const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Not found' });
+
+  db.prepare(`UPDATE projects SET actual_sales_price=NULL, margin_locked=0, target_margin_pct=NULL,
+    updated_at=datetime('now') WHERE id=?`).run(req.params.id);
+
+  const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+  res.json(enrichProject(db, updated));
 });
 
 app.post('/api/projects/:id/duplicate', (req, res) => {
@@ -619,8 +684,13 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
   const src = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
   if (!src) return res.status(404).json({ error: 'Not found' });
 
-  const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set, tags, notes, is_custom, design_notes) VALUES (?,?,?,?,?,?,?)')
-    .run(`${src.name} (copy)`, src.customer_name, src.items_per_set, src.tags || '', src.notes, src.is_custom || 0, src.design_notes || null);
+  // The margin lock is a pricing policy, not a recorded sale, so it follows the
+  // copy — unlike actual_sales_price, which stays empty on a duplicate.
+  const r = db.prepare(`INSERT INTO projects
+    (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, margin_locked, target_margin_pct)
+    VALUES (?,?,?,?,?,?,?,?,?)`)
+    .run(`${src.name} (copy)`, src.customer_name, src.items_per_set, src.tags || '', src.notes, src.is_custom || 0,
+      src.design_notes || null, src.margin_locked || 0, src.target_margin_pct ?? null);
   const newId = r.lastInsertRowid;
 
   // Copy plates (including test-print plates — orphan plates copied as orphans with test_print_id=null)
@@ -1498,18 +1568,18 @@ app.post('/api/materials/:id/price-impact', (req, res) => {
       projectName: project.name,
       customerName: project.customer_name,
       archived: !!project.archived,
-      actualSalesPrice: project.actual_sales_price,
+      actualSalesPrice: enriched.calculation.effectiveSalesPrice,
       current: {
         productionCost: currentPricing.productionCost,
         suggestedPrice: currentPricing.suggestedPrice,
-        marginPct: project.actual_sales_price
+        marginPct: enriched.calculation.effectiveSalesPrice
           ? enriched.calculation.actualMargin?.marginPct
           : currentPricing.suggestedMarginPct,
       },
       simulated: {
         productionCost: newPricing.productionCost,
         suggestedPrice: newPricing.suggestedPrice,
-        marginPct: project.actual_sales_price
+        marginPct: newEnriched.calculation.effectiveSalesPrice
           ? newEnriched.calculation.actualMargin?.marginPct
           : newPricing.suggestedMarginPct,
       },

@@ -741,6 +741,173 @@ describe('PUT /api/projects/:projectId/images/order', () => {
 });
 
 /* ================================================================== */
+/*  Margin lock                                                        */
+/* ================================================================== */
+describe('Margin lock routes', () => {
+  let pid;
+
+  const getProject = async (id) => (await request(app).get(`/api/projects/${id}`).set('Cookie', cookie)).body;
+
+  beforeAll(async () => {
+    const created = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'Margin Lock Test', customer_name: null, items_per_set: 1 });
+    pid = created.body.id;
+    // A plate so the project has a real production cost to mark up.
+    await request(app).post(`/api/projects/${pid}/plates`).set('Cookie', cookie)
+      .send({ name: 'Plate 1', print_time_minutes: 600, plastic_grams: 800, items_per_plate: 1 });
+  });
+
+  test('a new project starts unlocked with no target', async () => {
+    const p = await getProject(pid);
+    expect(p.margin_locked).toBe(0);
+    expect(p.target_margin_pct).toBeNull();
+    expect(p.calculation.marginLock).toBeNull();
+  });
+
+  test('locking derives the sales price from the target margin', async () => {
+    const res = await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: true, target_margin_pct: 60 });
+    expect(res.status).toBe(200);
+    expect(res.body.margin_locked).toBe(1);
+    expect(res.body.target_margin_pct).toBe(60);
+    expect(res.body.calculation.marginLock.locked).toBe(true);
+    expect(res.body.calculation.effectiveSalesPrice).toBeGreaterThan(0);
+    expect(res.body.calculation.actualMargin.marginPct).toBeGreaterThanOrEqual(60);
+  });
+
+  test('the lock survives a reload', async () => {
+    const p = await getProject(pid);
+    expect(p.margin_locked).toBe(1);
+    expect(p.target_margin_pct).toBe(60);
+    expect(p.calculation.effectiveSalesPrice).toBeGreaterThan(0);
+  });
+
+  test('a cost change moves the price and holds the margin', async () => {
+    const before = await getProject(pid);
+    const priceBefore = before.calculation.effectiveSalesPrice;
+    const plateId = before.plates[0].id;
+
+    // Processing minutes, not grams: the plate has no material assigned, so
+    // gram changes would not move the cost at all.
+    await request(app).patch(`/api/projects/${pid}/plates/${plateId}`).set('Cookie', cookie)
+      .send({ post_processing_minutes: 120 });
+
+    const after = await getProject(pid);
+    expect(after.calculation.pricing.productionCost).toBeGreaterThan(before.calculation.pricing.productionCost);
+    expect(after.calculation.effectiveSalesPrice).toBeGreaterThan(priceBefore);
+    expect(after.calculation.actualMargin.marginPct).toBeGreaterThanOrEqual(60);
+    expect(after.calculation.actualMargin.marginPct).toBeLessThan(61);
+
+    await request(app).patch(`/api/projects/${pid}/plates/${plateId}`).set('Cookie', cookie)
+      .send({ post_processing_minutes: 0 });
+  });
+
+  test('a locked project ignores a manually stored sales price', async () => {
+    await request(app).put(`/api/projects/${pid}`).set('Cookie', cookie)
+      .send({ name: 'Margin Lock Test', customer_name: null, items_per_set: 1, actual_sales_price: 9999 });
+    const p = await getProject(pid);
+    expect(p.actual_sales_price).toBe(9999);
+    expect(p.calculation.effectiveSalesPrice).not.toBe(9999);
+    expect(p.calculation.actualMargin.marginPct).toBeGreaterThanOrEqual(60);
+  });
+
+  test('an ordinary PUT does not clear the lock', async () => {
+    await request(app).put(`/api/projects/${pid}`).set('Cookie', cookie)
+      .send({ name: 'Margin Lock Test Renamed', customer_name: null, items_per_set: 1 });
+    const p = await getProject(pid);
+    expect(p.margin_locked).toBe(1);
+    expect(p.target_margin_pct).toBe(60);
+  });
+
+  test('a target at or above the VAT ceiling is rejected', async () => {
+    const res = await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: true, target_margin_pct: 90 });
+    expect(res.status).toBe(400);
+    expect(res.body.maxMarginPct).toBeCloseTo(82.6446, 3);
+    // Still on the previous valid lock.
+    const p = await getProject(pid);
+    expect(p.target_margin_pct).toBe(60);
+  });
+
+  test('locking without any target is rejected', async () => {
+    const fresh = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'No Target', customer_name: null, items_per_set: 1 });
+    const res = await request(app).patch(`/api/projects/${fresh.body.id}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: true });
+    expect(res.status).toBe(400);
+  });
+
+  test('unlocking keeps the stored percentage and restores the manual price', async () => {
+    // Re-assert the manual price: the bare PUT above dropped it, because PUT
+    // treats an omitted actual_sales_price as an explicit null.
+    await request(app).put(`/api/projects/${pid}`).set('Cookie', cookie)
+      .send({ name: 'Margin Lock Test Renamed', customer_name: null, items_per_set: 1, actual_sales_price: 9999 });
+
+    const res = await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: false });
+    expect(res.status).toBe(200);
+    expect(res.body.margin_locked).toBe(0);
+    expect(res.body.target_margin_pct).toBe(60);
+    expect(res.body.calculation.marginLock).toBeNull();
+    expect(res.body.calculation.effectiveSalesPrice).toBe(9999);
+  });
+
+  test('clear-price resets the manual price and the lock together', async () => {
+    await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: true, target_margin_pct: 55 });
+
+    const res = await request(app).patch(`/api/projects/${pid}/clear-price`).set('Cookie', cookie).send({});
+    expect(res.status).toBe(200);
+    expect(res.body.actual_sales_price).toBeNull();
+    expect(res.body.margin_locked).toBe(0);
+    expect(res.body.target_margin_pct).toBeNull();
+    expect(res.body.calculation.marginLock).toBeNull();
+    expect(res.body.calculation.effectiveSalesPrice).toBeNull();
+    expect(res.body.calculation.actualMargin).toBeNull();
+  });
+
+  test('a lock with no production cost yields no price and a no-cost reason', async () => {
+    const empty = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'No Cost', customer_name: null, items_per_set: 1 });
+    // A new project is seeded with default extra cost items, which alone give it
+    // a non-zero production cost. Strip them to reach a genuine zero.
+    await request(app).put(`/api/projects/${empty.body.id}/extras`).set('Cookie', cookie).send([]);
+
+    const res = await request(app).patch(`/api/projects/${empty.body.id}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: true, target_margin_pct: 50 });
+    expect(res.status).toBe(200);
+    expect(res.body.calculation.marginLock.reason).toBe('no-cost');
+    expect(res.body.calculation.effectiveSalesPrice).toBeNull();
+    expect(res.body.calculation.actualMargin).toBeNull();
+  });
+
+  test('a duplicate inherits the lock but not the manual price', async () => {
+    await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: true, target_margin_pct: 42 });
+    const dup = await request(app).post(`/api/projects/${pid}/duplicate`).set('Cookie', cookie).send({});
+    expect(dup.status).toBe(201);
+    expect(dup.body.margin_locked).toBe(1);
+    expect(dup.body.target_margin_pct).toBe(42);
+    expect(dup.body.actual_sales_price).toBeNull();
+  });
+
+  test('both routes 404 on a missing project', async () => {
+    const a = await request(app).patch('/api/projects/999999/margin-lock').set('Cookie', cookie)
+      .send({ locked: false });
+    const b = await request(app).patch('/api/projects/999999/clear-price').set('Cookie', cookie).send({});
+    expect(a.status).toBe(404);
+    expect(b.status).toBe(404);
+  });
+
+  test('both routes require auth', async () => {
+    const a = await request(app).patch(`/api/projects/${pid}/margin-lock`).send({ locked: false });
+    const b = await request(app).patch(`/api/projects/${pid}/clear-price`).send({});
+    expect(a.status).toBe(401);
+    expect(b.status).toBe(401);
+  });
+});
+
+/* ================================================================== */
 /*  Design Cost Module — settings, flag, routes                       */
 /* ================================================================== */
 describe('Design Cost Module', () => {

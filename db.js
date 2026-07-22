@@ -212,6 +212,9 @@ function migrate(db) {
   addCol('project_plates', 'test_print_id', 'INTEGER');
   // Sliced-vs-model 3MF distinction (NULL = unknown/not a 3MF, 0 = model file, 1 = sliced)
   addCol('project_files', 'is_sliced', 'INTEGER');
+  // Margin lock — target margin drives the sales price instead of the reverse (2026-07-22)
+  addCol('projects', 'margin_locked', 'INTEGER NOT NULL DEFAULT 0');
+  addCol('projects', 'target_margin_pct', 'REAL');
   // Manual image ordering — drag & drop in the Images section (2026-07-22)
   if (addCol('project_images', 'sort_order', 'INTEGER NOT NULL DEFAULT 0')) {
     // Backfill: seed the order every project already sees (primary first, then

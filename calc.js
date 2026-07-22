@@ -201,6 +201,59 @@ function calculateExtraHoursCost(extraHours) {
  *   - priceRounding   {number}  e.g. 0.99 or 0.95
  * @returns {object}
  */
+/**
+ * Round a price up to the configured price ending (e.g. 0.99 -> 24.99).
+ * Never rounds down: the result is always >= value.
+ */
+function roundToPriceEnding(value, priceRounding = 0.99) {
+  if (!(value > 0)) return 0;
+  const roundingDecimal = priceRounding % 1 || priceRounding;
+  let rounded = Math.ceil(value - roundingDecimal) + roundingDecimal;
+  if (rounded < value) rounded += 1;
+  return rounded;
+}
+
+/**
+ * Highest margin percentage that is mathematically reachable at a given VAT
+ * rate. Margin is measured against the incl-VAT price, so the VAT share of the
+ * price is an absolute ceiling: at 21% VAT nothing above 82.64% is reachable,
+ * no matter the price.
+ */
+function maxReachableMarginPct(vatRate = 21) {
+  return 100 / (1 + vatRate / 100);
+}
+
+/**
+ * Invert the margin formula: given a production cost and a target margin,
+ * return the incl-VAT sales price that produces that margin.
+ *
+ *   margin = (price/(1+vat) - cost) / price   =>   price = cost / (1/(1+vat) - margin)
+ *
+ * Returns `{ price, rawPrice, reason, maxMarginPct }`. `price` is null when no
+ * price can be derived, with `reason` explaining why:
+ *   'unreachable' — target margin >= the VAT ceiling
+ *   'no-cost'     — production cost is 0 or missing, so there is nothing to mark up
+ */
+function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21, priceRounding = 0.99) {
+  // `Number(null)` and `Number('')` are 0, which would silently price a lock
+  // with no target at a 0% margin. Treat absent as absent.
+  const target = (targetMarginPct === null || targetMarginPct === undefined || targetMarginPct === '')
+    ? NaN
+    : Number(targetMarginPct);
+  const maxMarginPct = maxReachableMarginPct(vatRate);
+  const base = { price: null, rawPrice: null, maxMarginPct };
+  if (!Number.isFinite(target)) return { ...base, reason: 'unreachable' };
+  if (target >= maxMarginPct) return { ...base, reason: 'unreachable' };
+  if (!(Number(productionCost) > 0)) return { ...base, reason: 'no-cost' };
+  const rawPrice = Number(productionCost) / ((1 / (1 + vatRate / 100)) - target / 100);
+  return {
+    price: roundToPriceEnding(rawPrice, priceRounding),
+    rawPrice,
+    reason: null,
+    maxMarginPct,
+  };
+}
+
 function calculateFinalPricing(opts) {
   const {
     perItemCosts,
@@ -229,17 +282,7 @@ function calculateFinalPricing(opts) {
   const totalInclVat = totalExclVat + vatAmount;
 
   // Suggested price (round up to rounding target)
-  const roundingDecimal = priceRounding % 1 || priceRounding;
-  let suggestedPrice;
-  if (totalInclVat <= 0) {
-    suggestedPrice = 0;
-  } else {
-    suggestedPrice = Math.ceil(totalInclVat - roundingDecimal) + roundingDecimal;
-    // Ensure we don't round down
-    if (suggestedPrice < totalInclVat) {
-      suggestedPrice += 1;
-    }
-  }
+  const suggestedPrice = roundToPriceEnding(totalInclVat, priceRounding);
 
   // Sales excl VAT
   const suggestedExclVat = suggestedPrice / (1 + vatRate / 100);
@@ -503,6 +546,8 @@ function calculateProject(opts) {
     settings = {},
     itemsPerSet = 1,
     actualSalesPrice = null,
+    marginLocked = false,
+    targetMarginPct = null,
   } = opts;
 
   const s = {
@@ -598,12 +643,27 @@ function calculateProject(opts) {
     pricing.suggestedMarginPct, s.margin_green_pct, s.margin_orange_pct
   );
 
-  // Actual price margin
+  // Margin lock: the target percentage drives the price, not the other way
+  // round. The locked price is always derived here rather than stored, so a
+  // later cost change moves the price automatically with no write-back.
+  let marginLock = null;
+  let effectiveSalesPrice = actualSalesPrice;
+  if (marginLocked) {
+    const lock = calculateLockedPrice(
+      pricing.productionCost, targetMarginPct, s.vat_rate, s.price_rounding
+    );
+    marginLock = { locked: true, targetPct: Number(targetMarginPct), ...lock };
+    // A lock with no derivable price falls back to no actual price at all
+    // rather than silently reverting to the stale manual one.
+    effectiveSalesPrice = lock.price;
+  }
+
+  // Actual price margin — computed from the locked price when a lock is active.
   let actualMargin = null;
   let actualIndicator = null;
-  if (actualSalesPrice && actualSalesPrice > 0) {
+  if (effectiveSalesPrice && effectiveSalesPrice > 0) {
     actualMargin = calculateActualMargin(
-      actualSalesPrice, pricing.productionCost, s.vat_rate
+      effectiveSalesPrice, pricing.productionCost, s.vat_rate
     );
     actualIndicator = marginIndicator(
       actualMargin.marginPct, s.margin_green_pct, s.margin_orange_pct
@@ -624,6 +684,8 @@ function calculateProject(opts) {
     suggestedIndicator,
     actualMargin,
     actualIndicator,
+    marginLock,
+    effectiveSalesPrice,
     settings: s,
   };
 }
@@ -786,6 +848,9 @@ module.exports = {
   calculateDesignCosts,
   calculateFinalPricing,
   calculateActualMargin,
+  roundToPriceEnding,
+  maxReachableMarginPct,
+  calculateLockedPrice,
   marginIndicator,
   calculateProject,
   calculateVerification,
