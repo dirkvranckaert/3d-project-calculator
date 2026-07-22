@@ -1727,8 +1727,29 @@ describe('the project target survives every price-state reset (#732 regression)'
     expect((await get(pid)).target_margin_pct).toBe(60);
   });
 
-  test('no app path can leave a project without a target', async () => {
-    const rows = (await request(app).get('/api/projects').set('Cookie', cookie)).body;
-    for (const r of rows) expect(r.target_margin_pct).not.toBeNull();
+  test('no reset path can leave a project without a target', async () => {
+    // Self-contained on a project of its own: reading the shared list at the
+    // end of the describe passed even with the clear-price null reintroduced,
+    // because earlier tests re-set the target before the sweep ran. Each path
+    // is exercised here on a freshly created project and asserted immediately.
+    const fresh = (await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'Reset Sweep', customer_name: null, items_per_set: 1 })).body;
+    const base = { name: 'Reset Sweep', customer_name: null, items_per_set: 1 };
+    await request(app).put(`/api/projects/${fresh.id}`).set('Cookie', cookie)
+      .send({ ...base, target_margin_pct: 62 });
+
+    const resets = {
+      'clear-price': () => request(app).patch(`/api/projects/${fresh.id}/clear-price`).set('Cookie', cookie).send({}),
+      'unlock': () => request(app).patch(`/api/projects/${fresh.id}/margin-lock`).set('Cookie', cookie).send({ locked: false }),
+      'PUT with an explicit null': () => request(app).put(`/api/projects/${fresh.id}`).set('Cookie', cookie)
+        .send({ ...base, target_margin_pct: null }),
+      'PUT omitting the field': () => request(app).put(`/api/projects/${fresh.id}`).set('Cookie', cookie).send(base),
+    };
+
+    for (const [label, run] of Object.entries(resets)) {
+      await run();
+      const after = (await get(fresh.id)).target_margin_pct;
+      expect(`${label}: ${after}`).toBe(`${label}: 62`);
+    }
   });
 });

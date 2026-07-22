@@ -196,3 +196,28 @@ describe('pricing section — margin display', () => {
     );
   });
 });
+
+describe('the "Min. for X% margin" price hint', () => {
+  // A price hint rather than a colour, so a colour-only sweep misses it — and
+  // it sits beside the margin badge, so pointing it at the global default would
+  // have it contradict the badge on any project not on the default.
+  test('quotes the project target, never the global default', () => {
+    const html = renderPricingSection(project({ targetMarginPct: 65 }));
+    expect(html).toContain('Min. for 65% margin');
+    expect(html).not.toContain('Min. for 40% margin');
+  });
+
+  test('follows the project target when it changes', () => {
+    expect(renderPricingSection(project({ targetMarginPct: 30 }))).toContain('Min. for 30% margin');
+    expect(renderPricingSection(project({ targetMarginPct: 80 }))).toContain('Min. for 80% margin');
+  });
+
+  test('the quoted price is the one that actually reaches that margin', () => {
+    const p = project({ targetMarginPct: 65 });
+    const cost = p.calculation.pricing.productionCost;
+    const expected = (cost / (1 - 0.65)) * 1.21;
+    const m = renderPricingSection(p).match(/Min\. for 65% margin excl\. VAT: <strong>€([\d.]+)<\/strong>/);
+    expect(m).not.toBeNull();
+    expect(Number(m[1])).toBeCloseTo(expected, 2);
+  });
+});
