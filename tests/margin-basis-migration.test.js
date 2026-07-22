@@ -91,9 +91,12 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
     expect(readProject(id).target_margin_pct).toBeCloseTo(60.5, 6);
 
     // The whole point: same production cost, same price before and after.
-    const oldPrice = calc.roundToPriceEnding(100 / ((1 / 1.21) - 0.5), 0.99);
-    const newPrice = calc.calculateLockedPrice(100, 60.5, 21, 0.99).price;
-    expect(newPrice).toBe(oldPrice);
+    // Compared before the price ending, which no longer applies to a locked
+    // actual sales price at all (Dirk 2026-07-22) — the migration is about the
+    // basis conversion, not about how the result is rounded.
+    const oldPrice = 100 / ((1 / 1.21) - 0.5);
+    const newPrice = calc.calculateLockedPrice(100, 60.5, 21).price;
+    expect(newPrice).toBeCloseTo(oldPrice, 2);
   });
 
   test('uses the vat_rate setting rather than a hardcoded 21', () => {

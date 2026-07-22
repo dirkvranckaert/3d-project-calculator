@@ -574,8 +574,11 @@ body {
 .margin-badge.green { background: var(--success-tint); color: var(--success); }
 .margin-badge.orange { background: var(--warning-tint); color: var(--warning); }
 .margin-badge.red { background: var(--danger-tint); color: var(--danger); }
-/* The margin is the input when a lock is active — make it look clickable. */
+/* The actual-sales-price margin is the input for the lock in every state —
+   make it look clickable. Only that one badge ever carries this class. */
 .margin-badge--editable { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+/* Placeholder variant: no margin to colour yet, but still the lock entry point. */
+.margin-badge--empty { background: var(--surface-hover); color: var(--text-muted); }
 .margin-badge--editable:hover { filter: brightness(1.08); }
 
 /* Margin lock */

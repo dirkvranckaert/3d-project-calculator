@@ -1820,82 +1820,94 @@ describe('margin lock', () => {
 
     test('the old VAT-derived 82.64% ceiling is gone', () => {
       // 90% was unreachable on the incl-VAT basis; on the ex-VAT basis it prices fine.
-      const res = calc.calculateLockedPrice(100, 90, 21, 0.99);
+      const res = calc.calculateLockedPrice(100, 90, 21);
       expect(res.reason).toBeNull();
-      expect(res.price).toBe(1210.99);
+      expect(res.price).toBe(1210);
     });
   });
 
   describe('calculateLockedPrice', () => {
     test('derived price reproduces the target margin exactly (before rounding)', () => {
-      const { rawPrice } = calc.calculateLockedPrice(100, 50, 21, 0.99);
+      const { rawPrice } = calc.calculateLockedPrice(100, 50, 21);
       const margin = calc.calculateActualMargin(rawPrice, 100, 21);
       expect(margin.marginPct).toBeCloseTo(50, 6);
     });
 
-    test('rounding only ever pushes the effective margin above the target', () => {
-      const { price } = calc.calculateLockedPrice(100, 50, 21, 0.99);
+    test('the price ending is NEVER applied to a locked actual sales price', () => {
+      // Nice pricing belongs to the suggested price. An actual sales price is
+      // exact, whether typed or derived (Dirk 2026-07-22).
+      for (const ending of [0.99, 0.95, 0.50]) {
+        const { price } = calc.calculateLockedPrice(100, 50, 21, ending);
+        expect(price).toBe(242);
+      }
+    });
+
+    test('rounding to the cent holds the target to within half a cent', () => {
+      const { price } = calc.calculateLockedPrice(100, 50, 21);
       const margin = calc.calculateActualMargin(price, 100, 21);
-      expect(margin.marginPct).toBeGreaterThanOrEqual(50);
-      expect(margin.marginPct).toBeLessThan(51);
+      expect(margin.marginPct).toBeCloseTo(50, 6);
+      // Exact to the cent — nothing is added to reach a nicer ending.
+      expect(Math.round(price * 100)).toBe(price * 100);
     });
 
     test('a margin at or above the 95% cap is unreachable', () => {
-      const res = calc.calculateLockedPrice(100, 95, 21, 0.99);
+      const res = calc.calculateLockedPrice(100, 95, 21);
       expect(res.price).toBeNull();
       expect(res.reason).toBe('unreachable');
       expect(res.maxMarginPct).toBe(95);
     });
 
-    // The numbers Dirk sanity-checks against: cost EUR 100, 21% VAT, .99 rounding.
-    // price_ex = 100 / (1 - m), incl = price_ex * 1.21, rounded up to .99.
+    // The numbers Dirk sanity-checks against: cost EUR 100, 21% VAT.
+    // price_ex = 100 / (1 - m), incl = price_ex * 1.21, rounded to the cent —
+    // no price ending. Supersedes the old table, which ended in .99 throughout.
     describe('EUR 100 reference table (ex-VAT pins -> incl-VAT price)', () => {
       const cases = [
-        [25, 133.33, 161.33, 161.99],
-        [30, 142.86, 172.86, 172.99],
-        [40, 166.67, 201.67, 201.99],
-        [50, 200.00, 242.00, 242.99],
-        [60, 250.00, 302.50, 302.99],
-        [65, 285.71, 345.71, 345.99],
-        [70, 333.33, 403.33, 403.99],
-        [75, 400.00, 484.00, 484.99],
-        [80, 500.00, 605.00, 605.99],
-        [90, 1000.00, 1210.00, 1210.99],
+        [25, 133.33, 161.33],
+        [30, 142.86, 172.86],
+        [40, 166.67, 201.67],
+        [50, 200.00, 242.00],
+        [60, 250.00, 302.50],
+        [65, 285.71, 345.71],
+        [70, 333.33, 403.33],
+        [75, 400.00, 484.00],
+        [80, 500.00, 605.00],
+        [90, 1000.00, 1210.00],
       ];
-      test.each(cases)('%s%% ex-VAT -> %s ex, %s incl, %s rounded', (pct, ex, incl, rounded) => {
-        const res = calc.calculateLockedPrice(100, pct, 21, 0.99);
+      test.each(cases)('%s%% ex-VAT -> %s ex, %s incl (charged)', (pct, ex, incl) => {
+        const res = calc.calculateLockedPrice(100, pct, 21);
         expect(res.rawPrice / 1.21).toBeCloseTo(ex, 2);
-        expect(res.rawPrice).toBeCloseTo(incl, 2);
-        expect(res.price).toBe(rounded);
+        expect(res.price).toBe(incl);
+        // The charged price reproduces the pin, to the cent.
+        expect(calc.calculateActualMargin(res.price, 100, 21).marginPct).toBeCloseTo(pct, 2);
       });
 
-      test('60% ex-VAT gives 302.99 incl. VAT', () => {
-        expect(calc.calculateLockedPrice(100, 60, 21, 0.99).price).toBe(302.99);
+      test('60% ex-VAT gives 302.50 incl. VAT', () => {
+        expect(calc.calculateLockedPrice(100, 60, 21).price).toBe(302.50);
       });
     });
 
-    test('an old incl-VAT pin migrated by x1.21 keeps the same price', () => {
-      // Old basis, 50% pin: price = cost / (1/1.21 - 0.50) = 306.33 -> 306.99.
-      const oldPrice = calc.roundToPriceEnding(100 / ((1 / 1.21) - 0.5), 0.99);
-      const migrated = calc.calculateLockedPrice(100, 50 * 1.21, 21, 0.99);
-      expect(migrated.price).toBe(oldPrice);
-      expect(migrated.price).toBe(306.99);
+    test('an old incl-VAT pin migrated by x1.21 keeps the same ex-VAT price', () => {
+      // Old basis, 50% pin: price = cost / (1/1.21 - 0.50) = 306.33.
+      const oldRaw = 100 / ((1 / 1.21) - 0.5);
+      const migrated = calc.calculateLockedPrice(100, 50 * 1.21, 21);
+      expect(migrated.price).toBeCloseTo(oldRaw, 2);
+      expect(migrated.price).toBe(306.33);
     });
 
     test('zero or missing production cost yields no price', () => {
-      expect(calc.calculateLockedPrice(0, 50, 21, 0.99).reason).toBe('no-cost');
-      expect(calc.calculateLockedPrice(null, 50, 21, 0.99).reason).toBe('no-cost');
-      expect(calc.calculateLockedPrice(0, 50, 21, 0.99).price).toBeNull();
+      expect(calc.calculateLockedPrice(0, 50, 21).reason).toBe('no-cost');
+      expect(calc.calculateLockedPrice(null, 50, 21).reason).toBe('no-cost');
+      expect(calc.calculateLockedPrice(0, 50, 21).price).toBeNull();
     });
 
     test('a non-numeric target is unreachable rather than NaN', () => {
-      const res = calc.calculateLockedPrice(100, null, 21, 0.99);
+      const res = calc.calculateLockedPrice(100, null, 21);
       expect(res.price).toBeNull();
       expect(res.reason).toBe('unreachable');
     });
 
     test('a negative target margin prices below cost', () => {
-      const { rawPrice } = calc.calculateLockedPrice(100, -10, 21, 0.99);
+      const { rawPrice } = calc.calculateLockedPrice(100, -10, 21);
       expect(rawPrice).toBeGreaterThan(0);
       expect(calc.calculateActualMargin(rawPrice, 100, 21).marginPct).toBeCloseTo(-10, 6);
     });
@@ -1943,12 +1955,11 @@ describe('margin lock', () => {
           calc.calculateActualMargin(r.marginLock.rawPrice, r.pricing.productionCost, 21).marginPct
         ).toBeCloseTo(60, 6);
       }
-      // The .99 rounding only ever overshoots, never undershoots. These plates
-      // are cheap, so a sub-euro rounding step is still a few margin points.
-      expect(cheap.actualMargin.marginPct).toBeGreaterThanOrEqual(60);
-      expect(pricey.actualMargin.marginPct).toBeGreaterThanOrEqual(60);
-      expect(cheap.actualMargin.marginPct).toBeLessThan(65);
-      expect(pricey.actualMargin.marginPct).toBeLessThan(65);
+      // And the charged price is that exact price rounded to the cent and
+      // nothing else — no ending, no drift beyond half a cent.
+      for (const r of [cheap, pricey]) {
+        expect(Math.abs(r.effectiveSalesPrice - r.marginLock.rawPrice)).toBeLessThanOrEqual(0.005);
+      }
     });
 
     test('price follows a cost decrease too', () => {
@@ -1961,7 +1972,7 @@ describe('margin lock', () => {
         settings: defaultSettings, itemsPerSet: 1, marginLocked: true, targetMarginPct: 45,
       });
       expect(after.effectiveSalesPrice).toBeLessThan(before.effectiveSalesPrice);
-      expect(after.actualMargin.marginPct).toBeGreaterThanOrEqual(45);
+      expect(Math.abs(after.effectiveSalesPrice - after.marginLock.rawPrice)).toBeLessThanOrEqual(0.005);
     });
 
     test('locked with no plates yields no price and a no-cost reason', () => {
@@ -1985,12 +1996,21 @@ describe('margin lock', () => {
       expect(r.actualMargin).toBeNull();
     });
 
-    test('locked price respects the configured price ending', () => {
+    test('the locked price ignores the configured price ending entirely', () => {
+      // The ending still shapes the SUGGESTED price; the actual price is exact.
       const r = calc.calculateProject({
         plates: [lockPlate], settings: { ...defaultSettings, price_rounding: 0.95 },
         itemsPerSet: 1, marginLocked: true, targetMarginPct: 50,
       });
-      expect(r.effectiveSalesPrice % 1).toBeCloseTo(0.95, 6);
+      const plain = calc.calculateProject({
+        plates: [lockPlate], settings: { ...defaultSettings, price_rounding: 0.99 },
+        itemsPerSet: 1, marginLocked: true, targetMarginPct: 50,
+      });
+      expect(r.effectiveSalesPrice).toBe(plain.effectiveSalesPrice);
+      expect(Math.abs(r.effectiveSalesPrice - r.marginLock.rawPrice)).toBeLessThanOrEqual(0.005);
+      // The suggested price does still follow the ending.
+      expect(r.pricing.suggestedPrice % 1).toBeCloseTo(0.95, 6);
+      expect(plain.pricing.suggestedPrice % 1).toBeCloseTo(0.99, 6);
     });
 
     test('the indicator reflects the locked margin band', () => {
@@ -2009,19 +2029,49 @@ describe('margin lock', () => {
       expect(red.actualIndicator).toBe('red');
     });
 
-    test('on a very cheap item the price ending overshoots the target margin', () => {
-      // Documented consequence of rounding, not a bug: production cost here is
-      // ~EUR 0.31, and the cheapest price the 0.99 ending allows is EUR 0.99,
-      // so the effective margin lands far above the 1% target.
+    test('a very cheap item still gets its exact target margin', () => {
+      // Regression for the .99 ending: production cost here is ~EUR 0.31, and
+      // the ending used to force the price to EUR 0.99 — an effective ~62%
+      // against a 1% pin. Without the ending the price is EUR 0.31-ish and the
+      // pin holds.
       const r = calc.calculateProject({
         plates: [lockPlate], settings: defaultSettings, itemsPerSet: 1,
         marginLocked: true, targetMarginPct: 1,
       });
       expect(r.pricing.productionCost).toBeLessThan(1);
-      expect(r.effectiveSalesPrice).toBeCloseTo(0.99, 6);
-      expect(r.actualMargin.marginPct).toBeGreaterThan(40);
-      // Never below target — rounding only ever rounds the price up.
-      expect(r.actualMargin.marginPct).toBeGreaterThanOrEqual(1);
+      expect(r.effectiveSalesPrice).toBeLessThan(0.99);
+      // The old behaviour priced this at 0.99 for an effective ~62%. Now the
+      // only adjustment is the half cent that a cent-priced invoice forces —
+      // on a ~30-cent price that is still ~1pp of margin, which is as exact as
+      // money gets. It is the smallest achievable error, not a rounding policy.
+      expect(Math.abs(r.effectiveSalesPrice - r.marginLock.rawPrice)).toBeLessThanOrEqual(0.005);
+      expect(Math.abs(r.actualMargin.marginPct - 1)).toBeLessThan(2);
+    });
+
+    test('the pinned margin is held across the whole price range', () => {
+      const bigPlate = { ...lockPlate, plastic_grams: 3000, print_time_minutes: 6000 };
+      for (const target of [1, 5, 20, 40, 60, 80, 90]) {
+        for (const plate of [lockPlate, bigPlate]) {
+          const r = calc.calculateProject({
+            plates: [plate], settings: defaultSettings, itemsPerSet: 1,
+            marginLocked: true, targetMarginPct: target,
+          });
+          // Half a cent of rounding, nothing more — no nice-pricing drift.
+          const driftEx = Math.abs(r.effectiveSalesPrice - r.marginLock.rawPrice) / 1.21;
+          expect(driftEx).toBeLessThanOrEqual(0.005);
+        }
+      }
+    });
+
+    test('the profit amount stays derived from the charged price', () => {
+      const r = calc.calculateProject({
+        plates: [{ ...lockPlate, plastic_grams: 3000, print_time_minutes: 6000 }],
+        settings: defaultSettings, itemsPerSet: 1,
+        marginLocked: true, targetMarginPct: 60,
+      });
+      expect(r.actualMargin.profitAmount).toBeCloseTo(
+        r.actualMargin.actualExclVat - r.pricing.productionCost, 6
+      );
     });
   });
 });
