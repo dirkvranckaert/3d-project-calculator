@@ -1693,7 +1693,13 @@ function renderPricingSection(p) {
   const denominator = 1 - (greenPct / 100);
   const minPriceForGreen = denominator > 0 ? (pr.productionCost / denominator) * vatMult : 0;
 
-  // Actual price section
+  // Actual price section.
+  //
+  // The margin badge in THIS block is the one and only entry point for the
+  // margin lock, and it is clickable in every state — no price yet, a price
+  // with no lock, and locked. The suggested-price margin is display-only: it is
+  // itself the output of a margin calculation, so pinning a target onto it
+  // would mean a second target for the same project (Dirk 2026-07-22).
   const lock = c.marginLock;
   const isLocked = !!lock?.locked;
   const effPrice = c.effectiveSalesPrice;
@@ -1707,19 +1713,34 @@ function renderPricingSection(p) {
       <h4>Actual Sales Price (incl. VAT) ${lockBadge(lock)}</h4>
       <div class="big-price" style="opacity:.4">&mdash;</div>
       <div class="sub" style="color:var(--danger)">${why}</div>
+      <div class="sub" style="margin-top:4px">Margin excl. VAT: <span class="margin-badge margin-badge--empty margin-badge--editable"
+        title="Click to change the locked margin" onclick="promptTargetMargin(${p.id}, ${lock.targetPct})">Change target margin</span></div>
     </div>`;
   } else if (effPrice > 0 && c.actualMargin) {
     const am = c.actualMargin;
+    // Always the real computed margin, never the pinned target. The derived
+    // price is exact to the cent, so above roughly a euro this equals the
+    // target and agrees with the lock badge. On a sub-euro price the half cent
+    // an invoice forces is still a few tenths of a point, so a 1.00% lock can
+    // read 1.29% here — that gap is real and gets shown, not papered over.
+    const marginTitle = isLocked
+      ? `Margin on the price excl. VAT — click to change the locked margin`
+      : `Margin on the price excl. VAT — click to lock a target margin`;
+    const marginArg = isLocked ? lock.targetPct : am.marginPct.toFixed(2);
     actualBlock = `<div class="pricing-block ${isLocked ? 'pricing-block--locked' : ''}">
       <h4>Actual Sales Price (incl. VAT) ${isLocked ? lockBadge(lock) : ''}</h4>
       <div class="big-price">${fmt(effPrice)}</div>
       <div class="sub">${fmt(am.actualExclVat)} excl. VAT</div>
-      <div class="sub">Profit excl. VAT: ${fmt(am.profitAmount)} <span class="margin-badge ${c.actualIndicator} ${isLocked ? 'margin-badge--editable' : ''}"
-        ${isLocked ? `title="Margin on the price excl. VAT — click to change the locked margin" onclick="promptTargetMargin(${p.id}, ${lock.targetPct})"` : `title="Margin on the price excl. VAT — click to lock a target margin" onclick="promptTargetMargin(${p.id}, ${am.marginPct.toFixed(2)})"`}>${fmtPct(am.marginPct)}</span></div>
+      <div class="sub">Profit excl. VAT: ${fmt(am.profitAmount)} <span class="margin-badge ${c.actualIndicator} margin-badge--editable"
+        title="${marginTitle}" onclick="promptTargetMargin(${p.id}, ${marginArg})">${fmtPct(am.marginPct)}</span></div>
       ${isLocked ? `<div class="sub" style="opacity:.7">Price is derived from the locked margin and follows cost changes.</div>` : ''}
       ${isSet ? `<div class="sub" style="opacity:.6">${pi(am.actualExclVat)} excl. &middot; ${pi(effPrice)} incl. VAT</div>` : ''}
     </div>`;
   } else {
+    // No price and no lock. The margin row still renders so the lock stays
+    // reachable here — this block is the only entry point, so without it a
+    // project without a sales price could not be locked at all. Seeded with the
+    // suggested margin, which is the number the price would otherwise carry.
     actualBlock = `<div class="pricing-block">
       <h4>Actual Sales Price (incl. VAT)</h4>
       <div class="actual-price-wrap">
@@ -1727,6 +1748,9 @@ function renderPricingSection(p) {
           placeholder="Enter price..." onchange="updateActualPrice(${p.id}, this.value)" step="0.01" min="0">
       </div>
       <div class="sub" style="margin-top:4px;opacity:.5">Set your selling price to see actual margin</div>
+      <div class="sub" style="margin-top:4px">Margin excl. VAT: <span class="margin-badge margin-badge--empty margin-badge--editable"
+        title="No sales price yet — click to lock a target margin and let the price follow it"
+        onclick="promptTargetMargin(${p.id}, ${pr.suggestedMarginPct.toFixed(2)})">Lock margin</span></div>
     </div>`;
   }
 
@@ -1767,8 +1791,8 @@ function renderPricingSection(p) {
       <h4>Suggested Price</h4>
       <div class="big-price">${fmt(pr.suggestedPrice)}</div>
       <div class="sub">${fmt(pr.suggestedExclVat)} excl. VAT</div>
-      <div class="sub">Profit excl. VAT: ${fmt(pr.suggestedProfitAmount)} <span class="margin-badge ${c.suggestedIndicator} margin-badge--editable"
-        title="Margin on the price excl. VAT — click to lock a target margin" onclick="promptTargetMargin(${p.id}, ${pr.suggestedMarginPct.toFixed(2)})">${fmtPct(pr.suggestedMarginPct)}</span></div>
+      <div class="sub">Profit excl. VAT: ${fmt(pr.suggestedProfitAmount)} <span class="margin-badge ${c.suggestedIndicator}"
+        title="Margin on the price excl. VAT">${fmtPct(pr.suggestedMarginPct)}</span></div>
       ${isSet ? `<div class="sub" style="opacity:.6">${pi(pr.suggestedExclVat)} excl. &middot; ${pi(pr.suggestedPrice)} incl. VAT</div>` : ''}
     </div>
     ${actualBlock}

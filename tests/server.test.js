@@ -772,7 +772,15 @@ describe('Margin lock routes', () => {
     expect(res.body.target_margin_pct).toBe(60);
     expect(res.body.calculation.marginLock.locked).toBe(true);
     expect(res.body.calculation.effectiveSalesPrice).toBeGreaterThan(0);
-    expect(res.body.calculation.actualMargin.marginPct).toBeGreaterThanOrEqual(60);
+    // Exact to the cent — the price ending is not applied to an actual price.
+    expect(Math.abs(res.body.calculation.effectiveSalesPrice - res.body.calculation.marginLock.rawPrice))
+      .toBeLessThanOrEqual(0.005);
+    // ...and it IS the exact price rounded to the cent, which a price ending
+    // would break. (A `% 0.99` test cannot detect an ending: 24.99 % 0.99 is
+    // 0.24, so it passes on the very value it claims to exclude.)
+    const cents = (v) => Math.round(v * 100) / 100;
+    expect(res.body.calculation.effectiveSalesPrice)
+      .toBe(cents(res.body.calculation.marginLock.rawPrice));
   });
 
   test('the lock survives a reload', async () => {
@@ -795,8 +803,8 @@ describe('Margin lock routes', () => {
     const after = await getProject(pid);
     expect(after.calculation.pricing.productionCost).toBeGreaterThan(before.calculation.pricing.productionCost);
     expect(after.calculation.effectiveSalesPrice).toBeGreaterThan(priceBefore);
-    expect(after.calculation.actualMargin.marginPct).toBeGreaterThanOrEqual(60);
-    expect(after.calculation.actualMargin.marginPct).toBeLessThan(61);
+    expect(Math.abs(after.calculation.effectiveSalesPrice - after.calculation.marginLock.rawPrice))
+      .toBeLessThanOrEqual(0.005);
 
     await request(app).patch(`/api/projects/${pid}/plates/${plateId}`).set('Cookie', cookie)
       .send({ post_processing_minutes: 0 });
@@ -808,7 +816,10 @@ describe('Margin lock routes', () => {
     const p = await getProject(pid);
     expect(p.actual_sales_price).toBe(9999);
     expect(p.calculation.effectiveSalesPrice).not.toBe(9999);
-    expect(p.calculation.actualMargin.marginPct).toBeGreaterThanOrEqual(60);
+    // Cent-exact against the pin; this fixture is a sub-euro project, so the
+    // half cent an invoice forces is still a fraction of a point of margin.
+    expect(Math.abs(p.calculation.effectiveSalesPrice - p.calculation.marginLock.rawPrice))
+      .toBeLessThanOrEqual(0.005);
   });
 
   test('an ordinary PUT does not clear the lock', async () => {
@@ -915,6 +926,28 @@ describe('Margin lock routes', () => {
     const b = await request(app).patch(`/api/projects/${pid}/clear-price`).send({});
     expect(a.status).toBe(401);
     expect(b.status).toBe(401);
+  });
+});
+
+describe('a manually typed actual sales price is stored as typed', () => {
+  // The other half of Dirk's rule (2026-07-22): the actual sales price is never
+  // nice-rounded — not when derived from a lock, and not when typed by hand.
+  let pid;
+
+  beforeAll(async () => {
+    const created = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'Manual Price', customer_name: null, items_per_set: 1 });
+    pid = created.body.id;
+    await request(app).post(`/api/projects/${pid}/plates`).set('Cookie', cookie)
+      .send({ name: 'Plate 1', print_time_minutes: 600, plastic_grams: 800, items_per_plate: 1 });
+  });
+
+  test.each([123.45, 99.01, 250.00, 7.5, 1677.43])('%s round-trips to the cent', async (price) => {
+    await request(app).put(`/api/projects/${pid}`).set('Cookie', cookie)
+      .send({ name: 'Manual Price', customer_name: null, items_per_set: 1, actual_sales_price: price });
+    const p = (await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie)).body;
+    expect(p.actual_sales_price).toBe(price);
+    expect(p.calculation.effectiveSalesPrice).toBe(price);
   });
 });
 

@@ -91,9 +91,12 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
     expect(readProject(id).target_margin_pct).toBeCloseTo(60.5, 6);
 
     // The whole point: same production cost, same price before and after.
-    const oldPrice = calc.roundToPriceEnding(100 / ((1 / 1.21) - 0.5), 0.99);
-    const newPrice = calc.calculateLockedPrice(100, 60.5, 21, 0.99).price;
-    expect(newPrice).toBe(oldPrice);
+    // Compared before the price ending, which no longer applies to a locked
+    // actual sales price at all (Dirk 2026-07-22) — the migration is about the
+    // basis conversion, not about how the result is rounded.
+    const oldPrice = 100 / ((1 / 1.21) - 0.5);
+    const newPrice = calc.calculateLockedPrice(100, 60.5, 21).price;
+    expect(newPrice).toBeCloseTo(oldPrice, 2);
   });
 
   test('uses the vat_rate setting rather than a hardcoded 21', () => {
@@ -131,7 +134,7 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
       const migrated = readProject(id).target_margin_pct;
       expect(migrated).toBeLessThan(95);
 
-      const lock = calc.calculateLockedPrice(100, migrated, 21, 0.99);
+      const lock = calc.calculateLockedPrice(100, migrated, 21);
       expect(lock.reason).toBeNull();
       expect(lock.price).toBeGreaterThan(0);
     }
@@ -142,7 +145,7 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
     // that range may migrate into an unpriceable lock.
     for (let oldPin = 1; oldPin < 82.64; oldPin += 0.5) {
       const migrated = Math.min(oldPin * 1.21, 95 - 0.01);
-      const lock = calc.calculateLockedPrice(100, migrated, 21, 0.99);
+      const lock = calc.calculateLockedPrice(100, migrated, 21);
       expect(lock.reason).toBeNull();
       expect(lock.price).toBeGreaterThan(0);
     }

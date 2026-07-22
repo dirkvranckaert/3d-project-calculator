@@ -238,18 +238,38 @@ function maxReachableMarginPct() {
 }
 
 /**
+ * Round a money value to whole cents, half up.
+ *
+ * The `+ Number.EPSILON` nudge keeps values that are a hair below a half-cent
+ * only because of binary floating point (1.005 is stored as 1.00499…) from
+ * rounding down.
+ */
+function roundToCents(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
+/**
  * Invert the margin formula: given a production cost and a target margin,
  * return the incl-VAT sales price that produces that margin.
  *
  *   margin = (price_ex - cost) / price_ex   =>   price_ex = cost / (1 - margin)
  *   price_incl = price_ex * (1 + vat)
  *
+ * The result is rounded to whole cents and NOTHING else. Nice-pricing (the
+ * `.99` ending from `price_rounding`) is a sales-presentation device for the
+ * *suggested* price only — the actual sales price is exact, whether it is typed
+ * by hand or derived from a locked margin (Dirk 2026-07-22). Applying the price
+ * ending here is what used to push the effective margin above the pinned target:
+ * harmless on a big number (60% → 60.02%), badly wrong on a small one (a €0.31
+ * cost pinned at 1% priced at €0.99, an effective 62%). Rounding to the cent
+ * holds the target to within half a cent at any price.
+ *
  * Returns `{ price, rawPrice, reason, maxMarginPct }`. `price` is null when no
  * price can be derived, with `reason` explaining why:
  *   'unreachable' — target margin >= the hard cap (95%)
  *   'no-cost'     — production cost is 0 or missing, so there is nothing to mark up
  */
-function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21, priceRounding = 0.99) {
+function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21) {
   // `Number(null)` and `Number('')` are 0, which would silently price a lock
   // with no target at a 0% margin. Treat absent as absent.
   const target = (targetMarginPct === null || targetMarginPct === undefined || targetMarginPct === '')
@@ -263,7 +283,7 @@ function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21, pri
   const priceExVat = Number(productionCost) / (1 - target / 100);
   const rawPrice = priceExVat * (1 + vatRate / 100);
   return {
-    price: roundToPriceEnding(rawPrice, priceRounding),
+    price: roundToCents(rawPrice),
     rawPrice,
     reason: null,
     maxMarginPct,
@@ -670,8 +690,10 @@ function calculateProject(opts) {
   let marginLock = null;
   let effectiveSalesPrice = actualSalesPrice;
   if (marginLocked) {
+    // No `price_rounding` here on purpose — the price ending is for the
+    // suggested price only; a locked actual price is exact to the cent.
     const lock = calculateLockedPrice(
-      pricing.productionCost, targetMarginPct, s.vat_rate, s.price_rounding
+      pricing.productionCost, targetMarginPct, s.vat_rate
     );
     marginLock = { locked: true, targetPct: Number(targetMarginPct), ...lock };
     // A lock with no derivable price falls back to no actual price at all
