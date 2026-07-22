@@ -254,6 +254,19 @@ function backfillSliced(db, files) {
  * Strategy: exact match → base type (first word) → PLA fallback.
  * Extracted at module scope so the verify-batch route can reuse it.
  */
+/**
+ * The settings default used to SEED a new project's target margin.
+ *
+ * `Number(x) || 40` would turn a deliberately stored 0 into 40, disagreeing with
+ * calc.js, which treats 0 as a real target and only absence as absent. Absent
+ * here means "no row / unparseable", not "zero".
+ */
+function defaultTargetMargin(db) {
+  const raw = getSetting(db, 'default_target_margin_pct');
+  const n = Number(raw);
+  return (raw === null || raw === undefined || raw === '' || !Number.isFinite(n)) ? 40 : n;
+}
+
 function resolveKwh(db, printerId, materialType) {
   if (!printerId) return 0;
   const mt = materialType || 'PLA';
@@ -591,7 +604,7 @@ app.post('/api/projects', (req, res) => {
   // Seed the project's own target margin from the settings default. Stored, not
   // referenced: changing the default later must never move an existing project
   // (Dirk 2026-07-22). `/duplicate` already copies the source project's target.
-  const seededTarget = Number(getSetting(db, 'default_target_margin_pct')) || 40;
+  const seededTarget = defaultTargetMargin(db);
 
   const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, target_margin_pct) VALUES (?,?,?,?,?,?,?,?)')
     .run(name, customer_name, items_per_set, tags, notes, is_custom ? 1 : 0, design_notes, seededTarget);
@@ -616,9 +629,16 @@ app.put('/api/projects/:id', (req, res) => {
   const existing = db.prepare('SELECT is_custom, margin_locked, target_margin_pct FROM projects WHERE id = ?').get(req.params.id);
   const isCustomVal = is_custom !== undefined ? (is_custom ? 1 : 0) : (existing?.is_custom ?? 0);
   const marginLockedVal = margin_locked !== undefined ? (margin_locked ? 1 : 0) : (existing?.margin_locked ?? 0);
-  const targetMarginVal = target_margin_pct !== undefined
-    ? (target_margin_pct === null ? null : Number(target_margin_pct))
-    : (existing?.target_margin_pct ?? null);
+  // Every project always carries a target. An explicit null is not a way to
+  // clear it (that would resume tracking the global default); it falls back to
+  // what is already stored, and only a project with nothing stored at all takes
+  // the seed. Keeps the "no row may be NULL" invariant the backfill established.
+  const targetMarginRaw = target_margin_pct !== undefined && target_margin_pct !== null
+    ? Number(target_margin_pct)
+    : NaN;
+  const targetMarginVal = Number.isFinite(targetMarginRaw)
+    ? targetMarginRaw
+    : (existing?.target_margin_pct ?? defaultTargetMargin(db));
   db.prepare(`UPDATE projects SET name=?, customer_name=?, items_per_set=?, actual_sales_price=?, tags=?, notes=?,
     is_custom=?, design_notes=?, margin_locked=?, target_margin_pct=?, updated_at=datetime('now') WHERE id=?`)
     .run(name, customer_name, items_per_set, actual_sales_price ?? null, tags ?? '', notes ?? null,
@@ -669,15 +689,24 @@ app.patch('/api/projects/:id/margin-lock', (req, res) => {
 });
 
 /**
- * Full reset of the price state: clears the manual actual sales price AND the
- * margin lock (flag + stored percentage), back to the default derived state.
+/**
+ * Full reset of the PRICE state: clears the manual actual sales price and
+ * releases the margin lock.
+ *
+ * It deliberately does NOT touch `target_margin_pct`. That column used to be the
+ * lock's pin, so clearing it here was right when this route was written (#726).
+ * Since #732 it is a permanent per-project setting that also drives the
+ * suggested price and the colour bands, and nulling it would silently discard
+ * Dirk's pricing decision and leave the project tracking the global default
+ * live — which is exactly what he ruled out. Clearing a price is not a decision
+ * to abandon the project's target.
  */
 app.patch('/api/projects/:id/clear-price', (req, res) => {
   const db = getDb();
   const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Not found' });
 
-  db.prepare(`UPDATE projects SET actual_sales_price=NULL, margin_locked=0, target_margin_pct=NULL,
+  db.prepare(`UPDATE projects SET actual_sales_price=NULL, margin_locked=0,
     updated_at=datetime('now') WHERE id=?`).run(req.params.id);
 
   const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
@@ -695,7 +724,8 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
     (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, margin_locked, target_margin_pct)
     VALUES (?,?,?,?,?,?,?,?,?)`)
     .run(`${src.name} (copy)`, src.customer_name, src.items_per_set, src.tags || '', src.notes, src.is_custom || 0,
-      src.design_notes || null, src.margin_locked || 0, src.target_margin_pct ?? null);
+      src.design_notes || null, src.margin_locked || 0,
+      src.target_margin_pct ?? defaultTargetMargin(db));
   const newId = r.lastInsertRowid;
 
   // Copy plates (including test-print plates — orphan plates copied as orphans with test_print_id=null)
@@ -1686,7 +1716,7 @@ app.post('/api/projects/:projectId/verify-batch', (req, res) => {
     // global default — the default only seeds new projects.
     targetMarginPct: project.target_margin_pct != null
       ? Number(project.target_margin_pct)
-      : (Number(getSetting(db, 'default_target_margin_pct')) || 40),
+      : defaultTargetMargin(db),
     settings,
   });
 

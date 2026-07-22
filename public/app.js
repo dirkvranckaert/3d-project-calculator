@@ -1689,7 +1689,7 @@ function renderPricingSection(p) {
 
   // This is a PRICE HINT, not a colour band — it must track the project's own
   // target or it contradicts the margin badge rendered beside it.
-  const greenPct = c.targetMarginPct ?? settings.default_target_margin_pct ?? 40;
+  const greenPct = c.targetMarginPct;
   const vatMult = 1 + (settings.vat_rate || 21) / 100;
   // Margin is measured excl. VAT: price_ex = cost / (1 - margin), then + VAT.
   const denominator = 1 - (greenPct / 100);
@@ -2244,8 +2244,11 @@ function openProjectModal(id = null) {
   // move existing projects).
   const tgt = document.getElementById('proj-target-margin');
   if (tgt) {
+    // An existing project shows its OWN stored target and nothing else — every
+    // project has one since #732, so there is nothing to substitute. Only a NEW
+    // project takes the settings default, which is what "seed" means.
     tgt.value = p
-      ? (p.target_margin_pct ?? settings.default_target_margin_pct ?? 40)
+      ? (p.target_margin_pct ?? '')
       : (settings.default_target_margin_pct ?? 40);
   }
   const guide = document.getElementById('proj-target-margin-guidance');
@@ -2867,10 +2870,10 @@ function renderMarginsSettings() {
     <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
     <div class="settings-row"><label>Default Target Margin (% excl. VAT)<br>
       <span style="font-size:12px;color:var(--text-muted)">Seeds new projects only — existing projects keep their own target</span></label>
-      <input type="number" value="${settings.default_target_margin_pct || 40}" step="1" onchange="saveSetting('default_target_margin_pct', this.value)"></div>
+      <input type="number" value="${settings.default_target_margin_pct ?? 40}" step="1" onchange="saveSetting('default_target_margin_pct', this.value)"></div>
     <div class="settings-row"><label>Lowest Target Margin (% excl. VAT)<br>
       <span style="font-size:12px;color:var(--text-muted)">Global floor — any margin below this shows red</span></label>
-      <input type="number" value="${settings.lowest_target_margin_pct || 25}" step="1" onchange="saveSetting('lowest_target_margin_pct', this.value)"></div>
+      <input type="number" value="${settings.lowest_target_margin_pct ?? 25}" step="1" onchange="saveSetting('lowest_target_margin_pct', this.value)"></div>
     ${renderTargetMarginGuidance()}`;
 }
 function renderThemeSettings() {

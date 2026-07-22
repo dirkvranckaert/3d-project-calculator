@@ -407,6 +407,21 @@ function calculateActualMargin(actualSalesPrice, productionCost, vatRate) {
  * both ex-VAT), so green means "at least what an industrial operator earns"
  * rather than a number carried over from the old incl-VAT basis.
  */
+/**
+ * Read a number that may legitimately be 0.
+ *
+ * `Number(x) || fallback` silently swallows a real 0 (and `Number(null)` is 0,
+ * which is worse: an ABSENT value reads as a deliberate zero). Margin percentages
+ * are exactly the case where both directions matter — a 0% target is a real
+ * decision, and an omitted one must not price at cost. Absent means null,
+ * undefined, empty string or unparseable; nothing else.
+ */
+function numOr(value, fallback) {
+  if (value === null || value === undefined || value === '') return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function marginIndicator(marginPct, targetPct = 40, lowestPct = 25) {
   // RED IS CHECKED FIRST, AND THAT ORDERING IS LOAD-BEARING.
   //
@@ -652,17 +667,20 @@ function calculateProject(opts) {
     electricity_profit_pct: Number(settings.electricity_profit_pct) || 0,
     printer_cost_profit_pct: Number(settings.printer_cost_profit_pct) || 0,
     price_rounding: Number(settings.price_rounding) || 0.99,
-    default_target_margin_pct: Number(settings.default_target_margin_pct) || 40,
-    lowest_target_margin_pct: Number(settings.lowest_target_margin_pct) || 25,
+    default_target_margin_pct: numOr(settings.default_target_margin_pct, 40),
+    lowest_target_margin_pct: numOr(settings.lowest_target_margin_pct, 25),
   };
 
   // The project's own target. A stored value always wins — the global default is
   // a SEED for new projects, never a live threshold (Dirk 2026-07-22).
-  // Same absent-vs-zero guard: '' and null must not read as a 0% target.
-  const rawTarget = (targetMarginPct === null || targetMarginPct === undefined || targetMarginPct === '')
-    ? NaN
-    : Number(targetMarginPct);
-  const projectTarget = Number.isFinite(rawTarget) ? rawTarget : s.default_target_margin_pct;
+  // The project's own target. A stored value ALWAYS wins, including a stored 0.
+  //
+  // The default is reached only when a project carries no target at all. Since
+  // the #732 backfill that is unreachable through the app: every project is
+  // seeded at creation, duplicates copy the source, PUT will not clear it and
+  // clear-price no longer touches it. It is kept as a last resort for a row
+  // written outside the app, not as a live link to the global setting.
+  const projectTarget = numOr(targetMarginPct, s.default_target_margin_pct);
 
   const {
     designHours = [],
@@ -929,8 +947,8 @@ function calculateVerification(opts) {
       marginPct,
       indicator: marginIndicator(
         marginPct,
-        Number.isFinite(Number(targetMarginPct)) ? Number(targetMarginPct) : 40,
-        Number(settings.lowest_target_margin_pct) || 25
+        numOr(targetMarginPct, 40),
+        numOr(settings.lowest_target_margin_pct, 25)
       ),
     };
   }
@@ -964,6 +982,7 @@ module.exports = {
   calculateFinalPricing,
   calculateActualMargin,
   roundToPriceEnding,
+  numOr,
   maxReachableMarginPct,
   calculateLockedPrice,
   marginIndicator,

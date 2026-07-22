@@ -16,8 +16,11 @@ const defaultSettings = {
   electricity_profit_pct: 0,
   printer_cost_profit_pct: 50,
   price_rounding: 0.99,
-  margin_green_pct: 30,
-  margin_orange_pct: 5,
+  // Renamed in #732. These suites were silently running against the 40/25
+  // defaults once nothing read the old names — carry the intended values under
+  // the keys the engine actually reads.
+  default_target_margin_pct: 30,
+  lowest_target_margin_pct: 5,
 };
 
 // Printers from spreadsheet
@@ -2197,5 +2200,56 @@ describe('marginIndicator — red-first ordering', () => {
     for (let m = -50; m <= 100; m += 0.5) {
       expect(['red', 'orange', 'green']).toContain(calc.marginIndicator(m, 20, 25));
     }
+  });
+});
+
+describe('numOr — absent vs zero', () => {
+  test('absent takes the fallback', () => {
+    for (const absent of [null, undefined, '', 'abc', NaN]) {
+      expect(calc.numOr(absent, 40)).toBe(40);
+    }
+  });
+
+  test('a real 0 is honoured, not swallowed', () => {
+    // `Number(x) || 40` returns 40 here, which is the bug this guard exists for.
+    expect(calc.numOr(0, 40)).toBe(0);
+    expect(calc.numOr('0', 40)).toBe(0);
+  });
+
+  test('negatives and decimals pass through', () => {
+    expect(calc.numOr(-10, 40)).toBe(-10);
+    expect(calc.numOr('62.5', 40)).toBe(62.5);
+  });
+});
+
+describe('calculateVerification — batch margin colour', () => {
+  const base = {
+    plates: [], preProcessingMinutes: 0, postProcessingMinutes: 0, hourlyRate: 40,
+    supplies: [{ price_excl_vat: 100, quantity: 1 }], itemsPerSet: 1,
+    settings: { vat_rate: 21, lowest_target_margin_pct: 25 },
+  };
+  // EUR 500 incl VAT on a EUR 100 batch cost -> ~75.8% margin.
+  const run = (targetMarginPct) => calc.calculateVerification({
+    ...base, actualSellingTotalInclVat: 500, targetMarginPct,
+  });
+
+  test('coloured against the project target, not a global', () => {
+    expect(run(60).actualMarginOnBatch.indicator).toBe('green');
+    expect(run(90).actualMarginOnBatch.indicator).toBe('orange');
+  });
+
+  test('an omitted target falls back to 40, and that fallback is live', () => {
+    // Guards the dead-code case: with `Number(null)` the fallback was
+    // unreachable and an omitted target silently coloured against 0.
+    expect(run(null).actualMarginOnBatch.indicator).toBe('green');
+    expect(run(undefined).actualMarginOnBatch.indicator).toBe('green');
+    // Mutating the 40 fallback to 999 must break this.
+    expect(calc.calculateVerification({
+      ...base, actualSellingTotalInclVat: 130, targetMarginPct: null,
+    }).actualMarginOnBatch.indicator).toBe('red');
+  });
+
+  test('a stored 0 target is a real target, not an absence', () => {
+    expect(run(0).actualMarginOnBatch.indicator).toBe('green');
   });
 });

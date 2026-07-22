@@ -254,6 +254,29 @@ describe('per-project target margin migration (#732)', () => {
     expect(readProject(pinned).target_margin_pct).toBeCloseTo(60.5, 6);
   });
 
+  test('the marker guard is what stops a re-run, not luck', () => {
+    // The test below is idempotent for the wrong reason: once no NULL rows
+    // remain, the backfill is a no-op whether or not the guard exists. This one
+    // re-creates the precondition the backfill acts on — a NULL target — and
+    // bumps the default. With the guard, the migration is skipped and the NULL
+    // stands. Without it, the row is re-stamped with the new default.
+    rewindToOldBasis(21);
+    const id = seedProject('No pin', null);
+
+    withFreshDbModule(() => {});
+    expect(readProject(id).target_margin_pct).toBe(40);
+
+    const raw = new Database(dbPath);
+    raw.prepare('UPDATE projects SET target_margin_pct = NULL WHERE id = ?').run(id);
+    raw.prepare("UPDATE settings SET value = '77' WHERE key = 'default_target_margin_pct'").run();
+    raw.close();
+
+    withFreshDbModule(() => {});
+
+    // Verified to fail (receives 77) when `if (done) return;` is removed.
+    expect(readProject(id).target_margin_pct).toBeNull();
+  });
+
   test('runs exactly once — repeated boots do not re-stamp targets', () => {
     rewindToOldBasis(21);
     const id = seedProject('No pin', null);

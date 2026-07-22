@@ -34,8 +34,8 @@ const sandbox = {
     currency_symbol: '€',
     vat_rate: 21,
     price_rounding: 0.99,
-    margin_green_pct: 40,
-    margin_orange_pct: 25,
+    default_target_margin_pct: 40,
+    lowest_target_margin_pct: 25,
   },
 };
 vm.createContext(sandbox);
