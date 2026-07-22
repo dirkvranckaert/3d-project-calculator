@@ -1718,9 +1718,11 @@ function renderPricingSection(p) {
     </div>`;
   } else if (effPrice > 0 && c.actualMargin) {
     const am = c.actualMargin;
-    // Always the real computed margin. While locked it equals the pinned target
-    // by construction — the derived price is exact to the cent, so there is no
-    // discrepancy with the lock badge to paper over.
+    // Always the real computed margin, never the pinned target. The derived
+    // price is exact to the cent, so above roughly a euro this equals the
+    // target and agrees with the lock badge. On a sub-euro price the half cent
+    // an invoice forces is still a few tenths of a point, so a 1.00% lock can
+    // read 1.29% here — that gap is real and gets shown, not papered over.
     const marginTitle = isLocked
       ? `Margin on the price excl. VAT — click to change the locked margin`
       : `Margin on the price excl. VAT — click to lock a target margin`;

@@ -4,3 +4,4 @@ logs/
 .env
 tests/fixtures/
 .idea
+tmp-analysis/

@@ -134,7 +134,7 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
       const migrated = readProject(id).target_margin_pct;
       expect(migrated).toBeLessThan(95);
 
-      const lock = calc.calculateLockedPrice(100, migrated, 21, 0.99);
+      const lock = calc.calculateLockedPrice(100, migrated, 21);
       expect(lock.reason).toBeNull();
       expect(lock.price).toBeGreaterThan(0);
     }
@@ -145,7 +145,7 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
     // that range may migrate into an unpriceable lock.
     for (let oldPin = 1; oldPin < 82.64; oldPin += 0.5) {
       const migrated = Math.min(oldPin * 1.21, 95 - 0.01);
-      const lock = calc.calculateLockedPrice(100, migrated, 21, 0.99);
+      const lock = calc.calculateLockedPrice(100, migrated, 21);
       expect(lock.reason).toBeNull();
       expect(lock.price).toBeGreaterThan(0);
     }

@@ -775,7 +775,12 @@ describe('Margin lock routes', () => {
     // Exact to the cent — the price ending is not applied to an actual price.
     expect(Math.abs(res.body.calculation.effectiveSalesPrice - res.body.calculation.marginLock.rawPrice))
       .toBeLessThanOrEqual(0.005);
-    expect(res.body.calculation.effectiveSalesPrice % 0.99).not.toBe(0);
+    // ...and it IS the exact price rounded to the cent, which a price ending
+    // would break. (A `% 0.99` test cannot detect an ending: 24.99 % 0.99 is
+    // 0.24, so it passes on the very value it claims to exclude.)
+    const cents = (v) => Math.round(v * 100) / 100;
+    expect(res.body.calculation.effectiveSalesPrice)
+      .toBe(cents(res.body.calculation.marginLock.rawPrice));
   });
 
   test('the lock survives a reload', async () => {

@@ -2045,7 +2045,17 @@ describe('margin lock', () => {
       // on a ~30-cent price that is still ~1pp of margin, which is as exact as
       // money gets. It is the smallest achievable error, not a rounding policy.
       expect(Math.abs(r.effectiveSalesPrice - r.marginLock.rawPrice)).toBeLessThanOrEqual(0.005);
-      expect(Math.abs(r.actualMargin.marginPct - 1)).toBeLessThan(2);
+      // The margin deviation is whatever half a cent is worth AT THIS PRICE —
+      // here ~1.14pp, because the price is ~30 cents. Derived from the price
+      // rather than hardcoded: a magic pp tolerance is either too loose to
+      // catch a regression or wrong at a different price. This bound is tight
+      // at every price and fails the moment anything rounds by more than a cent.
+      const cost = r.pricing.productionCost;
+      const atMin = calc.calculateActualMargin(r.effectiveSalesPrice - 0.005, cost, 21).marginPct;
+      const atMax = calc.calculateActualMargin(r.effectiveSalesPrice + 0.005, cost, 21).marginPct;
+      expect(r.actualMargin.marginPct).toBeGreaterThanOrEqual(atMin);
+      expect(r.actualMargin.marginPct).toBeLessThanOrEqual(atMax);
+      expect(atMax - atMin).toBeLessThan(3); // sanity: the band itself stays small
     });
 
     test('the pinned margin is held across the whole price range', () => {
