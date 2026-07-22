@@ -2,6 +2,8 @@
 
 const path = require('path');
 const Database = require('better-sqlite3');
+// Single source of truth for the margin cap — see calc.js `MAX_MARGIN_PCT`.
+const MAX_TARGET_MARGIN_PCT = require('./calc').maxReachableMarginPct();
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data', 'calculator.db');
 
@@ -230,6 +232,67 @@ function migrate(db) {
       upd.run(order++, row.id);
     }
   }
+
+  migrateMarginBasisToExVat(db);
+}
+
+/**
+ * One-shot conversion of the margin basis from incl-VAT to ex-VAT (2026-07-22).
+ *
+ * Old basis: margin = (price_ex - cost) / price_incl.
+ * New basis: margin = (price_ex - cost) / price_ex.
+ *
+ * The same price reads (1 + vat) times higher on the new basis, so every stored
+ * `projects.target_margin_pct` is multiplied by (1 + vat). That is a pin, so
+ * this keeps every locked price exactly where it is instead of silently
+ * repricing the project. VAT comes from the `vat_rate` setting; there is no
+ * per-project VAT column in this schema.
+ *
+ * The `margin_green_pct` / `margin_orange_pct` colour thresholds are NOT
+ * rescaled — Dirk chose clean ex-VAT numbers (40 / 25) over preserving the old
+ * colours, accepting that some projects shift. They stay user-editable: the
+ * migration writes them once and his own edits win from then on.
+ *
+ * Guarded by a `margin_basis_ex_vat` settings marker so it runs exactly once,
+ * and pins are clamped to the new hard cap.
+ */
+function migrateMarginBasisToExVat(db) {
+  const done = db.prepare("SELECT 1 FROM settings WHERE key = 'margin_basis_ex_vat'").get();
+  if (done) return;
+
+  const readNum = (key) => {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    if (!row) return null;
+    let v;
+    try { v = JSON.parse(row.value); } catch { v = row.value; }
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const vatRate = readNum('vat_rate') ?? 21;
+  const factor = 1 + vatRate / 100;
+
+  // The cap is an exclusive bound — `calculateLockedPrice` and the margin-lock
+  // route both reject `target >= maxPct`. Clamping to the cap itself would
+  // therefore write a value the app's own API would 400 on: the lock stays set,
+  // no price can be derived, and the project renders "—". Land strictly below.
+  const clampCeiling = MAX_TARGET_MARGIN_PCT - 0.01;
+
+  const pins = db.prepare('SELECT id, target_margin_pct FROM projects WHERE target_margin_pct IS NOT NULL').all();
+  const updPin = db.prepare('UPDATE projects SET target_margin_pct = ? WHERE id = ?');
+  for (const row of pins) {
+    const old = Number(row.target_margin_pct);
+    if (!Number.isFinite(old)) continue;
+    updPin.run(Math.min(old * factor, clampCeiling), row.id);
+  }
+
+  const updSetting = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
+  for (const [key, value] of Object.entries({ margin_green_pct: '40', margin_orange_pct: '25' })) {
+    if (readNum(key) === null) continue; // fresh DB — seedDefaults writes these
+    updSetting.run(value, key);
+  }
+
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('margin_basis_ex_vat', '1')").run();
 }
 
 /* ------------------------------------------------------------------ */
@@ -247,8 +310,11 @@ function seedDefaults(db) {
     electricity_profit_pct:   '0',
     printer_cost_profit_pct:  '50',
     price_rounding:           '0.99',
-    margin_green_pct:         '30',
-    margin_orange_pct:        '5',
+    // Ex-VAT margin thresholds (Dirk 2026-07-22). Green 40% sits just above the
+    // ~37% industrial floor from the margin research; not a rescale of the old
+    // incl-VAT 30/5, so some projects legitimately change colour.
+    margin_green_pct:         '40',
+    margin_orange_pct:        '25',
     currency:                 '"EUR"',
     currency_symbol:          '"\\u20ac"',
   };

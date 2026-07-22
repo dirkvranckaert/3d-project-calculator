@@ -819,14 +819,25 @@ describe('Margin lock routes', () => {
     expect(p.target_margin_pct).toBe(60);
   });
 
-  test('a target at or above the VAT ceiling is rejected', async () => {
+  test('a target at or above the 95% cap is rejected', async () => {
     const res = await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
-      .send({ locked: true, target_margin_pct: 90 });
+      .send({ locked: true, target_margin_pct: 95 });
     expect(res.status).toBe(400);
-    expect(res.body.maxMarginPct).toBeCloseTo(82.6446, 3);
+    expect(res.body.maxMarginPct).toBe(95);
+    expect(res.body.error).not.toMatch(/82\.6/);
     // Still on the previous valid lock.
     const p = await getProject(pid);
     expect(p.target_margin_pct).toBe(60);
+  });
+
+  test('90% is now accepted — the old VAT ceiling is gone', async () => {
+    const res = await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: true, target_margin_pct: 90 });
+    expect(res.status).toBe(200);
+    expect(res.body.target_margin_pct).toBe(90);
+    // Put the fixture back on its 60% lock for the tests that follow.
+    await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: true, target_margin_pct: 60 });
   });
 
   test('locking without any target is rejected', async () => {

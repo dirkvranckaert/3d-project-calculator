@@ -363,7 +363,7 @@ describe('calculateFinalPricing', () => {
     expect(result.totalExclVat).toBeCloseTo(8.9, 2);
   });
 
-  test('margin formula matches spreadsheet: (excl_vat - cost) / incl_vat', () => {
+  test('margin formula is ex-VAT: (excl_vat - cost) / excl_vat', () => {
     const perItemCosts = { materialCost: 0.66, processingCost: 0.11, electricityCost: 0.08, printerUsageCost: 0.09, totalPerItem: 0.94 };
     const profits = { totalProfit: 1.475 };
     const result = calc.calculateFinalPricing({
@@ -379,9 +379,26 @@ describe('calculateFinalPricing', () => {
     // suggestedExclVat = 3.99 / 1.21 = 3.2975...
     // productionCost = 1.00
     // profit = 3.2975 - 1.00 = 2.2975
-    // margin = 2.2975 / 3.99 * 100 = 57.58%
-    expect(result.suggestedMarginPct).toBeGreaterThan(55);
-    expect(result.suggestedMarginPct).toBeLessThan(60);
+    // margin = 2.2975 / 3.2975 * 100 = 69.67%  (ex-VAT basis)
+    expect(result.suggestedMarginPct).toBeCloseTo(69.67, 1);
+  });
+
+  // Same fence as calculateActualMargin, but targeted rather than an exact
+  // shape: this function returns a dozen fields and legitimately gains more,
+  // and `totalInclVat` / `suggestedPrice` are prices, not margins. What must
+  // never come back is a second *margin or profit* read against the incl-VAT
+  // price — that figure is profit plus the VAT owed to the tax office.
+  test('reports no incl-VAT profit or margin field', () => {
+    const result = calc.calculateFinalPricing({
+      perItemCosts: { materialCost: 1, processingCost: 0.5, electricityCost: 0.2, printerUsageCost: 0.1, totalPerItem: 1.8 },
+      profits: { totalProfit: 1 },
+      extraCostsTotal: 0,
+      itemsPerSet: 1,
+      vatRate: 21,
+      priceRounding: 0.99,
+    });
+    const offenders = Object.keys(result).filter(k => /(margin|profit).*incl/i.test(k));
+    expect(offenders).toEqual([]);
   });
 
   test('extraHoursCost adds to productionCost AND totalExclVat — no margin', () => {
@@ -429,14 +446,29 @@ describe('calculateFinalPricing', () => {
 /*  calculateActualMargin                                              */
 /* ================================================================== */
 describe('calculateActualMargin', () => {
-  test('matches spreadsheet custom price example', () => {
-    // Custom price: 26.53, production cost: 1.00, VAT: 21%
+  test('margin is measured on the ex-VAT price', () => {
+    // Custom price: 26.53 incl. VAT, production cost: 1.00, VAT: 21%
     const result = calc.calculateActualMargin(26.53, 1.00, 21);
 
     expect(result.actualExclVat).toBeCloseTo(21.926, 2);
     expect(result.profitAmount).toBeCloseTo(20.926, 2);
-    // margin = 20.926 / 26.53 = 78.87%
-    expect(result.marginPct).toBeCloseTo(78.86, 1);
+    // margin = 20.926 / 21.926 = 95.44%
+    expect(result.marginPct).toBeCloseTo(95.44, 1);
+  });
+
+  test('reports no incl-VAT margin — price_incl - cost is profit plus VAT owed', () => {
+    const result = calc.calculateActualMargin(26.53, 1.00, 21);
+    expect(result).toEqual({
+      actualExclVat: expect.any(Number),
+      profitAmount: expect.any(Number),
+      marginPct: expect.any(Number),
+    });
+  });
+
+  test('the ex-VAT margin is the old incl-VAT one scaled by (1 + vat)', () => {
+    const r = calc.calculateActualMargin(302.99, 100, 21);
+    const oldBasisPct = (r.profitAmount / 302.99) * 100;
+    expect(r.marginPct).toBeCloseTo(oldBasisPct * 1.21, 6);
   });
 
   test('returns null for zero/missing price', () => {
@@ -454,11 +486,13 @@ describe('calculateActualMargin', () => {
 /*  marginIndicator                                                    */
 /* ================================================================== */
 describe('marginIndicator', () => {
-  test('green >= 30', () => expect(calc.marginIndicator(30)).toBe('green'));
+  test('green >= 40', () => expect(calc.marginIndicator(40)).toBe('green'));
   test('green = 50', () => expect(calc.marginIndicator(50)).toBe('green'));
-  test('orange >= 5 < 30', () => expect(calc.marginIndicator(15)).toBe('orange'));
-  test('orange = 5', () => expect(calc.marginIndicator(5)).toBe('orange'));
-  test('red < 5', () => expect(calc.marginIndicator(4.9)).toBe('red'));
+  test('orange >= 25 < 40', () => expect(calc.marginIndicator(30)).toBe('orange'));
+  test('orange = 25', () => expect(calc.marginIndicator(25)).toBe('orange'));
+  test('red < 25', () => expect(calc.marginIndicator(24.9)).toBe('red'));
+  test('39.9 is still orange — the old 30 threshold no longer applies', () =>
+    expect(calc.marginIndicator(39.9)).toBe('orange'));
   test('red negative', () => expect(calc.marginIndicator(-10)).toBe('red'));
   test('custom thresholds', () => {
     expect(calc.marginIndicator(40, 50, 20)).toBe('orange');
@@ -1778,9 +1812,17 @@ describe('margin lock', () => {
   });
 
   describe('maxReachableMarginPct', () => {
-    test('is the VAT-excluded share of the price', () => {
-      expect(calc.maxReachableMarginPct(21)).toBeCloseTo(82.6446, 3);
-      expect(calc.maxReachableMarginPct(0)).toBeCloseTo(100, 6);
+    test('is a flat 95% cap, independent of the VAT rate', () => {
+      expect(calc.maxReachableMarginPct()).toBe(95);
+      expect(calc.maxReachableMarginPct(21)).toBe(95);
+      expect(calc.maxReachableMarginPct(0)).toBe(95);
+    });
+
+    test('the old VAT-derived 82.64% ceiling is gone', () => {
+      // 90% was unreachable on the incl-VAT basis; on the ex-VAT basis it prices fine.
+      const res = calc.calculateLockedPrice(100, 90, 21, 0.99);
+      expect(res.reason).toBeNull();
+      expect(res.price).toBe(1210.99);
     });
   });
 
@@ -1798,11 +1840,46 @@ describe('margin lock', () => {
       expect(margin.marginPct).toBeLessThan(51);
     });
 
-    test('a margin at or above the VAT ceiling is unreachable', () => {
-      const res = calc.calculateLockedPrice(100, 82.65, 21, 0.99);
+    test('a margin at or above the 95% cap is unreachable', () => {
+      const res = calc.calculateLockedPrice(100, 95, 21, 0.99);
       expect(res.price).toBeNull();
       expect(res.reason).toBe('unreachable');
-      expect(res.maxMarginPct).toBeCloseTo(82.6446, 3);
+      expect(res.maxMarginPct).toBe(95);
+    });
+
+    // The numbers Dirk sanity-checks against: cost EUR 100, 21% VAT, .99 rounding.
+    // price_ex = 100 / (1 - m), incl = price_ex * 1.21, rounded up to .99.
+    describe('EUR 100 reference table (ex-VAT pins -> incl-VAT price)', () => {
+      const cases = [
+        [25, 133.33, 161.33, 161.99],
+        [30, 142.86, 172.86, 172.99],
+        [40, 166.67, 201.67, 201.99],
+        [50, 200.00, 242.00, 242.99],
+        [60, 250.00, 302.50, 302.99],
+        [65, 285.71, 345.71, 345.99],
+        [70, 333.33, 403.33, 403.99],
+        [75, 400.00, 484.00, 484.99],
+        [80, 500.00, 605.00, 605.99],
+        [90, 1000.00, 1210.00, 1210.99],
+      ];
+      test.each(cases)('%s%% ex-VAT -> %s ex, %s incl, %s rounded', (pct, ex, incl, rounded) => {
+        const res = calc.calculateLockedPrice(100, pct, 21, 0.99);
+        expect(res.rawPrice / 1.21).toBeCloseTo(ex, 2);
+        expect(res.rawPrice).toBeCloseTo(incl, 2);
+        expect(res.price).toBe(rounded);
+      });
+
+      test('60% ex-VAT gives 302.99 incl. VAT', () => {
+        expect(calc.calculateLockedPrice(100, 60, 21, 0.99).price).toBe(302.99);
+      });
+    });
+
+    test('an old incl-VAT pin migrated by x1.21 keeps the same price', () => {
+      // Old basis, 50% pin: price = cost / (1/1.21 - 0.50) = 306.33 -> 306.99.
+      const oldPrice = calc.roundToPriceEnding(100 / ((1 / 1.21) - 0.5), 0.99);
+      const migrated = calc.calculateLockedPrice(100, 50 * 1.21, 21, 0.99);
+      expect(migrated.price).toBe(oldPrice);
+      expect(migrated.price).toBe(306.99);
     });
 
     test('zero or missing production cost yields no price', () => {
@@ -1860,10 +1937,18 @@ describe('margin lock', () => {
       });
       expect(pricey.pricing.productionCost).toBeGreaterThan(cheap.pricing.productionCost);
       expect(pricey.effectiveSalesPrice).toBeGreaterThan(cheap.effectiveSalesPrice);
-      // Margin held constant across both, give or take the rounding step.
+      // Before rounding the target is held exactly, in both cases.
+      for (const r of [cheap, pricey]) {
+        expect(
+          calc.calculateActualMargin(r.marginLock.rawPrice, r.pricing.productionCost, 21).marginPct
+        ).toBeCloseTo(60, 6);
+      }
+      // The .99 rounding only ever overshoots, never undershoots. These plates
+      // are cheap, so a sub-euro rounding step is still a few margin points.
       expect(cheap.actualMargin.marginPct).toBeGreaterThanOrEqual(60);
       expect(pricey.actualMargin.marginPct).toBeGreaterThanOrEqual(60);
-      expect(pricey.actualMargin.marginPct).toBeLessThan(61);
+      expect(cheap.actualMargin.marginPct).toBeLessThan(65);
+      expect(pricey.actualMargin.marginPct).toBeLessThan(65);
     });
 
     test('price follows a cost decrease too', () => {
