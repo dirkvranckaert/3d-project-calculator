@@ -437,7 +437,7 @@ function enrichProject(db, project) {
     ORDER BY pf.uploaded_at DESC
   `).all(project.id);
   backfillSliced(db, files);
-  const images = db.prepare('SELECT * FROM project_images WHERE project_id = ? ORDER BY is_primary DESC, uploaded_at ASC').all(project.id);
+  const images = db.prepare('SELECT * FROM project_images WHERE project_id = ? ORDER BY sort_order ASC, id ASC').all(project.id);
 
   // Calculate
   const settings = getAllSettings(db);
@@ -537,7 +537,7 @@ function enrichProjectLite(db, project) {
     'SELECT * FROM project_custom_lines WHERE project_id = ? ORDER BY sort_order, id'
   ).all(project.id);
 
-  const images = db.prepare('SELECT id, is_primary FROM project_images WHERE project_id = ? ORDER BY is_primary DESC LIMIT 1').all(project.id);
+  const images = db.prepare('SELECT id, is_primary FROM project_images WHERE project_id = ? ORDER BY is_primary DESC, sort_order ASC, id ASC LIMIT 1').all(project.id);
 
   const settings = getAllSettings(db);
   const { testPrints } = buildTestPrints(db, project.id, settings);
@@ -1175,12 +1175,13 @@ app.post('/api/projects/:projectId/files', express.raw({ type: 'application/octe
       const thumbs = extractThumbnails(req.body);
       if (thumbs.length > 0) {
         const hasImages = db.prepare('SELECT COUNT(*) as c FROM project_images WHERE project_id = ?').get(pid).c;
-        const insImg = db.prepare('INSERT INTO project_images (project_id, filename, filepath, is_primary) VALUES (?,?,?,?)');
+        const insImg = db.prepare('INSERT INTO project_images (project_id, filename, filepath, is_primary, sort_order) VALUES (?,?,?,?,?)');
+        let sortOrder = nextImageSortOrder(db, pid);
         for (let i = 0; i < thumbs.length; i++) {
           const imgId = crypto.randomBytes(8).toString('hex');
           const imgName = `${imgId}.png`;
           fs.writeFileSync(path.join(UPLOADS_DIR, imgName), thumbs[i].buffer);
-          insImg.run(pid, thumbs[i].filename, imgName, (!hasImages && i === 0) ? 1 : 0);
+          insImg.run(pid, thumbs[i].filename, imgName, (!hasImages && i === 0) ? 1 : 0, sortOrder++);
         }
       }
     } catch { /* thumbnail extraction is best-effort */ }
@@ -1225,6 +1226,14 @@ app.delete('/api/files/:fileId', (req, res) => {
 /* ------------------------------------------------------------------ */
 /*  Project images                                                     */
 /* ------------------------------------------------------------------ */
+
+// Next free position in a project's manual image order. New images always land
+// at the end of the strip so an upload never disturbs an order Dirk set.
+function nextImageSortOrder(db, projectId) {
+  const row = db.prepare('SELECT MAX(sort_order) AS m FROM project_images WHERE project_id = ?').get(projectId);
+  return (row && row.m !== null ? row.m : -1) + 1;
+}
+
 app.post('/api/projects/:projectId/images', express.raw({ type: 'application/octet-stream', limit: '500mb' }), async (req, res) => {
   const db = getDb();
   const pid = req.params.projectId;
@@ -1252,8 +1261,8 @@ app.post('/api/projects/:projectId/images', express.raw({ type: 'application/oct
 
   fs.writeFileSync(path.join(UPLOADS_DIR, storedName), imageBuffer);
   const hasImages = db.prepare('SELECT COUNT(*) as c FROM project_images WHERE project_id = ?').get(pid).c;
-  db.prepare('INSERT INTO project_images (project_id, filename, filepath, is_primary) VALUES (?,?,?,?)')
-    .run(pid, filename, storedName, hasImages === 0 ? 1 : 0);
+  db.prepare('INSERT INTO project_images (project_id, filename, filepath, is_primary, sort_order) VALUES (?,?,?,?,?)')
+    .run(pid, filename, storedName, hasImages === 0 ? 1 : 0, nextImageSortOrder(db, pid));
   const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
   res.status(201).json(enrichProject(db, updated));
 });
@@ -1279,6 +1288,45 @@ app.delete('/api/images/:imageId', (req, res) => {
     db.prepare('DELETE FROM project_images WHERE id = ?').run(req.params.imageId);
   }
   res.json({ ok: true });
+});
+
+/**
+ * Replace the manual order of a project's images. Body: `{ order: [imageId, ...] }`.
+ * Ids that do not belong to the project are ignored; images missing from the
+ * payload keep their relative order and are appended after the listed ones.
+ */
+app.put('/api/projects/:projectId/images/order', (req, res) => {
+  const db = getDb();
+  const pid = req.params.projectId;
+  const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(pid);
+  if (!project) return res.status(404).json({ error: 'Not found' });
+
+  const existing = db.prepare(
+    'SELECT id FROM project_images WHERE project_id = ? ORDER BY sort_order ASC, id ASC'
+  ).all(pid).map(r => r.id);
+
+  const requested = Array.isArray(req.body?.order) ? req.body.order : [];
+  const known = new Set(existing);
+  const ordered = [];
+  const seen = new Set();
+  for (const raw of requested) {
+    const id = Number(raw);
+    if (!known.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    ordered.push(id);
+  }
+  for (const id of existing) {
+    if (!seen.has(id)) ordered.push(id);
+  }
+
+  const upd = db.prepare('UPDATE project_images SET sort_order = ? WHERE id = ?');
+  db.transaction(() => {
+    ordered.forEach((id, i) => upd.run(i, id));
+  })();
+
+  db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
+  const fullProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  res.json(enrichProject(db, fullProject));
 });
 
 app.patch('/api/images/:imageId/primary', (req, res) => {
@@ -1387,7 +1435,8 @@ app.post('/api/projects/:projectId/images-from-3mf', express.raw({ type: 'applic
   if (!thumbs.length) return res.json({ count: 0 });
 
   const hasImages = db.prepare('SELECT COUNT(*) as c FROM project_images WHERE project_id = ?').get(pid).c;
-  const insImg = db.prepare('INSERT INTO project_images (project_id, filename, filepath, is_primary) VALUES (?,?,?,?)');
+  const insImg = db.prepare('INSERT INTO project_images (project_id, filename, filepath, is_primary, sort_order) VALUES (?,?,?,?,?)');
+  let sortOrder = nextImageSortOrder(db, pid);
   let sharp;
   try { sharp = require('sharp'); } catch { sharp = null; }
 
@@ -1400,7 +1449,7 @@ app.post('/api/projects/:projectId/images-from-3mf', express.raw({ type: 'applic
       if (sharp) imageBuffer = await sharp(thumbs[i].buffer).jpeg({ quality: 85 }).toBuffer();
     } catch { /* fall back to raw PNG bytes if sharp chokes on the thumbnail */ }
     fs.writeFileSync(path.join(UPLOADS_DIR, storedName), imageBuffer);
-    insImg.run(pid, thumbs[i].filename, storedName, (!hasImages && i === 0) ? 1 : 0);
+    insImg.run(pid, thumbs[i].filename, storedName, (!hasImages && i === 0) ? 1 : 0, sortOrder++);
     count++;
   }
   res.status(201).json({ count });

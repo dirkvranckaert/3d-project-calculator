@@ -1366,10 +1366,13 @@ async function removeCustomLineRow(projectId, idx) {
 function renderImagesSection(p) {
   const images = p.images || [];
   const thumbs = images.map(img => `
-    <div class="image-thumb ${img.is_primary ? 'image-thumb-primary' : ''}">
-      <img src="/api/images/${img.id}" alt="${esc(img.filename)}" loading="lazy"
+    <div class="image-thumb ${img.is_primary ? 'image-thumb-primary' : ''}" data-image-id="${img.id}">
+      <img src="/api/images/${img.id}" alt="${esc(img.filename)}" loading="lazy" draggable="false"
         title="Click to enlarge" onclick="openLightbox(${p.id}, ${img.id})">
       <div class="image-thumb-actions">
+        <span class="btn-icon image-drag-handle" title="Drag to reorder">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/></svg>
+        </span>
         ${!img.is_primary ? `<button class="btn-icon" title="Set as primary" onclick="setPrimaryImage(${img.id},${p.id})">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
         </button>` : ''}
@@ -1382,7 +1385,7 @@ function renderImagesSection(p) {
   return `<div class="extras-section">
     <div class="extras-section-header"><h3>Images</h3></div>
     <div class="drop-zone" id="image-drop-${p.id}" data-project-id="${p.id}" data-drop-type="image">
-      <div class="image-gallery" id="image-gallery-${p.id}">
+      <div class="image-gallery" id="image-gallery-${p.id}" data-project-id="${p.id}">
         ${thumbs}
       </div>
       <div class="drop-zone-hint">
@@ -1554,6 +1557,87 @@ async function deleteImage(imageId, projectId, e) {
   await DEL(`/api/images/${imageId}`);
   await reloadSingleProject(projectId);
 }
+
+/* ================================================================== */
+/*  Image reordering — pointer-based drag & drop (mouse + touch)       */
+/* ================================================================== */
+// Pointer events are used instead of the HTML5 drag API on purpose: HTML5 drag
+// does not fire on touch, and the gallery already sits inside a `.drop-zone`
+// whose dragover/drop handlers are reserved for file uploads.
+let _imgDrag = null;
+
+// The dragged thumb sits under the pointer, so elementFromPoint is useless here.
+// Hit-test the siblings directly instead.
+function imageDropTarget(drag, x, y) {
+  for (const el of drag.gallery.querySelectorAll('.image-thumb[data-image-id]')) {
+    if (el === drag.thumb) continue;
+    const r = el.getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return el;
+  }
+  return null;
+}
+
+// A drag on the thumb body ends with a click on the <img>, which would open the
+// lightbox. Swallow that one click.
+function suppressNextClick() {
+  const block = ev => { ev.stopPropagation(); ev.preventDefault(); };
+  document.addEventListener('click', block, { capture: true, once: true });
+  setTimeout(() => document.removeEventListener('click', block, { capture: true }), 300);
+}
+
+document.addEventListener('pointerdown', e => {
+  const thumb = e.target.closest?.('.image-thumb[data-image-id]');
+  if (!thumb) return;
+  const fromHandle = !!e.target.closest('.image-drag-handle');
+  // Touch/pen drags start from the handle only — dragging the thumb body there
+  // would fight with page scrolling.
+  if (!fromHandle && (e.pointerType !== 'mouse' || e.target.closest('.image-thumb-actions'))) return;
+  const gallery = thumb.closest('.image-gallery');
+  if (!gallery || gallery.querySelectorAll('.image-thumb[data-image-id]').length < 2) return;
+  _imgDrag = {
+    thumb, gallery,
+    projectId: Number(gallery.dataset.projectId),
+    pointerId: e.pointerId,
+    startX: e.clientX, startY: e.clientY,
+    active: false, moved: false,
+  };
+});
+
+document.addEventListener('pointermove', e => {
+  const drag = _imgDrag;
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  if (!drag.active) {
+    if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) < 5) return;
+    drag.active = true;
+    drag.thumb.classList.add('image-thumb-dragging');
+    try { drag.thumb.setPointerCapture(drag.pointerId); } catch { /* capture is best-effort */ }
+  }
+  e.preventDefault();
+  const target = imageDropTarget(drag, e.clientX, e.clientY);
+  if (!target) return;
+  const r = target.getBoundingClientRect();
+  const insertBefore = e.clientX < r.left + r.width / 2;
+  drag.gallery.insertBefore(drag.thumb, insertBefore ? target : target.nextElementSibling);
+  drag.moved = true;
+}, { passive: false });
+
+async function endImageDrag(e) {
+  const drag = _imgDrag;
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  _imgDrag = null;
+  if (!drag.active) return;
+  drag.thumb.classList.remove('image-thumb-dragging');
+  try { drag.thumb.releasePointerCapture(drag.pointerId); } catch { /* already released */ }
+  suppressNextClick();
+  if (!drag.moved) return;
+  const order = Array.from(drag.gallery.querySelectorAll('.image-thumb[data-image-id]'))
+    .map(el => Number(el.dataset.imageId));
+  await PUT(`/api/projects/${drag.projectId}/images/order`, { order });
+  await reloadSingleProject(drag.projectId);
+}
+
+document.addEventListener('pointerup', endImageDrag);
+document.addEventListener('pointercancel', endImageDrag);
 
 function renderFilesSection(p) {
   const files = p.files || [];
