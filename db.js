@@ -217,6 +217,9 @@ function migrate(db) {
   // Margin lock — target margin drives the sales price instead of the reverse (2026-07-22)
   addCol('projects', 'margin_locked', 'INTEGER NOT NULL DEFAULT 0');
   addCol('projects', 'target_margin_pct', 'REAL');
+  // Lock's own pin, split off from target_margin_pct (task #736, 2026-07-22).
+  // See migrateLockedMarginSplit() for why this can't just reuse the column above.
+  addCol('projects', 'locked_margin_pct', 'REAL');
   // Manual image ordering — drag & drop in the Images section (2026-07-22)
   if (addCol('project_images', 'sort_order', 'INTEGER NOT NULL DEFAULT 0')) {
     // Backfill: seed the order every project already sees (primary first, then
@@ -235,6 +238,7 @@ function migrate(db) {
 
   migrateMarginBasisToExVat(db);
   migrateTargetMarginPerProject(db);
+  migrateLockedMarginSplit(db);
 }
 
 /**
@@ -349,6 +353,72 @@ function migrateTargetMarginPerProject(db) {
   db.prepare('UPDATE projects SET target_margin_pct = ? WHERE target_margin_pct IS NULL').run(def);
 
   put.run('target_margin_per_project', '1');
+}
+
+/**
+ * Split the margin lock's own pin off `target_margin_pct` into its own column
+ * (task #736, 2026-07-22).
+ *
+ * Root cause of #736: #726 introduced the margin lock using
+ * `projects.target_margin_pct` as its pin. #732 repurposed that same column
+ * as the project's own aspirational target (drives the suggested price, edited
+ * from the edit-project dialog) but never split the lock's write path off it.
+ * From then on, locking a margin silently overwrote the project's target, and
+ * the suggested price followed the lock instead of staying on the target.
+ *
+ * Production carries exactly ONE contaminated row as of 2026-07-22 (Dirk
+ * confirmed he had never locked a margin before that day — project 29,
+ * "Shipping Container w/ lid - ARGT", locked at 63%, target overwritten from
+ * 60 to 63). That makes the migration verifiable: it must move exactly one
+ * row. If more than one `margin_locked` row turns up, the "only one lock ever
+ * existed" assumption this migration is built on does not hold — surface that
+ * loudly rather than silently rewriting data nobody has confirmed the shape
+ * of. Guarded by a marker so it runs once; `changes` is checked so a WHERE
+ * clause that quietly matches nothing is not mistaken for success.
+ *
+ * The overwritten target (60, in the one known case) cannot be recovered — the
+ * column already holds the lock's value by the time this runs. The lock pct is
+ * moved verbatim into `locked_margin_pct` (so the derived price does not move:
+ * same production cost, same vat rate, same pct in -> same price out) and the
+ * target resets to `default_target_margin_pct` for the user to re-enter by
+ * hand. Losing the overwritten target is the accepted, unavoidable trade-off —
+ * the lock is the value the user set most recently and the price currently
+ * depends on it.
+ */
+function migrateLockedMarginSplit(db) {
+  const done = db.prepare("SELECT 1 FROM settings WHERE key = 'locked_margin_pct_split'").get();
+  if (done) return;
+
+  const lockedRows = db.prepare('SELECT id, target_margin_pct FROM projects WHERE margin_locked = 1').all();
+
+  if (lockedRows.length > 1) {
+    throw new Error(
+      `migrateLockedMarginSplit: expected at most 1 locked project (confirmed production state ` +
+      `2026-07-22), found ${lockedRows.length}. Aborting without writing — investigate before retrying.`
+    );
+  }
+
+  if (lockedRows.length === 1) {
+    const row = lockedRows[0];
+    const result = db.prepare(
+      'UPDATE projects SET locked_margin_pct = ?, target_margin_pct = ? WHERE id = ? AND margin_locked = 1'
+    ).run(row.target_margin_pct, readDefaultTargetMarginSetting(db), row.id);
+    if (result.changes !== 1) {
+      throw new Error(`migrateLockedMarginSplit: expected to update 1 row, updated ${result.changes}.`);
+    }
+  }
+
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('locked_margin_pct_split', '1')").run();
+}
+
+/** Read `default_target_margin_pct`, parsed the same way the app reads it. Falls back to 40. */
+function readDefaultTargetMarginSetting(db) {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'default_target_margin_pct'").get();
+  if (!row) return 40;
+  let v;
+  try { v = JSON.parse(row.value); } catch { v = row.value; }
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 40;
 }
 
 /* ------------------------------------------------------------------ */

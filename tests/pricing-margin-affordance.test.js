@@ -74,6 +74,9 @@ function project(opts = {}) {
     actualSalesPrice,
     marginLocked,
     targetMarginPct,
+    // This fixture isn't exercising target/lock independence (that's covered
+    // in calc.test.js) — same value keeps every existing case's intent intact.
+    lockedMarginPct: targetMarginPct,
   });
   return {
     id: 42,

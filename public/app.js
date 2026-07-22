@@ -2340,9 +2340,10 @@ function lockBadge(lock) {
     ${fmtPct(lock.targetPct)} locked</span>`;
 }
 
-async function setMarginLock(projectId, locked, targetPct) {
+async function setMarginLock(projectId, locked, lockedPct) {
   const body = { locked };
-  if (targetPct != null) body.target_margin_pct = targetPct;
+  // The LOCK's own pin — never the project's target_margin_pct (task #736).
+  if (lockedPct != null) body.locked_margin_pct = lockedPct;
   const res = await PATCH(`/api/projects/${projectId}/margin-lock`, body);
   await reloadSingleProject(projectId);
   return res;

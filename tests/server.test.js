@@ -764,17 +764,25 @@ describe('Margin lock routes', () => {
     const p = await getProject(pid);
     expect(p.margin_locked).toBe(0);
     expect(p.target_margin_pct).toBe(40);
+    expect(p.locked_margin_pct).toBeNull();
     expect(p.calculation.marginLock).toBeNull();
     expect(p.calculation.targetMarginPct).toBe(40);
   });
 
-  test('locking derives the sales price from the target margin', async () => {
+  // Regression coverage for #736: the lock and the project target used to
+  // share `target_margin_pct`, so locking silently overwrote the project's
+  // target and the suggested price followed the lock instead of the target.
+  test('locking derives the sales price from its OWN pin and leaves the project target untouched', async () => {
     const res = await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
-      .send({ locked: true, target_margin_pct: 60 });
+      .send({ locked: true, locked_margin_pct: 63 });
     expect(res.status).toBe(200);
     expect(res.body.margin_locked).toBe(1);
-    expect(res.body.target_margin_pct).toBe(60);
+    expect(res.body.locked_margin_pct).toBe(63);
+    // The bug, precisely: locking used to write the lock pct into this column.
+    expect(res.body.target_margin_pct).toBe(40);
+    expect(res.body.calculation.targetMarginPct).toBe(40);
     expect(res.body.calculation.marginLock.locked).toBe(true);
+    expect(res.body.calculation.marginLock.targetPct).toBe(63);
     expect(res.body.calculation.effectiveSalesPrice).toBeGreaterThan(0);
     // Exact to the cent — the price ending is not applied to an actual price.
     expect(Math.abs(res.body.calculation.effectiveSalesPrice - res.body.calculation.marginLock.rawPrice))
@@ -787,11 +795,31 @@ describe('Margin lock routes', () => {
       .toBe(cents(res.body.calculation.marginLock.rawPrice));
   });
 
+  test('the suggested price stays anchored to the project target after a lock at a different pct', async () => {
+    const p = await getProject(pid);
+    // Locked at 63% (previous test); target still 40%. The suggested price
+    // must reflect 40%, not 63% — this is the other half of the #736 bug.
+    expect(p.calculation.targetMarginPct).toBe(40);
+    const expected = calc.roundToPriceEnding(
+      (p.calculation.pricing.productionCost / (1 - 0.40)) * 1.21, 0.99
+    );
+    expect(p.calculation.pricing.suggestedPrice).toBeCloseTo(expected, 6);
+  });
+
   test('the lock survives a reload', async () => {
     const p = await getProject(pid);
     expect(p.margin_locked).toBe(1);
-    expect(p.target_margin_pct).toBe(60);
+    expect(p.locked_margin_pct).toBe(63);
+    expect(p.target_margin_pct).toBe(40);
     expect(p.calculation.effectiveSalesPrice).toBeGreaterThan(0);
+  });
+
+  test('relock back to 60% for the rest of the suite', async () => {
+    const res = await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: true, locked_margin_pct: 60 });
+    expect(res.status).toBe(200);
+    expect(res.body.locked_margin_pct).toBe(60);
+    expect(res.body.target_margin_pct).toBe(40);
   });
 
   test('a cost change moves the price and holds the margin', async () => {
@@ -826,44 +854,56 @@ describe('Margin lock routes', () => {
       .toBeLessThanOrEqual(0.005);
   });
 
-  test('an ordinary PUT does not clear the lock', async () => {
+  test('an ordinary PUT does not clear the lock, and does not touch it either', async () => {
     await request(app).put(`/api/projects/${pid}`).set('Cookie', cookie)
       .send({ name: 'Margin Lock Test Renamed', customer_name: null, items_per_set: 1 });
     const p = await getProject(pid);
     expect(p.margin_locked).toBe(1);
-    expect(p.target_margin_pct).toBe(60);
+    expect(p.locked_margin_pct).toBe(60);
+    expect(p.target_margin_pct).toBe(40);
   });
 
-  test('a target at or above the 95% cap is rejected', async () => {
+  test('a locked pct at or above the 95% cap is rejected', async () => {
     const res = await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
-      .send({ locked: true, target_margin_pct: 95 });
+      .send({ locked: true, locked_margin_pct: 95 });
     expect(res.status).toBe(400);
     expect(res.body.maxMarginPct).toBe(95);
     expect(res.body.error).not.toMatch(/82\.6/);
-    // Still on the previous valid lock.
+    // Still on the previous valid lock; target untouched throughout.
     const p = await getProject(pid);
-    expect(p.target_margin_pct).toBe(60);
+    expect(p.locked_margin_pct).toBe(60);
+    expect(p.target_margin_pct).toBe(40);
   });
 
   test('90% is now accepted — the old VAT ceiling is gone', async () => {
     const res = await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
-      .send({ locked: true, target_margin_pct: 90 });
+      .send({ locked: true, locked_margin_pct: 90 });
     expect(res.status).toBe(200);
-    expect(res.body.target_margin_pct).toBe(90);
+    expect(res.body.locked_margin_pct).toBe(90);
+    expect(res.body.target_margin_pct).toBe(40);
     // Put the fixture back on its 60% lock for the tests that follow.
     await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
-      .send({ locked: true, target_margin_pct: 60 });
+      .send({ locked: true, locked_margin_pct: 60 });
   });
 
-  test('locking with no target in the body uses the project stored target', async () => {
-    // Previously a 400: no project had a target until one was pinned. Now every
-    // project carries one, so locking without a body value is well defined and
-    // simply adopts it.
+  test('locking with no pct in the body and no prior lock is rejected', async () => {
+    // Unlike the pre-#736 column, a fresh project's `locked_margin_pct` starts
+    // NULL — there is no target to silently fall back to.
     const fresh = await request(app).post('/api/projects').set('Cookie', cookie)
-      .send({ name: 'No Target', customer_name: null, items_per_set: 1 });
+      .send({ name: 'No Lock Yet', customer_name: null, items_per_set: 1 });
     const res = await request(app).patch(`/api/projects/${fresh.body.id}/margin-lock`).set('Cookie', cookie)
       .send({ locked: true });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/required/i);
+  });
+
+  test('re-locking with no pct in the body adopts the previously stored lock pct', async () => {
+    await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: false });
+    const res = await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: true });
     expect(res.status).toBe(200);
+    expect(res.body.locked_margin_pct).toBe(60);
     expect(res.body.target_margin_pct).toBe(40);
   });
 
@@ -877,27 +917,27 @@ describe('Margin lock routes', () => {
       .send({ locked: false });
     expect(res.status).toBe(200);
     expect(res.body.margin_locked).toBe(0);
-    expect(res.body.target_margin_pct).toBe(60);
+    expect(res.body.locked_margin_pct).toBe(60);
+    expect(res.body.target_margin_pct).toBe(40);
     expect(res.body.calculation.marginLock).toBeNull();
     expect(res.body.calculation.effectiveSalesPrice).toBe(9999);
   });
 
   test('clear-price resets the manual price and the lock, but KEEPS the target', async () => {
     await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
-      .send({ locked: true, target_margin_pct: 55 });
+      .send({ locked: true, locked_margin_pct: 55 });
 
     const res = await request(app).patch(`/api/projects/${pid}/clear-price`).set('Cookie', cookie).send({});
     expect(res.status).toBe(200);
     expect(res.body.actual_sales_price).toBeNull();
     expect(res.body.margin_locked).toBe(0);
-    // The target is a per-project SETTING since #732, not the lock's pin.
-    // Clearing a price is not a decision to abandon the project's target.
-    expect(res.body.target_margin_pct).toBe(55);
+    // The target was never touched by locking at 55% in the first place.
+    expect(res.body.target_margin_pct).toBe(40);
     expect(res.body.calculation.marginLock).toBeNull();
     expect(res.body.calculation.effectiveSalesPrice).toBeNull();
     expect(res.body.calculation.actualMargin).toBeNull();
     // ...and it still drives the suggestion.
-    expect(res.body.calculation.targetMarginPct).toBe(55);
+    expect(res.body.calculation.targetMarginPct).toBe(40);
   });
 
   test('a lock with no production cost yields no price and a no-cost reason', async () => {
@@ -908,7 +948,7 @@ describe('Margin lock routes', () => {
     await request(app).put(`/api/projects/${empty.body.id}/extras`).set('Cookie', cookie).send([]);
 
     const res = await request(app).patch(`/api/projects/${empty.body.id}/margin-lock`).set('Cookie', cookie)
-      .send({ locked: true, target_margin_pct: 50 });
+      .send({ locked: true, locked_margin_pct: 50 });
     expect(res.status).toBe(200);
     expect(res.body.calculation.marginLock.reason).toBe('no-cost');
     expect(res.body.calculation.effectiveSalesPrice).toBeNull();
@@ -917,11 +957,15 @@ describe('Margin lock routes', () => {
 
   test('a duplicate inherits the lock but not the manual price', async () => {
     await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
-      .send({ locked: true, target_margin_pct: 42 });
+      .send({ locked: true, locked_margin_pct: 42 });
+    const before = await getProject(pid);
     const dup = await request(app).post(`/api/projects/${pid}/duplicate`).set('Cookie', cookie).send({});
     expect(dup.status).toBe(201);
     expect(dup.body.margin_locked).toBe(1);
-    expect(dup.body.target_margin_pct).toBe(42);
+    expect(dup.body.locked_margin_pct).toBe(42);
+    // The target copies whatever the source project's target was — unrelated
+    // to the lock pct just set above.
+    expect(dup.body.target_margin_pct).toBe(before.target_margin_pct);
     expect(dup.body.actual_sales_price).toBeNull();
   });
 

@@ -1932,7 +1932,7 @@ describe('margin lock', () => {
     test('locked ignores the stored manual price and derives one from the margin', () => {
       const r = calc.calculateProject({
         plates: [lockPlate], settings: defaultSettings, itemsPerSet: 1,
-        actualSalesPrice: 999, marginLocked: true, targetMarginPct: 60,
+        actualSalesPrice: 999, marginLocked: true, targetMarginPct: 60, lockedMarginPct: 60,
       });
       expect(r.marginLock.locked).toBe(true);
       expect(r.marginLock.targetPct).toBe(60);
@@ -1943,12 +1943,12 @@ describe('margin lock', () => {
     test('price follows a cost increase while the margin holds', () => {
       const cheap = calc.calculateProject({
         plates: [lockPlate], settings: defaultSettings, itemsPerSet: 1,
-        marginLocked: true, targetMarginPct: 60,
+        marginLocked: true, targetMarginPct: 60, lockedMarginPct: 60,
       });
       const pricey = calc.calculateProject({
         plates: [{ ...lockPlate, plastic_grams: 300, print_time_minutes: 600 }],
         settings: defaultSettings, itemsPerSet: 1,
-        marginLocked: true, targetMarginPct: 60,
+        marginLocked: true, targetMarginPct: 60, lockedMarginPct: 60,
       });
       expect(pricey.pricing.productionCost).toBeGreaterThan(cheap.pricing.productionCost);
       expect(pricey.effectiveSalesPrice).toBeGreaterThan(cheap.effectiveSalesPrice);
@@ -1968,11 +1968,11 @@ describe('margin lock', () => {
     test('price follows a cost decrease too', () => {
       const before = calc.calculateProject({
         plates: [{ ...lockPlate, plastic_grams: 300 }],
-        settings: defaultSettings, itemsPerSet: 1, marginLocked: true, targetMarginPct: 45,
+        settings: defaultSettings, itemsPerSet: 1, marginLocked: true, targetMarginPct: 45, lockedMarginPct: 45,
       });
       const after = calc.calculateProject({
         plates: [{ ...lockPlate, plastic_grams: 30 }],
-        settings: defaultSettings, itemsPerSet: 1, marginLocked: true, targetMarginPct: 45,
+        settings: defaultSettings, itemsPerSet: 1, marginLocked: true, targetMarginPct: 45, lockedMarginPct: 45,
       });
       expect(after.effectiveSalesPrice).toBeLessThan(before.effectiveSalesPrice);
       expect(Math.abs(after.effectiveSalesPrice - after.marginLock.rawPrice)).toBeLessThanOrEqual(0.005);
@@ -1981,7 +1981,7 @@ describe('margin lock', () => {
     test('locked with no plates yields no price and a no-cost reason', () => {
       const r = calc.calculateProject({
         plates: [], settings: defaultSettings, itemsPerSet: 1,
-        actualSalesPrice: 50, marginLocked: true, targetMarginPct: 60,
+        actualSalesPrice: 50, marginLocked: true, targetMarginPct: 60, lockedMarginPct: 60,
       });
       expect(r.marginLock.reason).toBe('no-cost');
       expect(r.effectiveSalesPrice).toBeNull();
@@ -1992,7 +1992,7 @@ describe('margin lock', () => {
     test('locked above the VAT ceiling yields no price rather than a nonsense one', () => {
       const r = calc.calculateProject({
         plates: [lockPlate], settings: defaultSettings, itemsPerSet: 1,
-        marginLocked: true, targetMarginPct: 95,
+        marginLocked: true, targetMarginPct: 95, lockedMarginPct: 95,
       });
       expect(r.marginLock.reason).toBe('unreachable');
       expect(r.effectiveSalesPrice).toBeNull();
@@ -2003,11 +2003,11 @@ describe('margin lock', () => {
       // The ending still shapes the SUGGESTED price; the actual price is exact.
       const r = calc.calculateProject({
         plates: [lockPlate], settings: { ...defaultSettings, price_rounding: 0.95 },
-        itemsPerSet: 1, marginLocked: true, targetMarginPct: 50,
+        itemsPerSet: 1, marginLocked: true, targetMarginPct: 50, lockedMarginPct: 50,
       });
       const plain = calc.calculateProject({
         plates: [lockPlate], settings: { ...defaultSettings, price_rounding: 0.99 },
-        itemsPerSet: 1, marginLocked: true, targetMarginPct: 50,
+        itemsPerSet: 1, marginLocked: true, targetMarginPct: 50, lockedMarginPct: 50,
       });
       expect(r.effectiveSalesPrice).toBe(plain.effectiveSalesPrice);
       expect(Math.abs(r.effectiveSalesPrice - r.marginLock.rawPrice)).toBeLessThanOrEqual(0.005);
@@ -2022,11 +2022,11 @@ describe('margin lock', () => {
       const bigPlate = { ...lockPlate, plastic_grams: 3000, print_time_minutes: 6000 };
       const green = calc.calculateProject({
         plates: [bigPlate], settings: defaultSettings, itemsPerSet: 1,
-        marginLocked: true, targetMarginPct: 60,
+        marginLocked: true, targetMarginPct: 60, lockedMarginPct: 60,
       });
       const red = calc.calculateProject({
         plates: [bigPlate], settings: defaultSettings, itemsPerSet: 1,
-        marginLocked: true, targetMarginPct: 1,
+        marginLocked: true, targetMarginPct: 1, lockedMarginPct: 1,
       });
       expect(green.actualIndicator).toBe('green');
       expect(red.actualIndicator).toBe('red');
@@ -2039,7 +2039,7 @@ describe('margin lock', () => {
       // pin holds.
       const r = calc.calculateProject({
         plates: [lockPlate], settings: defaultSettings, itemsPerSet: 1,
-        marginLocked: true, targetMarginPct: 1,
+        marginLocked: true, targetMarginPct: 1, lockedMarginPct: 1,
       });
       expect(r.pricing.productionCost).toBeLessThan(1);
       expect(r.effectiveSalesPrice).toBeLessThan(0.99);
@@ -2067,7 +2067,7 @@ describe('margin lock', () => {
         for (const plate of [lockPlate, bigPlate]) {
           const r = calc.calculateProject({
             plates: [plate], settings: defaultSettings, itemsPerSet: 1,
-            marginLocked: true, targetMarginPct: target,
+            marginLocked: true, targetMarginPct: target, lockedMarginPct: target,
           });
           // Half a cent of rounding, nothing more — no nice-pricing drift.
           const driftEx = Math.abs(r.effectiveSalesPrice - r.marginLock.rawPrice) / 1.21;
@@ -2080,7 +2080,7 @@ describe('margin lock', () => {
       const r = calc.calculateProject({
         plates: [{ ...lockPlate, plastic_grams: 3000, print_time_minutes: 6000 }],
         settings: defaultSettings, itemsPerSet: 1,
-        marginLocked: true, targetMarginPct: 60,
+        marginLocked: true, targetMarginPct: 60, lockedMarginPct: 60,
       });
       expect(r.actualMargin.profitAmount).toBeCloseTo(
         r.actualMargin.actualExclVat - r.pricing.productionCost, 6
@@ -2164,11 +2164,44 @@ describe('per-project target margin', () => {
     });
   });
 
-  describe('the lock reads the same single target', () => {
-    test('locking adopts the project target rather than a second number', () => {
-      const r = run({ targetMarginPct: 62, marginLocked: true });
+  // Regression coverage for #736. #726 introduced the lock using
+  // `target_margin_pct` as its pin; #732 repurposed that column as the
+  // project's own target but never split the lock's write path off it — so
+  // locking silently overwrote the target and the suggested price followed
+  // the lock instead of staying on the target. `lockedMarginPct` is the
+  // lock's own, separate input; the two must be independent in both directions.
+  describe('the lock is independent of the project target', () => {
+    test('the lock uses its own pin, not the project target', () => {
+      const r = run({ targetMarginPct: 40, marginLocked: true, lockedMarginPct: 62 });
       expect(r.marginLock.targetPct).toBe(62);
       expect(r.actualMargin.marginPct).toBeCloseTo(62, 1);
+      // The target passed through untouched — this is a pure function, so
+      // "untouched" here means the return value, not a column; the DB-level
+      // assertion (the actual regression) lives in server.test.js.
+      expect(r.targetMarginPct).toBe(40);
+    });
+
+    test('the suggested price stays on the project target after a lock at a different pct', () => {
+      const target = run({ targetMarginPct: 40 });
+      const locked = run({ targetMarginPct: 40, marginLocked: true, lockedMarginPct: 63 });
+      expect(locked.pricing.suggestedPrice).toBe(target.pricing.suggestedPrice);
+      expect(locked.pricing.suggestedMarginPct).toBeCloseTo(target.pricing.suggestedMarginPct, 6);
+      // ...while the actual price follows the lock, not the target.
+      expect(locked.actualMargin.marginPct).toBeGreaterThan(locked.pricing.suggestedMarginPct);
+    });
+
+    test('changing the lock pct does not move the suggested price', () => {
+      const lockedAt55 = run({ targetMarginPct: 40, marginLocked: true, lockedMarginPct: 55 });
+      const lockedAt80 = run({ targetMarginPct: 40, marginLocked: true, lockedMarginPct: 80 });
+      expect(lockedAt55.pricing.suggestedPrice).toBe(lockedAt80.pricing.suggestedPrice);
+    });
+
+    test('changing the project target does not move the locked price', () => {
+      const targetLow = run({ targetMarginPct: 30, marginLocked: true, lockedMarginPct: 62 });
+      const targetHigh = run({ targetMarginPct: 70, marginLocked: true, lockedMarginPct: 62 });
+      expect(targetLow.effectiveSalesPrice).toBe(targetHigh.effectiveSalesPrice);
+      expect(targetLow.marginLock.targetPct).toBe(62);
+      expect(targetHigh.marginLock.targetPct).toBe(62);
     });
   });
 });

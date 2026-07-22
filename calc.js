@@ -644,6 +644,12 @@ function calculateTotalPrintTime(plates, itemsPerSet = 1) {
  *     value (rows predating the column); a stored value always wins, so editing
  *     the global default never moves an existing project.
  *   - testPrints: Array<{estimated_cost, attachmentBreakdowns}> (custom projects)
+ *   - lockedMarginPct: number | null — the LOCK's own pin, independent of
+ *     targetMarginPct (task #736). Used only when marginLocked is true, and
+ *     only to derive the actual sales price. No fallback to targetMarginPct:
+ *     that conflation (both concepts sharing one column) is the #736 bug.
+ *     Absent/null while locked simply yields no derivable price, same as any
+ *     other non-numeric target (see `calculateLockedPrice`).
  * @returns {object} full breakdown
  */
 function calculateProject(opts) {
@@ -656,6 +662,7 @@ function calculateProject(opts) {
     actualSalesPrice = null,
     marginLocked = false,
     targetMarginPct = null,
+    lockedMarginPct = null,
   } = opts;
 
   const s = {
@@ -765,18 +772,21 @@ function calculateProject(opts) {
     pricing.suggestedMarginPct, projectTarget, s.lowest_target_margin_pct
   );
 
-  // Margin lock: the target percentage drives the price, not the other way
-  // round. The locked price is always derived here rather than stored, so a
-  // later cost change moves the price automatically with no write-back.
+  // Margin lock: the LOCK's own percentage drives the price, not the other
+  // way round, and not the project target (task #736 — those two used to
+  // share `target_margin_pct`, so locking silently overwrote the project's
+  // target and the suggested price followed the lock instead of the target).
+  // The locked price is always derived here rather than stored, so a later
+  // cost change moves the price automatically with no write-back.
   let marginLock = null;
   let effectiveSalesPrice = actualSalesPrice;
   if (marginLocked) {
     // No `price_rounding` here on purpose — the price ending is for the
     // suggested price only; a locked actual price is exact to the cent.
     const lock = calculateLockedPrice(
-      pricing.productionCost, projectTarget, s.vat_rate
+      pricing.productionCost, lockedMarginPct, s.vat_rate
     );
-    marginLock = { locked: true, targetPct: projectTarget, ...lock };
+    marginLock = { locked: true, targetPct: lockedMarginPct, ...lock };
     // A lock with no derivable price falls back to no actual price at all
     // rather than silently reverting to the stale manual one.
     effectiveSalesPrice = lock.price;

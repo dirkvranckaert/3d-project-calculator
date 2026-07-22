@@ -470,6 +470,7 @@ function enrichProject(db, project) {
     actualSalesPrice: project.actual_sales_price,
     marginLocked: !!project.margin_locked,
     targetMarginPct: project.target_margin_pct,
+    lockedMarginPct: project.locked_margin_pct,
   });
 
   return {
@@ -571,6 +572,7 @@ function enrichProjectLite(db, project) {
     actualSalesPrice: project.actual_sales_price,
     marginLocked: !!project.margin_locked,
     targetMarginPct: project.target_margin_pct,
+    lockedMarginPct: project.locked_margin_pct,
   });
 
   return {
@@ -649,10 +651,17 @@ app.put('/api/projects/:id', (req, res) => {
 });
 
 /**
- * Lock or unlock the target margin.
- * Body: `{ locked: boolean, target_margin_pct?: number }`.
+ * Lock or unlock the actual-sales-price margin.
+ * Body: `{ locked: boolean, locked_margin_pct?: number }`.
  *
- * The target is an **ex-VAT** margin — (price_ex - cost) / price_ex — and must
+ * This is the LOCK's own pin, held in `locked_margin_pct` — never
+ * `target_margin_pct` (task #736: the two used to share that column, so
+ * locking silently overwrote the project's target and the suggested price
+ * followed the lock instead of staying on the target). Editing the project
+ * target from the edit-project dialog goes through `PUT /api/projects/:id`
+ * and never touches this column or `margin_locked`.
+ *
+ * The pin is an **ex-VAT** margin — (price_ex - cost) / price_ex — and must
  * stay below the hard cap (see `calc.maxReachableMarginPct`); the price runs
  * away towards infinity as it approaches 100%.
  * Unlocking keeps the stored percentage so re-locking is one click.
@@ -663,26 +672,26 @@ app.patch('/api/projects/:id/margin-lock', (req, res) => {
   if (!project) return res.status(404).json({ error: 'Not found' });
 
   const locked = !!req.body?.locked;
-  let target = project.target_margin_pct;
-  if (req.body?.target_margin_pct !== undefined && req.body.target_margin_pct !== null) {
-    target = Number(req.body.target_margin_pct);
+  let pct = project.locked_margin_pct;
+  if (req.body?.locked_margin_pct !== undefined && req.body.locked_margin_pct !== null) {
+    pct = Number(req.body.locked_margin_pct);
   }
 
   if (locked) {
     const maxPct = calc.maxReachableMarginPct();
-    if (!Number.isFinite(target)) {
-      return res.status(400).json({ error: 'A target margin percentage is required to lock' });
+    if (!Number.isFinite(pct)) {
+      return res.status(400).json({ error: 'A margin percentage is required to lock' });
     }
-    if (target >= maxPct) {
+    if (pct >= maxPct) {
       return res.status(400).json({
-        error: `Target margin (excl. VAT) must be below ${maxPct}%`,
+        error: `Locked margin (excl. VAT) must be below ${maxPct}%`,
         maxMarginPct: maxPct,
       });
     }
   }
 
-  db.prepare("UPDATE projects SET margin_locked=?, target_margin_pct=?, updated_at=datetime('now') WHERE id=?")
-    .run(locked ? 1 : 0, Number.isFinite(target) ? target : null, req.params.id);
+  db.prepare("UPDATE projects SET margin_locked=?, locked_margin_pct=?, updated_at=datetime('now') WHERE id=?")
+    .run(locked ? 1 : 0, Number.isFinite(pct) ? pct : null, req.params.id);
 
   const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
   res.json(enrichProject(db, updated));
@@ -721,11 +730,12 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
   // The margin lock is a pricing policy, not a recorded sale, so it follows the
   // copy — unlike actual_sales_price, which stays empty on a duplicate.
   const r = db.prepare(`INSERT INTO projects
-    (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, margin_locked, target_margin_pct)
-    VALUES (?,?,?,?,?,?,?,?,?)`)
+    (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, margin_locked, target_margin_pct, locked_margin_pct)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`)
     .run(`${src.name} (copy)`, src.customer_name, src.items_per_set, src.tags || '', src.notes, src.is_custom || 0,
       src.design_notes || null, src.margin_locked || 0,
-      src.target_margin_pct ?? defaultTargetMargin(db));
+      src.target_margin_pct ?? defaultTargetMargin(db),
+      src.locked_margin_pct ?? null);
   const newId = r.lastInsertRowid;
 
   // Copy plates (including test-print plates — orphan plates copied as orphans with test_print_id=null)
