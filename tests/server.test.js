@@ -28,6 +28,7 @@ beforeAll(() => {
 });
 
 const { app } = require('../server');
+const calc = require('../calc');
 
 let cookie;
 
@@ -757,11 +758,14 @@ describe('Margin lock routes', () => {
       .send({ name: 'Plate 1', print_time_minutes: 600, plastic_grams: 800, items_per_plate: 1 });
   });
 
-  test('a new project starts unlocked with no target', async () => {
+  test('a new project starts unlocked, with the seeded default target', async () => {
+    // Every project now carries its OWN target, seeded from the settings
+    // default at creation. Unlocked still means no marginLock block.
     const p = await getProject(pid);
     expect(p.margin_locked).toBe(0);
-    expect(p.target_margin_pct).toBeNull();
+    expect(p.target_margin_pct).toBe(40);
     expect(p.calculation.marginLock).toBeNull();
+    expect(p.calculation.targetMarginPct).toBe(40);
   });
 
   test('locking derives the sales price from the target margin', async () => {
@@ -851,12 +855,16 @@ describe('Margin lock routes', () => {
       .send({ locked: true, target_margin_pct: 60 });
   });
 
-  test('locking without any target is rejected', async () => {
+  test('locking with no target in the body uses the project stored target', async () => {
+    // Previously a 400: no project had a target until one was pinned. Now every
+    // project carries one, so locking without a body value is well defined and
+    // simply adopts it.
     const fresh = await request(app).post('/api/projects').set('Cookie', cookie)
       .send({ name: 'No Target', customer_name: null, items_per_set: 1 });
     const res = await request(app).patch(`/api/projects/${fresh.body.id}/margin-lock`).set('Cookie', cookie)
       .send({ locked: true });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    expect(res.body.target_margin_pct).toBe(40);
   });
 
   test('unlocking keeps the stored percentage and restores the manual price', async () => {
@@ -874,7 +882,7 @@ describe('Margin lock routes', () => {
     expect(res.body.calculation.effectiveSalesPrice).toBe(9999);
   });
 
-  test('clear-price resets the manual price and the lock together', async () => {
+  test('clear-price resets the manual price and the lock, but KEEPS the target', async () => {
     await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
       .send({ locked: true, target_margin_pct: 55 });
 
@@ -882,10 +890,14 @@ describe('Margin lock routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.actual_sales_price).toBeNull();
     expect(res.body.margin_locked).toBe(0);
-    expect(res.body.target_margin_pct).toBeNull();
+    // The target is a per-project SETTING since #732, not the lock's pin.
+    // Clearing a price is not a decision to abandon the project's target.
+    expect(res.body.target_margin_pct).toBe(55);
     expect(res.body.calculation.marginLock).toBeNull();
     expect(res.body.calculation.effectiveSalesPrice).toBeNull();
     expect(res.body.calculation.actualMargin).toBeNull();
+    // ...and it still drives the suggestion.
+    expect(res.body.calculation.targetMarginPct).toBe(55);
   });
 
   test('a lock with no production cost yields no price and a no-cost reason', async () => {
@@ -1572,4 +1584,172 @@ describe('Custom one-off project lines', () => {
 // Clean up
 afterAll(() => {
   removeDbFiles(testDbPath);
+});
+
+describe('per-project target margin (#732)', () => {
+  const mk = async (body = {}) => (await request(app).post('/api/projects').set('Cookie', cookie)
+    .send({ name: 'Target Test', customer_name: null, items_per_set: 1, ...body })).body;
+  const get = async (id) => (await request(app).get(`/api/projects/${id}`).set('Cookie', cookie)).body;
+
+  test('a new project is seeded with the settings default', async () => {
+    const p = await mk();
+    expect(p.target_margin_pct).toBe(40);
+  });
+
+  test('the seed is a stored value, so changing the default does not move it', async () => {
+    const before = await mk();
+    await request(app).put('/api/settings/default_target_margin_pct').set('Cookie', cookie)
+      .send({ value: '70' });
+    try {
+      expect((await get(before.id)).target_margin_pct).toBe(40);   // untouched
+      expect((await mk()).target_margin_pct).toBe(70);             // new one picks it up
+    } finally {
+      await request(app).put('/api/settings/default_target_margin_pct').set('Cookie', cookie)
+        .send({ value: '40' });
+    }
+  });
+
+  test('the target is editable per project and drives the suggested price', async () => {
+    const p = await mk();
+    await request(app).post(`/api/projects/${p.id}/plates`).set('Cookie', cookie)
+      .send({ name: 'Plate 1', print_time_minutes: 600, plastic_grams: 800, items_per_plate: 1 });
+
+    const at40 = (await get(p.id)).calculation.pricing.suggestedPrice;
+
+    await request(app).put(`/api/projects/${p.id}`).set('Cookie', cookie)
+      .send({ name: 'Target Test', customer_name: null, items_per_set: 1, target_margin_pct: 70 });
+
+    const after = await get(p.id);
+    expect(after.target_margin_pct).toBe(70);
+    expect(after.calculation.pricing.suggestedPrice).toBeGreaterThan(at40);
+    // Assert the price the formula gives rather than a margin tolerance: the
+    // .99 ending is worth more than 2pp of margin on a price this small.
+    const cost = after.calculation.pricing.productionCost;
+    const expected = calc.roundToPriceEnding((cost / (1 - 0.70)) * 1.21, 0.99);
+    expect(after.calculation.pricing.suggestedPrice).toBeCloseTo(expected, 6);
+  });
+
+  test('an ordinary edit that omits the target does not clear it', async () => {
+    const p = await mk();
+    await request(app).put(`/api/projects/${p.id}`).set('Cookie', cookie)
+      .send({ name: 'Target Test', customer_name: null, items_per_set: 1, target_margin_pct: 55 });
+    await request(app).put(`/api/projects/${p.id}`).set('Cookie', cookie)
+      .send({ name: 'Renamed', customer_name: null, items_per_set: 1 });
+    expect((await get(p.id)).target_margin_pct).toBe(55);
+  });
+
+  test('a duplicate carries the source target', async () => {
+    const p = await mk();
+    await request(app).put(`/api/projects/${p.id}`).set('Cookie', cookie)
+      .send({ name: 'Target Test', customer_name: null, items_per_set: 1, target_margin_pct: 63 });
+    const dup = (await request(app).post(`/api/projects/${p.id}/duplicate`).set('Cookie', cookie).send({})).body;
+    expect(dup.target_margin_pct).toBe(63);
+  });
+
+  test('the indicator is measured against the project target, not a global one', async () => {
+    const low = await mk();
+    const high = await mk();
+    for (const id of [low.id, high.id]) {
+      await request(app).post(`/api/projects/${id}/plates`).set('Cookie', cookie)
+        .send({ name: 'Plate 1', print_time_minutes: 600, plastic_grams: 800, items_per_plate: 1 });
+    }
+    // Establish the margin a EUR 200 price actually yields, then straddle it —
+    // hardcoded targets would be fixture-dependent.
+    await request(app).put(`/api/projects/${low.id}`).set('Cookie', cookie)
+      .send({ name: 'x', customer_name: null, items_per_set: 1, actual_sales_price: 200, target_margin_pct: 40 });
+    const observed = (await get(low.id)).calculation.actualMargin.marginPct;
+
+    // Same actual price on both; only the target differs.
+    for (const [id, target] of [[low.id, observed - 10], [high.id, observed + 5]]) {
+      await request(app).put(`/api/projects/${id}`).set('Cookie', cookie)
+        .send({ name: 'x', customer_name: null, items_per_set: 1, actual_sales_price: 200, target_margin_pct: target });
+    }
+    const a = await get(low.id), b = await get(high.id);
+    expect(a.calculation.actualMargin.marginPct).toBeCloseTo(b.calculation.actualMargin.marginPct, 6);
+    expect(a.calculation.actualIndicator).toBe('green');   // clears its own target
+    expect(b.calculation.actualIndicator).toBe('orange');  // misses a higher one
+  });
+});
+
+describe('the project target survives every price-state reset (#732 regression)', () => {
+  // Bavo's end-to-end repro: clear-price used to null `target_margin_pct`,
+  // after which the project silently tracked the global default. Every path
+  // that resets price state is checked here, because the root cause was a route
+  // written when that column WAS the lock pin.
+  const get = async (id) => (await request(app).get(`/api/projects/${id}`).set('Cookie', cookie)).body;
+  const setDefault = (v) => request(app).put('/api/settings/default_target_margin_pct')
+    .set('Cookie', cookie).send({ value: String(v) });
+
+  let pid;
+  beforeAll(async () => {
+    const created = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'Target Survives', customer_name: null, items_per_set: 1 });
+    pid = created.body.id;
+    await request(app).post(`/api/projects/${pid}/plates`).set('Cookie', cookie)
+      .send({ name: 'Plate 1', print_time_minutes: 600, plastic_grams: 800, items_per_plate: 1 });
+    await request(app).put(`/api/projects/${pid}`).set('Cookie', cookie)
+      .send({ name: 'Target Survives', customer_name: null, items_per_set: 1, target_margin_pct: 60 });
+  });
+  afterAll(async () => { await setDefault(40); });
+
+  test('clear-price keeps the target and the price it implies', async () => {
+    const before = await get(pid);
+    expect(before.calculation.targetMarginPct).toBe(60);
+    const priceBefore = before.calculation.pricing.suggestedPrice;
+
+    await request(app).patch(`/api/projects/${pid}/clear-price`).set('Cookie', cookie).send({});
+
+    const after = await get(pid);
+    expect(after.target_margin_pct).toBe(60);
+    expect(after.calculation.pricing.suggestedPrice).toBe(priceBefore);
+  });
+
+  test('and the cleared project does NOT then track the global default', async () => {
+    // The second half of the repro: with the target nulled, moving the default
+    // moved this existing project. Decision 3 says it must not.
+    await setDefault(80);
+    const after = await get(pid);
+    expect(after.calculation.targetMarginPct).toBe(60);
+    expect(after.target_margin_pct).toBe(60);
+  });
+
+  test('an explicit null in a PUT does not clear the target either', async () => {
+    await request(app).put(`/api/projects/${pid}`).set('Cookie', cookie)
+      .send({ name: 'Target Survives', customer_name: null, items_per_set: 1, target_margin_pct: null });
+    expect((await get(pid)).target_margin_pct).toBe(60);
+  });
+
+  test('unlocking keeps it too', async () => {
+    await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: true, target_margin_pct: 60 });
+    await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: false });
+    expect((await get(pid)).target_margin_pct).toBe(60);
+  });
+
+  test('no reset path can leave a project without a target', async () => {
+    // Self-contained on a project of its own: reading the shared list at the
+    // end of the describe passed even with the clear-price null reintroduced,
+    // because earlier tests re-set the target before the sweep ran. Each path
+    // is exercised here on a freshly created project and asserted immediately.
+    const fresh = (await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'Reset Sweep', customer_name: null, items_per_set: 1 })).body;
+    const base = { name: 'Reset Sweep', customer_name: null, items_per_set: 1 };
+    await request(app).put(`/api/projects/${fresh.id}`).set('Cookie', cookie)
+      .send({ ...base, target_margin_pct: 62 });
+
+    const resets = {
+      'clear-price': () => request(app).patch(`/api/projects/${fresh.id}/clear-price`).set('Cookie', cookie).send({}),
+      'unlock': () => request(app).patch(`/api/projects/${fresh.id}/margin-lock`).set('Cookie', cookie).send({ locked: false }),
+      'PUT with an explicit null': () => request(app).put(`/api/projects/${fresh.id}`).set('Cookie', cookie)
+        .send({ ...base, target_margin_pct: null }),
+      'PUT omitting the field': () => request(app).put(`/api/projects/${fresh.id}`).set('Cookie', cookie).send(base),
+    };
+
+    for (const [label, run] of Object.entries(resets)) {
+      await run();
+      const after = (await get(fresh.id)).target_margin_pct;
+      expect(`${label}: ${after}`).toBe(`${label}: 62`);
+    }
+  });
 });

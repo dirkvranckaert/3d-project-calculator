@@ -102,6 +102,11 @@
         <input type="text" id="proj-customer">
         <label>Items per Set</label>
         <input type="number" id="proj-items-per-set" min="1" value="1">
+        <label>Target Margin (% excl. VAT)</label>
+        <input type="number" id="proj-target-margin" step="1" min="-100" max="94.99"
+               oninput="updateTargetMarginHint()">
+        <div id="proj-target-margin-hint" class="field-hint" hidden></div>
+        <div id="proj-target-margin-guidance"></div>
         <label>Tags</label>
         <div class="tags-input" id="proj-tags-widget">
           <div class="tags-pills" id="proj-tags-pills"></div>

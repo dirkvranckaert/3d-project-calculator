@@ -1687,7 +1687,9 @@ function renderPricingSection(p) {
   const isSet = setSize > 1;
   const pi = (v) => `${fmt((Number(v) || 0) / setSize)} / item`;
 
-  const greenPct = settings.margin_green_pct || 40;
+  // This is a PRICE HINT, not a colour band — it must track the project's own
+  // target or it contradicts the margin badge rendered beside it.
+  const greenPct = c.targetMarginPct;
   const vatMult = 1 + (settings.vat_rate || 21) / 100;
   // Margin is measured excl. VAT: price_ex = cost / (1 - margin), then + VAT.
   const denominator = 1 - (greenPct / 100);
@@ -2162,6 +2164,72 @@ const tagsWidget = (function createTagsWidget() {
 })();
 
 /* ================================================================== */
+/*  Target margin — guidance + per-project field                       */
+/* ================================================================== */
+
+/**
+ * Advisory target margins per segment.
+ *
+ * STATIC REFERENCE CONTENT — not configuration. A snapshot of the 2026-07-22
+ * target-margin research (personal-assistant
+ * `logs/2026-07-22-printseed-target-margin-research.md`, section 4), converted
+ * to the ex-VAT basis this app has measured margin on since that same date:
+ *
+ *   floor        research 4.1, pin 33% incl-VAT -> 39.9% ex-VAT -> 40%
+ *   small runs   research 4.2, pin 40% incl-VAT -> 48.4% ex-VAT -> 48%
+ *   one-off      research 4.3, pin 50% incl-VAT -> 60.5% ex-VAT -> 60%
+ *   own product  research 4.4, pin 55% incl-VAT -> 66.6% ex-VAT -> 65-70%
+ *
+ * Deliberately NOT stored in `settings`, NOT editable, and nothing is derived
+ * from them. Revisit against the report, not against the code.
+ */
+const TARGET_MARGIN_GUIDANCE = [
+  { segment: 'Floor — any job', target: '40%' },
+  { segment: 'Small series', target: '48%' },
+  { segment: 'One-off custom / prototyping', target: '60%' },
+  { segment: 'Own product (B2C)', target: '65–70%' },
+];
+
+function renderTargetMarginGuidance() {
+  const rows = TARGET_MARGIN_GUIDANCE.map(g => `
+    <tr><td>${esc(g.segment)}</td><td class="reference-target">${esc(g.target)}</td></tr>`).join('');
+  return `<div class="reference-block">
+    <div class="reference-block-eyebrow">Reference</div>
+    <h5>Recommended target margins (excl. VAT)</h5>
+    <table>${rows}</table>
+    <div class="reference-note">A floor set by cost, not a ceiling — the market may bear more, and
+    for a product with no real alternative you should go above it.</div>
+    <div class="reference-note">Guidance only: nothing here is a setting, and editing the fields
+    above does not change these numbers.</div>
+  </div>`;
+}
+
+/**
+ * Warn — never block — when a project target sits under the global floor.
+ *
+ * Such a project has an empty orange band: everything below the floor is red
+ * regardless of its own target, so the target stops meaning anything until it is
+ * raised above the floor. Dirk may still have a reason, so this is a hint.
+ */
+function targetMarginHint(targetPct, lowestPct) {
+  const t = Number(targetPct);
+  const low = Number(lowestPct);
+  if (!Number.isFinite(t) || !Number.isFinite(low)) return null;
+  if (t >= low) return null;
+  return `Below the lowest target margin (${fmtPct(low)}). Any margin under ${fmtPct(low)} shows red, `
+    + `so this project has no orange band until its target is above that floor.`;
+}
+
+function updateTargetMarginHint() {
+  const input = document.getElementById('proj-target-margin');
+  const box = document.getElementById('proj-target-margin-hint');
+  if (!input || !box) return;
+  const msg = targetMarginHint(parseFloat(input.value), settings.lowest_target_margin_pct || 25);
+  box.hidden = !msg;
+  box.textContent = msg || '';
+}
+
+/* ================================================================== */
 /*  Project actions                                                    */
 /* ================================================================== */
 function openProjectModal(id = null) {
@@ -2171,6 +2239,21 @@ function openProjectModal(id = null) {
   document.getElementById('proj-name').value = p?.name || '';
   document.getElementById('proj-customer').value = p?.customer_name || '';
   document.getElementById('proj-items-per-set').value = p?.items_per_set || 1;
+  // A new project starts at the settings default; an existing one always shows
+  // its OWN stored target, never the default (changing the default must not
+  // move existing projects).
+  const tgt = document.getElementById('proj-target-margin');
+  if (tgt) {
+    // An existing project shows its OWN stored target and nothing else — every
+    // project has one since #732, so there is nothing to substitute. Only a NEW
+    // project takes the settings default, which is what "seed" means.
+    tgt.value = p
+      ? (p.target_margin_pct ?? '')
+      : (settings.default_target_margin_pct ?? 40);
+  }
+  const guide = document.getElementById('proj-target-margin-guidance');
+  if (guide) guide.innerHTML = renderTargetMarginGuidance();
+  updateTargetMarginHint();
   // Seed the tags widget with the project's existing tags (if any).
   tagsWidget.set(parseTagsString(p?.tags || ''));
   openModal('project-modal');
@@ -2196,6 +2279,9 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
     items_per_set: parseInt(document.getElementById('proj-items-per-set').value) || 1,
     tags: serializePills(tagsWidget.get()),
   };
+  const targetRaw = document.getElementById('proj-target-margin')?.value;
+  const targetNum = parseFloat(String(targetRaw ?? '').replace(',', '.'));
+  if (Number.isFinite(targetNum)) data.target_margin_pct = targetNum;
   if (!data.name) return;
   if (editingProjectId) {
     const preserved = preservedProjectFields(findProject(editingProjectId));
@@ -2782,10 +2868,13 @@ function renderMarginsSettings() {
     <div class="settings-row"><label>Printer Cost Margin (%)</label>
       <input type="number" value="${settings.printer_cost_profit_pct || 0}" step="1" onchange="saveSetting('printer_cost_profit_pct', this.value)"></div>
     <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
-    <div class="settings-row"><label>Green Margin Threshold (% excl. VAT)</label>
-      <input type="number" value="${settings.margin_green_pct || 40}" step="1" onchange="saveSetting('margin_green_pct', this.value)"></div>
-    <div class="settings-row"><label>Orange Margin Threshold (% excl. VAT)</label>
-      <input type="number" value="${settings.margin_orange_pct || 25}" step="1" onchange="saveSetting('margin_orange_pct', this.value)"></div>`;
+    <div class="settings-row"><label>Default Target Margin (% excl. VAT)<br>
+      <span style="font-size:12px;color:var(--text-muted)">Seeds new projects only — existing projects keep their own target</span></label>
+      <input type="number" value="${settings.default_target_margin_pct ?? 40}" step="1" onchange="saveSetting('default_target_margin_pct', this.value)"></div>
+    <div class="settings-row"><label>Lowest Target Margin (% excl. VAT)<br>
+      <span style="font-size:12px;color:var(--text-muted)">Global floor — any margin below this shows red</span></label>
+      <input type="number" value="${settings.lowest_target_margin_pct ?? 25}" step="1" onchange="saveSetting('lowest_target_margin_pct', this.value)"></div>
+    ${renderTargetMarginGuidance()}`;
 }
 function renderThemeSettings() {
   const current = settings.theme || 'system';
@@ -3018,7 +3107,7 @@ async function renderConnectedApps(el) {
 async function saveSetting(key, value) {
   const numericKeys = ['hourly_rate', 'extra_uren_default_rate', 'electricity_price_kwh', 'vat_rate', 'price_rounding',
     'material_profit_pct', 'processing_profit_pct', 'electricity_profit_pct', 'printer_cost_profit_pct',
-    'margin_green_pct', 'margin_orange_pct'];
+    'default_target_margin_pct', 'lowest_target_margin_pct'];
   const val = numericKeys.includes(key) ? parseFloat(value) : value;
   await PUT(`/api/settings/${key}`, { value: val });
   settings[key] = val;
@@ -4089,8 +4178,11 @@ function renderVerifyResult(result, ref) {
 
   // Margin-threshold indicator for vs-selling-price (mirrors project pricing thresholds)
   function sellingIndicator(deltaPct) {
-    const green  = settings.margin_green_pct  || 40;
-    const orange = settings.margin_orange_pct || 25;
+    // NOTE (#729): this colours a COST DELTA against margin thresholds, which
+    // is a pre-existing category error and is deliberately not fixed here. Only
+    // the renamed settings keys are carried across.
+    const green  = settings.default_target_margin_pct || 40;
+    const orange = settings.lowest_target_margin_pct  || 25;
     if (deltaPct >= green)  return 'green';
     if (deltaPct >= orange) return 'orange';
     return 'red';

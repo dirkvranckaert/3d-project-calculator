@@ -234,6 +234,7 @@ function migrate(db) {
   }
 
   migrateMarginBasisToExVat(db);
+  migrateTargetMarginPerProject(db);
 }
 
 /**
@@ -295,6 +296,61 @@ function migrateMarginBasisToExVat(db) {
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('margin_basis_ex_vat', '1')").run();
 }
 
+/**
+ * Per-project target margin (Dirk 2026-07-22).
+ *
+ * Two things move here, and the second one is the reason this is a write
+ * migration rather than a read-time fallback:
+ *
+ * 1. The settings pair is renamed to say what it now does.
+ *      `margin_green_pct`  -> `default_target_margin_pct` (SEEDS a new project)
+ *      `margin_orange_pct` -> `lowest_target_margin_pct`  (live global floor)
+ *    The old keys are removed, not left behind: leaving a `margin_green_pct`
+ *    row that nothing reads is exactly the trap this rename exists to close.
+ *
+ * 2. Every project WITHOUT its own target is backfilled with the current
+ *    default. Dirk's rule is that changing the settings default must never move
+ *    an existing project's price. A read-time fallback would break that for
+ *    every pre-existing row — edit the default and they would all reprice. So
+ *    each project gets its own stored value once, and from then on only the
+ *    project's own field moves it. Rows that already carry a target (margin-lock
+ *    pins) are left exactly as they are.
+ *
+ * Guarded by a marker so it runs once.
+ */
+function migrateTargetMarginPerProject(db) {
+  const done = db.prepare("SELECT 1 FROM settings WHERE key = 'target_margin_per_project'").get();
+  if (done) return;
+
+  const get = db.prepare('SELECT value FROM settings WHERE key = ?');
+  const put = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+  const del = db.prepare('DELETE FROM settings WHERE key = ?');
+
+  const rename = (oldKey, newKey) => {
+    const existing = get.get(newKey);
+    const old = get.get(oldKey);
+    if (!existing && old) put.run(newKey, old.value);
+    if (old) del.run(oldKey);
+  };
+  rename('margin_green_pct', 'default_target_margin_pct');
+  rename('margin_orange_pct', 'lowest_target_margin_pct');
+
+  // Read the default back through the same parse the app uses, so a JSON-quoted
+  // value from an older write does not land in the projects table as a string.
+  let def = 40;
+  const row = get.get('default_target_margin_pct');
+  if (row) {
+    let v;
+    try { v = JSON.parse(row.value); } catch { v = row.value; }
+    const n = Number(v);
+    if (Number.isFinite(n)) def = n;
+  }
+
+  db.prepare('UPDATE projects SET target_margin_pct = ? WHERE target_margin_pct IS NULL').run(def);
+
+  put.run('target_margin_per_project', '1');
+}
+
 /* ------------------------------------------------------------------ */
 /*  Default settings & seed data                                       */
 /* ------------------------------------------------------------------ */
@@ -310,11 +366,12 @@ function seedDefaults(db) {
     electricity_profit_pct:   '0',
     printer_cost_profit_pct:  '50',
     price_rounding:           '0.99',
-    // Ex-VAT margin thresholds (Dirk 2026-07-22). Green 40% sits just above the
-    // ~37% industrial floor from the margin research; not a rescale of the old
-    // incl-VAT 30/5, so some projects legitimately change colour.
-    margin_green_pct:         '40',
-    margin_orange_pct:        '25',
+    // Target margin (Dirk 2026-07-22). `default_target_margin_pct` SEEDS a new
+    // project's own target and is not a threshold — changing it never moves an
+    // existing project. `lowest_target_margin_pct` stays a live global floor:
+    // any margin below it is red regardless of the project's own target.
+    default_target_margin_pct: '40',
+    lowest_target_margin_pct:  '25',
     currency:                 '"EUR"',
     currency_symbol:          '"\\u20ac"',
   };

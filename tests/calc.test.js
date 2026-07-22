@@ -16,8 +16,11 @@ const defaultSettings = {
   electricity_profit_pct: 0,
   printer_cost_profit_pct: 50,
   price_rounding: 0.99,
-  margin_green_pct: 30,
-  margin_orange_pct: 5,
+  // Renamed in #732. These suites were silently running against the 40/25
+  // defaults once nothing read the old names — carry the intended values under
+  // the keys the engine actually reads.
+  default_target_margin_pct: 30,
+  lowest_target_margin_pct: 5,
 };
 
 // Printers from spreadsheet
@@ -2083,5 +2086,170 @@ describe('margin lock', () => {
         r.actualMargin.actualExclVat - r.pricing.productionCost, 6
       );
     });
+  });
+});
+
+/* ================================================================== */
+/*  Per-project target margin (task #732)                              */
+/* ================================================================== */
+describe('per-project target margin', () => {
+  const plate = {
+    id: 1, enabled: 1, is_test_print: 0,
+    print_time_minutes: 600, plastic_grams: 800, items_per_plate: 1,
+    printer_purchase_price: 1000, printer_earn_back_months: 24, printer_kwh_per_hour: 0.1,
+    material_price_per_kg: 25,
+  };
+  const settings = {
+    vat_rate: 21, price_rounding: 0.99, hourly_rate: 40,
+    material_profit_pct: 200, printer_cost_profit_pct: 50,
+    default_target_margin_pct: 40, lowest_target_margin_pct: 25,
+  };
+  const run = (opts = {}) => calc.calculateProject({
+    plates: [plate], settings, itemsPerSet: 1, ...opts,
+  });
+
+  describe('drives the suggested price', () => {
+    test('the suggested margin comes out at the target', () => {
+      for (const target of [25, 40, 48, 60, 70]) {
+        const r = run({ targetMarginPct: target });
+        // Within the .99 price ending, which still applies to the suggestion.
+        expect(Math.abs(r.pricing.suggestedMarginPct - target)).toBeLessThan(2);
+        expect(r.pricing.suggestedPrice % 1).toBeCloseTo(0.99, 6);
+      }
+    });
+
+    test('a higher target yields a higher suggested price', () => {
+      const prices = [30, 40, 50, 60].map(t => run({ targetMarginPct: t }).pricing.suggestedPrice);
+      for (let i = 1; i < prices.length; i++) expect(prices[i]).toBeGreaterThan(prices[i - 1]);
+    });
+
+    test('replace, not floor — a low target lowers the suggestion', () => {
+      // The old component engine (material x200%) prices well above a 10% target.
+      const legacy = calc.calculateProject({ plates: [plate], settings, itemsPerSet: 1 });
+      const low = run({ targetMarginPct: 10 });
+      expect(low.pricing.suggestedPrice).toBeLessThan(legacy.pricing.suggestedPrice);
+    });
+  });
+
+  describe('target resolution', () => {
+    test('a stored target wins over the settings default', () => {
+      expect(run({ targetMarginPct: 65 }).targetMarginPct).toBe(65);
+    });
+
+    test('no stored target falls back to the settings default', () => {
+      for (const absent of [null, undefined, '']) {
+        expect(run({ targetMarginPct: absent }).targetMarginPct).toBe(40);
+      }
+    });
+
+    test('absent never reads as a 0% target', () => {
+      // Number(null) is 0; pricing at a 0% margin would sell at cost.
+      const r = run({ targetMarginPct: null });
+      expect(r.pricing.suggestedMarginPct).toBeGreaterThan(5);
+      expect(r.pricing.suggestedPrice).toBeGreaterThan(r.pricing.productionCost);
+    });
+
+    test('a stored 0 IS honoured — it is a real target, not an absence', () => {
+      expect(run({ targetMarginPct: 0 }).targetMarginPct).toBe(0);
+    });
+
+    test('changing the default cannot move a project that has its own target', () => {
+      const a = run({ targetMarginPct: 55 });
+      const b = calc.calculateProject({
+        plates: [plate], itemsPerSet: 1, targetMarginPct: 55,
+        settings: { ...settings, default_target_margin_pct: 90 },
+      });
+      expect(b.pricing.suggestedPrice).toBe(a.pricing.suggestedPrice);
+      expect(b.targetMarginPct).toBe(55);
+    });
+  });
+
+  describe('the lock reads the same single target', () => {
+    test('locking adopts the project target rather than a second number', () => {
+      const r = run({ targetMarginPct: 62, marginLocked: true });
+      expect(r.marginLock.targetPct).toBe(62);
+      expect(r.actualMargin.marginPct).toBeCloseTo(62, 1);
+    });
+  });
+});
+
+describe('marginIndicator — red-first ordering', () => {
+  test('normal case: target above the floor', () => {
+    expect(calc.marginIndicator(65, 60, 25)).toBe('green');
+    expect(calc.marginIndicator(60, 60, 25)).toBe('green');
+    expect(calc.marginIndicator(59.9, 60, 25)).toBe('orange');
+    expect(calc.marginIndicator(25, 60, 25)).toBe('orange');
+    expect(calc.marginIndicator(24.9, 60, 25)).toBe('red');
+  });
+
+  test('the same margin colours differently per project target', () => {
+    expect(calc.marginIndicator(55, 50, 25)).toBe('green');
+    expect(calc.marginIndicator(55, 60, 25)).toBe('orange');
+  });
+
+  test('INVERTED: a project target below the global floor', () => {
+    // target 20, lowest 25 — the orange band is empty and red must win below
+    // the floor. Green-first ordering would wrongly call 22 green.
+    expect(calc.marginIndicator(22, 20, 25)).toBe('red');
+    expect(calc.marginIndicator(24.9, 20, 25)).toBe('red');
+    expect(calc.marginIndicator(25, 20, 25)).toBe('green');
+    expect(calc.marginIndicator(30, 20, 25)).toBe('green');
+  });
+
+  test('inverted case leaves no gap — every margin gets a colour', () => {
+    for (let m = -50; m <= 100; m += 0.5) {
+      expect(['red', 'orange', 'green']).toContain(calc.marginIndicator(m, 20, 25));
+    }
+  });
+});
+
+describe('numOr — absent vs zero', () => {
+  test('absent takes the fallback', () => {
+    for (const absent of [null, undefined, '', 'abc', NaN]) {
+      expect(calc.numOr(absent, 40)).toBe(40);
+    }
+  });
+
+  test('a real 0 is honoured, not swallowed', () => {
+    // `Number(x) || 40` returns 40 here, which is the bug this guard exists for.
+    expect(calc.numOr(0, 40)).toBe(0);
+    expect(calc.numOr('0', 40)).toBe(0);
+  });
+
+  test('negatives and decimals pass through', () => {
+    expect(calc.numOr(-10, 40)).toBe(-10);
+    expect(calc.numOr('62.5', 40)).toBe(62.5);
+  });
+});
+
+describe('calculateVerification — batch margin colour', () => {
+  const base = {
+    plates: [], preProcessingMinutes: 0, postProcessingMinutes: 0, hourlyRate: 40,
+    supplies: [{ price_excl_vat: 100, quantity: 1 }], itemsPerSet: 1,
+    settings: { vat_rate: 21, lowest_target_margin_pct: 25 },
+  };
+  // EUR 500 incl VAT on a EUR 100 batch cost -> ~75.8% margin.
+  const run = (targetMarginPct) => calc.calculateVerification({
+    ...base, actualSellingTotalInclVat: 500, targetMarginPct,
+  });
+
+  test('coloured against the project target, not a global', () => {
+    expect(run(60).actualMarginOnBatch.indicator).toBe('green');
+    expect(run(90).actualMarginOnBatch.indicator).toBe('orange');
+  });
+
+  test('an omitted target falls back to 40, and that fallback is live', () => {
+    // Guards the dead-code case: with `Number(null)` the fallback was
+    // unreachable and an omitted target silently coloured against 0.
+    expect(run(null).actualMarginOnBatch.indicator).toBe('green');
+    expect(run(undefined).actualMarginOnBatch.indicator).toBe('green');
+    // Mutating the 40 fallback to 999 must break this.
+    expect(calc.calculateVerification({
+      ...base, actualSellingTotalInclVat: 130, targetMarginPct: null,
+    }).actualMarginOnBatch.indicator).toBe('red');
+  });
+
+  test('a stored 0 target is a real target, not an absence', () => {
+    expect(run(0).actualMarginOnBatch.indicator).toBe('green');
   });
 });
