@@ -647,6 +647,100 @@ describe('POST /api/projects/:projectId/images-from-3mf', () => {
 });
 
 /* ================================================================== */
+/*  Project image ordering (manual drag & drop order)                  */
+/* ================================================================== */
+describe('PUT /api/projects/:projectId/images/order', () => {
+  let pid;
+
+  const uploadImage = (projectId, name) => request(app)
+    .post(`/api/projects/${projectId}/images`)
+    .set('Cookie', cookie)
+    .set('Content-Type', 'application/octet-stream')
+    .set('X-Filename', name)
+    .send(Buffer.from(`fake-png-${name}`));
+
+  const imageNames = async (projectId) => {
+    const res = await request(app).get(`/api/projects/${projectId}`).set('Cookie', cookie);
+    return res.body.images.map(i => i.filename);
+  };
+
+  beforeAll(async () => {
+    const res = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'Image Order Test', customer_name: null, items_per_set: 1 });
+    pid = res.body.id;
+    for (const name of ['a.png', 'b.png', 'c.png']) {
+      const up = await uploadImage(pid, name);
+      expect(up.status).toBe(201);
+    }
+  });
+
+  test('images come back in upload order, first one is primary', async () => {
+    const res = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.body.images.map(i => i.filename)).toEqual(['a.png', 'b.png', 'c.png']);
+    expect(res.body.images[0].is_primary).toBe(1);
+  });
+
+  test('reorder persists across reads', async () => {
+    const before = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    const ids = before.body.images.map(i => i.id);
+    const res = await request(app).put(`/api/projects/${pid}/images/order`).set('Cookie', cookie)
+      .send({ order: [ids[2], ids[0], ids[1]] });
+    expect(res.status).toBe(200);
+    expect(res.body.images.map(i => i.filename)).toEqual(['c.png', 'a.png', 'b.png']);
+    expect(await imageNames(pid)).toEqual(['c.png', 'a.png', 'b.png']);
+  });
+
+  test('a newly uploaded image lands at the end of the manual order', async () => {
+    const up = await uploadImage(pid, 'd.png');
+    expect(up.status).toBe(201);
+    expect(await imageNames(pid)).toEqual(['c.png', 'a.png', 'b.png', 'd.png']);
+  });
+
+  test('unknown ids are ignored and omitted images keep their relative order', async () => {
+    const before = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    const byName = Object.fromEntries(before.body.images.map(i => [i.filename, i.id]));
+    const res = await request(app).put(`/api/projects/${pid}/images/order`).set('Cookie', cookie)
+      .send({ order: [999999, byName['d.png'], byName['d.png'], byName['b.png']] });
+    expect(res.status).toBe(200);
+    // d and b move to the front; c and a keep their existing relative order after them.
+    expect(res.body.images.map(i => i.filename)).toEqual(['d.png', 'b.png', 'c.png', 'a.png']);
+  });
+
+  test('an image from another project cannot be injected into the order', async () => {
+    const other = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'Other Image Project', customer_name: null, items_per_set: 1 });
+    const foreign = await uploadImage(other.body.id, 'foreign.png');
+    expect(foreign.status).toBe(201);
+    const foreignId = foreign.body.images[0].id;
+
+    const res = await request(app).put(`/api/projects/${pid}/images/order`).set('Cookie', cookie)
+      .send({ order: [foreignId] });
+    expect(res.status).toBe(200);
+    expect(res.body.images.map(i => i.filename)).not.toContain('foreign.png');
+    expect(res.body.images).toHaveLength(4);
+  });
+
+  test('missing order body leaves the order untouched', async () => {
+    const before = await imageNames(pid);
+    const res = await request(app).put(`/api/projects/${pid}/images/order`).set('Cookie', cookie).send({});
+    expect(res.status).toBe(200);
+    expect(res.body.images.map(i => i.filename)).toEqual(before);
+  });
+
+  test('returns 404 for a missing project', async () => {
+    const res = await request(app).put('/api/projects/999999/images/order').set('Cookie', cookie)
+      .send({ order: [] });
+    expect(res.status).toBe(404);
+  });
+
+  test('requires auth', async () => {
+    const res = await request(app).put(`/api/projects/${pid}/images/order`).send({ order: [] });
+    expect(res.status).toBe(401);
+  });
+});
+
+/* ================================================================== */
 /*  Design Cost Module — settings, flag, routes                       */
 /* ================================================================== */
 describe('Design Cost Module', () => {

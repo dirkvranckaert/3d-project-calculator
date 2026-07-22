@@ -190,7 +190,9 @@ function migrate(db) {
     const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
     if (!cols.includes(col)) {
       db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+      return true;
     }
+    return false;
   };
   addCol('projects', 'tags', "TEXT NOT NULL DEFAULT ''");
   addCol('project_plates', 'notes', 'TEXT');
@@ -210,6 +212,21 @@ function migrate(db) {
   addCol('project_plates', 'test_print_id', 'INTEGER');
   // Sliced-vs-model 3MF distinction (NULL = unknown/not a 3MF, 0 = model file, 1 = sliced)
   addCol('project_files', 'is_sliced', 'INTEGER');
+  // Manual image ordering — drag & drop in the Images section (2026-07-22)
+  if (addCol('project_images', 'sort_order', 'INTEGER NOT NULL DEFAULT 0')) {
+    // Backfill: seed the order every project already sees (primary first, then
+    // upload date), so enabling manual ordering does not reshuffle anything.
+    const rows = db.prepare(
+      'SELECT id, project_id FROM project_images ORDER BY project_id, is_primary DESC, uploaded_at ASC, id ASC'
+    ).all();
+    const upd = db.prepare('UPDATE project_images SET sort_order = ? WHERE id = ?');
+    let currentProject = null;
+    let order = 0;
+    for (const row of rows) {
+      if (row.project_id !== currentProject) { currentProject = row.project_id; order = 0; }
+      upd.run(order++, row.id);
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ */
