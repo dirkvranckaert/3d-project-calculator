@@ -510,7 +510,7 @@ function renderSummaryCard(p) {
       <div class="summary-stat"><span class="summary-stat-label">Production</span><span class="summary-stat-value">${fmt(pr.productionCost)}</span></div>
       <div class="summary-stat"><span class="summary-stat-label">Suggested</span><span class="summary-stat-value">${fmt(pr.suggestedPrice)}</span></div>
       <div class="summary-stat"><span class="summary-stat-label">Actual</span><span class="summary-stat-value">${hasActual ? `${fmt(effectivePrice)}${c?.marginLock?.locked ? ' <span class="lock-badge lock-badge--mini" title="Margin locked">&#128274;</span>' : ''}` : '<span style="opacity:.4">-</span>'}</span></div>
-      <div class="summary-stat"><span class="summary-stat-label">Margin</span><span class="summary-stat-value"><span class="margin-badge ${indicator || 'green'}">${marginPct != null ? fmtPct(marginPct) : '-'}</span></span></div>
+      <div class="summary-stat"><span class="summary-stat-label" title="Margin on the price excl. VAT">Margin excl. VAT</span><span class="summary-stat-value"><span class="margin-badge ${indicator || 'green'}">${marginPct != null ? fmtPct(marginPct) : '-'}</span></span></div>
     </div>
     <div class="summary-card-meta">${productionPlateCount} plate${productionPlateCount !== 1 ? 's' : ''}${p.items_per_set > 1 ? ` \u00b7 set of ${p.items_per_set}` : ''}</div>
     ${renderTagsPills(p.tags)}
@@ -1687,10 +1687,11 @@ function renderPricingSection(p) {
   const isSet = setSize > 1;
   const pi = (v) => `${fmt((Number(v) || 0) / setSize)} / item`;
 
-  const greenPct = settings.margin_green_pct || 30;
+  const greenPct = settings.margin_green_pct || 40;
   const vatMult = 1 + (settings.vat_rate || 21) / 100;
-  const denominator = (1 / vatMult) - (greenPct / 100);
-  const minPriceForGreen = denominator > 0 ? pr.productionCost / denominator : 0;
+  // Margin is measured excl. VAT: price_ex = cost / (1 - margin), then + VAT.
+  const denominator = 1 - (greenPct / 100);
+  const minPriceForGreen = denominator > 0 ? (pr.productionCost / denominator) * vatMult : 0;
 
   // Actual price section
   const lock = c.marginLock;
@@ -1701,7 +1702,7 @@ function renderPricingSection(p) {
     // Locked but no price can be derived — say why instead of rendering a blank.
     const why = lock.reason === 'no-cost'
       ? 'No production cost yet, so there is nothing to apply the margin to. Add plates to get a price.'
-      : `A margin of ${fmtPct(lock.targetPct)} is not reachable at ${settings.vat_rate}% VAT (max ${fmtPct(lock.maxMarginPct)}).`;
+      : `A margin of ${fmtPct(lock.targetPct)} excl. VAT is above the ${lock.maxMarginPct}% cap.`;
     actualBlock = `<div class="pricing-block pricing-block--locked">
       <h4>Actual Sales Price (incl. VAT) ${lockBadge(lock)}</h4>
       <div class="big-price" style="opacity:.4">&mdash;</div>
@@ -1713,8 +1714,8 @@ function renderPricingSection(p) {
       <h4>Actual Sales Price (incl. VAT) ${isLocked ? lockBadge(lock) : ''}</h4>
       <div class="big-price">${fmt(effPrice)}</div>
       <div class="sub">${fmt(am.actualExclVat)} excl. VAT</div>
-      <div class="sub">Profit: ${fmt(am.profitAmount)} <span class="margin-badge ${c.actualIndicator} ${isLocked ? 'margin-badge--editable' : ''}"
-        ${isLocked ? `title="Click to change the locked margin" onclick="promptTargetMargin(${p.id}, ${lock.targetPct})"` : `title="Click to lock a target margin" onclick="promptTargetMargin(${p.id}, ${am.marginPct.toFixed(2)})"`}>${fmtPct(am.marginPct)}</span></div>
+      <div class="sub">Profit excl. VAT: ${fmt(am.profitAmount)} <span class="margin-badge ${c.actualIndicator} ${isLocked ? 'margin-badge--editable' : ''}"
+        ${isLocked ? `title="Margin on the price excl. VAT — click to change the locked margin" onclick="promptTargetMargin(${p.id}, ${lock.targetPct})"` : `title="Margin on the price excl. VAT — click to lock a target margin" onclick="promptTargetMargin(${p.id}, ${am.marginPct.toFixed(2)})"`}>${fmtPct(am.marginPct)}</span></div>
       ${isLocked ? `<div class="sub" style="opacity:.7">Price is derived from the locked margin and follows cost changes.</div>` : ''}
       ${isSet ? `<div class="sub" style="opacity:.6">${pi(am.actualExclVat)} excl. &middot; ${pi(effPrice)} incl. VAT</div>` : ''}
     </div>`;
@@ -1752,7 +1753,7 @@ function renderPricingSection(p) {
       <div class="big-price">${fmt(pr.productionCost)}</div>
       <div class="sub">excl. VAT, no margins</div>
       ${isSet ? `<div class="sub" style="opacity:.6">${pi(pr.productionCost)}</div>` : ''}
-      ${minPriceForGreen > 0 ? `<div class="sub" style="margin-top:4px">Min. for ${greenPct}% margin: <strong>${fmt(minPriceForGreen)}</strong></div>` : ''}
+      ${minPriceForGreen > 0 ? `<div class="sub" style="margin-top:4px">Min. for ${greenPct}% margin excl. VAT: <strong>${fmt(minPriceForGreen)}</strong></div>` : ''}
     </div>
     <div class="pricing-block">
       <h4>Total excl. VAT</h4>
@@ -1766,8 +1767,8 @@ function renderPricingSection(p) {
       <h4>Suggested Price</h4>
       <div class="big-price">${fmt(pr.suggestedPrice)}</div>
       <div class="sub">${fmt(pr.suggestedExclVat)} excl. VAT</div>
-      <div class="sub">Profit: ${fmt(pr.suggestedProfitAmount)} <span class="margin-badge ${c.suggestedIndicator} margin-badge--editable"
-        title="Click to lock a target margin" onclick="promptTargetMargin(${p.id}, ${pr.suggestedMarginPct.toFixed(2)})">${fmtPct(pr.suggestedMarginPct)}</span></div>
+      <div class="sub">Profit excl. VAT: ${fmt(pr.suggestedProfitAmount)} <span class="margin-badge ${c.suggestedIndicator} margin-badge--editable"
+        title="Margin on the price excl. VAT — click to lock a target margin" onclick="promptTargetMargin(${p.id}, ${pr.suggestedMarginPct.toFixed(2)})">${fmtPct(pr.suggestedMarginPct)}</span></div>
       ${isSet ? `<div class="sub" style="opacity:.6">${pi(pr.suggestedExclVat)} excl. &middot; ${pi(pr.suggestedPrice)} incl. VAT</div>` : ''}
     </div>
     ${actualBlock}
@@ -2224,7 +2225,7 @@ async function updateActualPrice(projectId, value) {
 /* ================================================================== */
 // Visible marker that the percentage — not the price — is the driving figure.
 function lockBadge(lock) {
-  return `<span class="lock-badge" title="Margin locked at ${fmtPct(lock.targetPct)} — the price follows the margin">
+  return `<span class="lock-badge" title="Margin locked at ${fmtPct(lock.targetPct)} excl. VAT — the price follows the margin">
     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
     ${fmtPct(lock.targetPct)} locked</span>`;
 }
@@ -2237,13 +2238,15 @@ async function setMarginLock(projectId, locked, targetPct) {
   return res;
 }
 
+// Hard cap on a pinnable margin — mirrors calc.js `MAX_MARGIN_PCT`.
+const MAX_MARGIN_PCT = 95;
+
 async function promptTargetMargin(projectId, current) {
-  const vatRate = Number(settings.vat_rate) || 21;
-  const maxPct = 100 / (1 + vatRate / 100);
+  const maxPct = MAX_MARGIN_PCT;
   const val = await showPrompt({
     title: 'Lock target margin',
-    message: `Enter the margin you want to hold. The sales price is recalculated from the production cost and follows it when costs change. Max ${fmtPct(maxPct)} at ${vatRate}% VAT.`,
-    label: 'Target margin (%)',
+    message: `Enter the margin you want to hold, measured on the price excl. VAT. The sales price is recalculated from the production cost and follows it when costs change. Max ${maxPct}%.`,
+    label: 'Target margin excl. VAT (%)',
     placeholder: '60',
     initialValue: current != null ? String(current) : '',
     validate: v => {
@@ -2251,7 +2254,7 @@ async function promptTargetMargin(projectId, current) {
       if (!t) return 'Margin is required';
       const n = parseFloat(t.replace(',', '.'));
       if (!isFinite(n)) return 'Enter a valid number';
-      if (n >= maxPct) return `Must be below ${maxPct.toFixed(2)}% at ${vatRate}% VAT`;
+      if (n >= maxPct) return `Must be below ${maxPct}%`;
       if (n < -100) return 'Margin cannot be below -100%';
       return null;
     },
@@ -2755,10 +2758,10 @@ function renderMarginsSettings() {
     <div class="settings-row"><label>Printer Cost Margin (%)</label>
       <input type="number" value="${settings.printer_cost_profit_pct || 0}" step="1" onchange="saveSetting('printer_cost_profit_pct', this.value)"></div>
     <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
-    <div class="settings-row"><label>Green Margin Threshold (%)</label>
-      <input type="number" value="${settings.margin_green_pct || 30}" step="1" onchange="saveSetting('margin_green_pct', this.value)"></div>
-    <div class="settings-row"><label>Orange Margin Threshold (%)</label>
-      <input type="number" value="${settings.margin_orange_pct || 5}" step="1" onchange="saveSetting('margin_orange_pct', this.value)"></div>`;
+    <div class="settings-row"><label>Green Margin Threshold (% excl. VAT)</label>
+      <input type="number" value="${settings.margin_green_pct || 40}" step="1" onchange="saveSetting('margin_green_pct', this.value)"></div>
+    <div class="settings-row"><label>Orange Margin Threshold (% excl. VAT)</label>
+      <input type="number" value="${settings.margin_orange_pct || 25}" step="1" onchange="saveSetting('margin_orange_pct', this.value)"></div>`;
 }
 function renderThemeSettings() {
   const current = settings.theme || 'system';
@@ -2886,7 +2889,7 @@ function renderPriceImpactResults() {
         ${archivedHidden || priceImpactShowArchived ? `<label class="archive-toggle"><input type="checkbox" ${priceImpactShowArchived ? 'checked' : ''} onchange="togglePiArchived(this.checked)"> Include archived (${archivedHidden})</label>` : ''}
       </div>
       ${filtered.length ? `<table class="ec-table">
-        <thead><tr><th>Project</th><th>Production (excl. VAT)</th><th>Suggested (incl. VAT)</th><th>Margin</th><th>Change</th></tr></thead>
+        <thead><tr><th>Project</th><th>Production (excl. VAT)</th><th>Suggested (incl. VAT)</th><th>Margin excl. VAT</th><th>Change</th></tr></thead>
         <tbody>${filtered.map(i => {
           const marginDiff = (i.simulated.marginPct || 0) - (i.current.marginPct || 0);
           const indicator = marginDiff < -2 ? 'red' : marginDiff < 0 ? 'orange' : 'green';
@@ -4062,8 +4065,8 @@ function renderVerifyResult(result, ref) {
 
   // Margin-threshold indicator for vs-selling-price (mirrors project pricing thresholds)
   function sellingIndicator(deltaPct) {
-    const green  = settings.margin_green_pct  || 30;
-    const orange = settings.margin_orange_pct || 5;
+    const green  = settings.margin_green_pct  || 40;
+    const orange = settings.margin_orange_pct || 25;
     if (deltaPct >= green)  return 'green';
     if (deltaPct >= orange) return 'orange';
     return 'red';
@@ -4100,14 +4103,14 @@ function renderVerifyResult(result, ref) {
       <h4 style="margin:0 0 4px">Margin on actual selling price</h4>
       <div style="font-size:12px;margin-bottom:4px">
         Actual (incl. VAT): <strong>${fmt(amb.actualSellingInclVat)}</strong> &nbsp;·&nbsp;
-        Net (excl. 21% VAT): <strong>${fmt(amb.netRevenue)}</strong>
+        Net (excl. ${settings.vat_rate || 21}% VAT): <strong>${fmt(amb.netRevenue)}</strong>
       </div>
       <div class="big-price" style="color:var(--${amb.absoluteMargin >= 0 ? 'green' : 'red'})">
         ${fmtSign(amb.absoluteMargin)}
       </div>
       <div class="sub">
         <span class="margin-badge ${amb.indicator}">${fmtSignPct(amb.marginPct)}</span>
-        ${amb.absoluteMargin >= 0 ? 'Margin positive' : 'Loss — cost exceeds net revenue'}
+        Profit excl. VAT &middot; ${amb.absoluteMargin >= 0 ? 'margin positive' : 'loss — cost exceeds net revenue'}
       </div>
     </div>` : '';
 

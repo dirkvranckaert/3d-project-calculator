@@ -10,7 +10,14 @@
  *   electricity_cost   = (print_time_hours * risk) * kwh_per_hour * electricity_price_kwh
  *   printer_hourly     = purchase_price / (earn_back_months * 30 * 24)
  *   printer_usage_cost = (print_time_hours * risk) * printer_hourly
- *   margin_pct         = (sales_excl_vat - cost_excl_vat) / sales_incl_vat * 100
+ *   margin_pct         = (sales_excl_vat - cost_excl_vat) / sales_excl_vat * 100
+ *
+ * Margin basis (changed 2026-07-22): margin is measured on the **ex-VAT**
+ * price — the conventional definition, and the money actually kept. It used to
+ * be divided by the incl-VAT price, which capped it at 1/(1+vat) and made a
+ * "50%" pin really a 60.5% margin on turnover. Every margin figure in this file
+ * is ex-VAT — there is deliberately no second, inclusive reading: `price_incl -
+ * cost` is profit plus the VAT owed to the tax office, not profit.
  */
 
 /* ------------------------------------------------------------------ */
@@ -214,24 +221,32 @@ function roundToPriceEnding(value, priceRounding = 0.99) {
 }
 
 /**
- * Highest margin percentage that is mathematically reachable at a given VAT
- * rate. Margin is measured against the incl-VAT price, so the VAT share of the
- * price is an absolute ceiling: at 21% VAT nothing above 82.64% is reachable,
- * no matter the price.
+ * Hard cap on a pinnable margin.
+ *
+ * On the ex-VAT basis there is no VAT-derived ceiling any more — the
+ * mathematical limit is 100% (price -> infinity as margin -> 100%). 95% is a
+ * sane practical stop well short of the asymptote, where the price still
+ * behaves: at 95% the price is 20x cost, at 99% it is 100x.
+ *
+ * Independent of the VAT rate. The argument is ignored and kept only so
+ * existing call sites do not have to be threaded differently.
  */
-function maxReachableMarginPct(vatRate = 21) {
-  return 100 / (1 + vatRate / 100);
+const MAX_MARGIN_PCT = 95;
+
+function maxReachableMarginPct() {
+  return MAX_MARGIN_PCT;
 }
 
 /**
  * Invert the margin formula: given a production cost and a target margin,
  * return the incl-VAT sales price that produces that margin.
  *
- *   margin = (price/(1+vat) - cost) / price   =>   price = cost / (1/(1+vat) - margin)
+ *   margin = (price_ex - cost) / price_ex   =>   price_ex = cost / (1 - margin)
+ *   price_incl = price_ex * (1 + vat)
  *
  * Returns `{ price, rawPrice, reason, maxMarginPct }`. `price` is null when no
  * price can be derived, with `reason` explaining why:
- *   'unreachable' — target margin >= the VAT ceiling
+ *   'unreachable' — target margin >= the hard cap (95%)
  *   'no-cost'     — production cost is 0 or missing, so there is nothing to mark up
  */
 function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21, priceRounding = 0.99) {
@@ -240,12 +255,13 @@ function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21, pri
   const target = (targetMarginPct === null || targetMarginPct === undefined || targetMarginPct === '')
     ? NaN
     : Number(targetMarginPct);
-  const maxMarginPct = maxReachableMarginPct(vatRate);
+  const maxMarginPct = MAX_MARGIN_PCT;
   const base = { price: null, rawPrice: null, maxMarginPct };
   if (!Number.isFinite(target)) return { ...base, reason: 'unreachable' };
   if (target >= maxMarginPct) return { ...base, reason: 'unreachable' };
   if (!(Number(productionCost) > 0)) return { ...base, reason: 'no-cost' };
-  const rawPrice = Number(productionCost) / ((1 / (1 + vatRate / 100)) - target / 100);
+  const priceExVat = Number(productionCost) / (1 - target / 100);
+  const rawPrice = priceExVat * (1 + vatRate / 100);
   return {
     price: roundToPriceEnding(rawPrice, priceRounding),
     rawPrice,
@@ -287,13 +303,11 @@ function calculateFinalPricing(opts) {
   // Sales excl VAT
   const suggestedExclVat = suggestedPrice / (1 + vatRate / 100);
 
-  // Profit on suggested price (excl VAT basis)
+  // Profit on suggested price, ex-VAT basis — the money actually kept.
+  // Margin = (sales_excl_vat - production_cost) / sales_excl_vat * 100
   const suggestedProfitAmount = suggestedExclVat - productionCost;
-
-  // Margin = (sales_excl_vat - production_cost) / sales_incl_vat * 100
-  // (matches spreadsheet formula)
-  const suggestedMarginPct = suggestedPrice > 0
-    ? (suggestedProfitAmount / suggestedPrice) * 100
+  const suggestedMarginPct = suggestedExclVat > 0
+    ? (suggestedProfitAmount / suggestedExclVat) * 100
     : 0;
 
   return {
@@ -313,21 +327,28 @@ function calculateFinalPricing(opts) {
 }
 
 /**
- * Calculate margin for an actual sales price.
- * Uses same formula as spreadsheet: (excl_vat - cost) / incl_vat * 100
+ * Calculate margin for an actual sales price (given incl. VAT).
+ *
+ * `profitAmount` / `marginPct` are the ex-VAT reading — (excl_vat - cost) /
+ * excl_vat — the money actually kept, and the only margin the app reports.
  */
 function calculateActualMargin(actualSalesPrice, productionCost, vatRate) {
   if (!actualSalesPrice || actualSalesPrice <= 0) return null;
   const actualExclVat = actualSalesPrice / (1 + vatRate / 100);
   const profitAmount = actualExclVat - productionCost;
-  const marginPct = (profitAmount / actualSalesPrice) * 100;
+  const marginPct = actualExclVat > 0 ? (profitAmount / actualExclVat) * 100 : 0;
   return { actualExclVat, profitAmount, marginPct };
 }
 
 /**
  * Determine margin color indicator.
+ *
+ * Thresholds are ex-VAT margins (Dirk 2026-07-22). Green at 40% sits just above
+ * the ~37% floor from the margin research (Protolabs 44.5%, Xometry 34.7% gross,
+ * both ex-VAT), so green means "at least what an industrial operator earns"
+ * rather than a number carried over from the old incl-VAT basis.
  */
-function marginIndicator(marginPct, greenThreshold = 30, orangeThreshold = 5) {
+function marginIndicator(marginPct, greenThreshold = 40, orangeThreshold = 25) {
   if (marginPct >= greenThreshold) return 'green';
   if (marginPct >= orangeThreshold) return 'orange';
   return 'red';
@@ -559,8 +580,8 @@ function calculateProject(opts) {
     electricity_profit_pct: Number(settings.electricity_profit_pct) || 0,
     printer_cost_profit_pct: Number(settings.printer_cost_profit_pct) || 0,
     price_rounding: Number(settings.price_rounding) || 0.99,
-    margin_green_pct: Number(settings.margin_green_pct) || 30,
-    margin_orange_pct: Number(settings.margin_orange_pct) || 5,
+    margin_green_pct: Number(settings.margin_green_pct) || 40,
+    margin_orange_pct: Number(settings.margin_orange_pct) || 25,
   };
 
   const {
@@ -815,8 +836,8 @@ function calculateVerification(opts) {
       absoluteMargin,
       marginPct,
       indicator: marginIndicator(marginPct,
-        (settings.margin_green_pct  || 30),
-        (settings.margin_orange_pct || 5)),
+        (settings.margin_green_pct  || 40),
+        (settings.margin_orange_pct || 25)),
     };
   }
 

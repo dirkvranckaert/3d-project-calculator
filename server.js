@@ -627,8 +627,9 @@ app.put('/api/projects/:id', (req, res) => {
  * Lock or unlock the target margin.
  * Body: `{ locked: boolean, target_margin_pct?: number }`.
  *
- * Locking requires a target percentage below the VAT ceiling (see
- * `calc.maxReachableMarginPct`) — above it no price can produce that margin.
+ * The target is an **ex-VAT** margin — (price_ex - cost) / price_ex — and must
+ * stay below the hard cap (see `calc.maxReachableMarginPct`); the price runs
+ * away towards infinity as it approaches 100%.
  * Unlocking keeps the stored percentage so re-locking is one click.
  */
 app.patch('/api/projects/:id/margin-lock', (req, res) => {
@@ -643,14 +644,13 @@ app.patch('/api/projects/:id/margin-lock', (req, res) => {
   }
 
   if (locked) {
-    const vatRate = Number(getAllSettings(db).vat_rate) || 21;
-    const maxPct = calc.maxReachableMarginPct(vatRate);
+    const maxPct = calc.maxReachableMarginPct();
     if (!Number.isFinite(target)) {
       return res.status(400).json({ error: 'A target margin percentage is required to lock' });
     }
     if (target >= maxPct) {
       return res.status(400).json({
-        error: `Target margin must be below ${maxPct.toFixed(2)}% at ${vatRate}% VAT`,
+        error: `Target margin (excl. VAT) must be below ${maxPct}%`,
         maxMarginPct: maxPct,
       });
     }
