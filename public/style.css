@@ -574,6 +574,31 @@ body {
 .margin-badge.green { background: var(--success-tint); color: var(--success); }
 .margin-badge.orange { background: var(--warning-tint); color: var(--warning); }
 .margin-badge.red { background: var(--danger-tint); color: var(--danger); }
+/* The margin is the input when a lock is active — make it look clickable. */
+.margin-badge--editable { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.margin-badge--editable:hover { filter: brightness(1.08); }
+
+/* Margin lock */
+.lock-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 12px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  vertical-align: middle;
+}
+.lock-badge--mini { padding: 0 4px; background: none; font-size: 11px; }
+.pricing-block--locked {
+  border-left: 3px solid var(--primary);
+  padding-left: 10px;
+  margin-left: -13px;
+}
 
 .actual-price-wrap {
   display: flex;

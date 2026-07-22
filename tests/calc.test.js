@@ -1746,3 +1746,197 @@ describe('test-prints cost parity with calculateProject', () => {
     expect(testPrintTotal).toBeCloseTo(projectResult.plateBreakdowns[0].totalPlateCost, 6);
   });
 });
+
+/* ================================================================== */
+/*  Margin lock — target margin drives the price                       */
+/* ================================================================== */
+describe('margin lock', () => {
+  const lockPlate = {
+    print_time_minutes: 60,
+    plastic_grams: 30,
+    items_per_plate: 2,
+    risk_multiplier: 1,
+    material_waste_grams: 0,
+    printer_purchase_price: 812.43,
+    printer_earn_back_months: 24,
+    printer_kwh_per_hour: 0.11,
+    material_price_per_kg: 17.38,
+  };
+
+  describe('roundToPriceEnding', () => {
+    test('rounds up to the configured ending, never down', () => {
+      expect(calc.roundToPriceEnding(24.01, 0.99)).toBeCloseTo(24.99, 6);
+      expect(calc.roundToPriceEnding(24.99, 0.99)).toBeCloseTo(24.99, 6);
+      expect(calc.roundToPriceEnding(25.00, 0.99)).toBeCloseTo(25.99, 6);
+      expect(calc.roundToPriceEnding(10.20, 0.95)).toBeCloseTo(10.95, 6);
+    });
+
+    test('non-positive values collapse to 0', () => {
+      expect(calc.roundToPriceEnding(0, 0.99)).toBe(0);
+      expect(calc.roundToPriceEnding(-5, 0.99)).toBe(0);
+    });
+  });
+
+  describe('maxReachableMarginPct', () => {
+    test('is the VAT-excluded share of the price', () => {
+      expect(calc.maxReachableMarginPct(21)).toBeCloseTo(82.6446, 3);
+      expect(calc.maxReachableMarginPct(0)).toBeCloseTo(100, 6);
+    });
+  });
+
+  describe('calculateLockedPrice', () => {
+    test('derived price reproduces the target margin exactly (before rounding)', () => {
+      const { rawPrice } = calc.calculateLockedPrice(100, 50, 21, 0.99);
+      const margin = calc.calculateActualMargin(rawPrice, 100, 21);
+      expect(margin.marginPct).toBeCloseTo(50, 6);
+    });
+
+    test('rounding only ever pushes the effective margin above the target', () => {
+      const { price } = calc.calculateLockedPrice(100, 50, 21, 0.99);
+      const margin = calc.calculateActualMargin(price, 100, 21);
+      expect(margin.marginPct).toBeGreaterThanOrEqual(50);
+      expect(margin.marginPct).toBeLessThan(51);
+    });
+
+    test('a margin at or above the VAT ceiling is unreachable', () => {
+      const res = calc.calculateLockedPrice(100, 82.65, 21, 0.99);
+      expect(res.price).toBeNull();
+      expect(res.reason).toBe('unreachable');
+      expect(res.maxMarginPct).toBeCloseTo(82.6446, 3);
+    });
+
+    test('zero or missing production cost yields no price', () => {
+      expect(calc.calculateLockedPrice(0, 50, 21, 0.99).reason).toBe('no-cost');
+      expect(calc.calculateLockedPrice(null, 50, 21, 0.99).reason).toBe('no-cost');
+      expect(calc.calculateLockedPrice(0, 50, 21, 0.99).price).toBeNull();
+    });
+
+    test('a non-numeric target is unreachable rather than NaN', () => {
+      const res = calc.calculateLockedPrice(100, null, 21, 0.99);
+      expect(res.price).toBeNull();
+      expect(res.reason).toBe('unreachable');
+    });
+
+    test('a negative target margin prices below cost', () => {
+      const { rawPrice } = calc.calculateLockedPrice(100, -10, 21, 0.99);
+      expect(rawPrice).toBeGreaterThan(0);
+      expect(calc.calculateActualMargin(rawPrice, 100, 21).marginPct).toBeCloseTo(-10, 6);
+    });
+  });
+
+  describe('calculateProject with a lock', () => {
+    test('unlocked keeps the manual price and derives the margin from it', () => {
+      const r = calc.calculateProject({
+        plates: [lockPlate], settings: defaultSettings, itemsPerSet: 1,
+        actualSalesPrice: 30, marginLocked: false, targetMarginPct: 60,
+      });
+      expect(r.marginLock).toBeNull();
+      expect(r.effectiveSalesPrice).toBe(30);
+      expect(r.actualMargin.marginPct).toBeCloseTo(
+        calc.calculateActualMargin(30, r.pricing.productionCost, 21).marginPct, 6
+      );
+    });
+
+    test('locked ignores the stored manual price and derives one from the margin', () => {
+      const r = calc.calculateProject({
+        plates: [lockPlate], settings: defaultSettings, itemsPerSet: 1,
+        actualSalesPrice: 999, marginLocked: true, targetMarginPct: 60,
+      });
+      expect(r.marginLock.locked).toBe(true);
+      expect(r.marginLock.targetPct).toBe(60);
+      expect(r.effectiveSalesPrice).not.toBe(999);
+      expect(r.actualMargin.marginPct).toBeGreaterThanOrEqual(60);
+    });
+
+    test('price follows a cost increase while the margin holds', () => {
+      const cheap = calc.calculateProject({
+        plates: [lockPlate], settings: defaultSettings, itemsPerSet: 1,
+        marginLocked: true, targetMarginPct: 60,
+      });
+      const pricey = calc.calculateProject({
+        plates: [{ ...lockPlate, plastic_grams: 300, print_time_minutes: 600 }],
+        settings: defaultSettings, itemsPerSet: 1,
+        marginLocked: true, targetMarginPct: 60,
+      });
+      expect(pricey.pricing.productionCost).toBeGreaterThan(cheap.pricing.productionCost);
+      expect(pricey.effectiveSalesPrice).toBeGreaterThan(cheap.effectiveSalesPrice);
+      // Margin held constant across both, give or take the rounding step.
+      expect(cheap.actualMargin.marginPct).toBeGreaterThanOrEqual(60);
+      expect(pricey.actualMargin.marginPct).toBeGreaterThanOrEqual(60);
+      expect(pricey.actualMargin.marginPct).toBeLessThan(61);
+    });
+
+    test('price follows a cost decrease too', () => {
+      const before = calc.calculateProject({
+        plates: [{ ...lockPlate, plastic_grams: 300 }],
+        settings: defaultSettings, itemsPerSet: 1, marginLocked: true, targetMarginPct: 45,
+      });
+      const after = calc.calculateProject({
+        plates: [{ ...lockPlate, plastic_grams: 30 }],
+        settings: defaultSettings, itemsPerSet: 1, marginLocked: true, targetMarginPct: 45,
+      });
+      expect(after.effectiveSalesPrice).toBeLessThan(before.effectiveSalesPrice);
+      expect(after.actualMargin.marginPct).toBeGreaterThanOrEqual(45);
+    });
+
+    test('locked with no plates yields no price and a no-cost reason', () => {
+      const r = calc.calculateProject({
+        plates: [], settings: defaultSettings, itemsPerSet: 1,
+        actualSalesPrice: 50, marginLocked: true, targetMarginPct: 60,
+      });
+      expect(r.marginLock.reason).toBe('no-cost');
+      expect(r.effectiveSalesPrice).toBeNull();
+      expect(r.actualMargin).toBeNull();
+      expect(r.actualIndicator).toBeNull();
+    });
+
+    test('locked above the VAT ceiling yields no price rather than a nonsense one', () => {
+      const r = calc.calculateProject({
+        plates: [lockPlate], settings: defaultSettings, itemsPerSet: 1,
+        marginLocked: true, targetMarginPct: 95,
+      });
+      expect(r.marginLock.reason).toBe('unreachable');
+      expect(r.effectiveSalesPrice).toBeNull();
+      expect(r.actualMargin).toBeNull();
+    });
+
+    test('locked price respects the configured price ending', () => {
+      const r = calc.calculateProject({
+        plates: [lockPlate], settings: { ...defaultSettings, price_rounding: 0.95 },
+        itemsPerSet: 1, marginLocked: true, targetMarginPct: 50,
+      });
+      expect(r.effectiveSalesPrice % 1).toBeCloseTo(0.95, 6);
+    });
+
+    test('the indicator reflects the locked margin band', () => {
+      // A costly plate, so the price ending is a rounding detail rather than a
+      // distortion — see the overshoot test below.
+      const bigPlate = { ...lockPlate, plastic_grams: 3000, print_time_minutes: 6000 };
+      const green = calc.calculateProject({
+        plates: [bigPlate], settings: defaultSettings, itemsPerSet: 1,
+        marginLocked: true, targetMarginPct: 60,
+      });
+      const red = calc.calculateProject({
+        plates: [bigPlate], settings: defaultSettings, itemsPerSet: 1,
+        marginLocked: true, targetMarginPct: 1,
+      });
+      expect(green.actualIndicator).toBe('green');
+      expect(red.actualIndicator).toBe('red');
+    });
+
+    test('on a very cheap item the price ending overshoots the target margin', () => {
+      // Documented consequence of rounding, not a bug: production cost here is
+      // ~EUR 0.31, and the cheapest price the 0.99 ending allows is EUR 0.99,
+      // so the effective margin lands far above the 1% target.
+      const r = calc.calculateProject({
+        plates: [lockPlate], settings: defaultSettings, itemsPerSet: 1,
+        marginLocked: true, targetMarginPct: 1,
+      });
+      expect(r.pricing.productionCost).toBeLessThan(1);
+      expect(r.effectiveSalesPrice).toBeCloseTo(0.99, 6);
+      expect(r.actualMargin.marginPct).toBeGreaterThan(40);
+      // Never below target — rounding only ever rounds the price up.
+      expect(r.actualMargin.marginPct).toBeGreaterThanOrEqual(1);
+    });
+  });
+});

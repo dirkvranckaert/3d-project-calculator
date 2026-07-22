@@ -480,9 +480,11 @@ function renderSummaryCard(p) {
 
   const primaryImage = (p.images || []).find(i => i.is_primary) || (p.images || [])[0] || null;
 
-  // Determine which price/margin to highlight
-  const hasActual = p.actual_sales_price > 0;
-  const displayPrice = hasActual ? p.actual_sales_price : (pr.suggestedPrice || 0);
+  // Determine which price/margin to highlight. A locked margin derives its own
+  // price, so read the effective price rather than the stored manual one.
+  const effectivePrice = c?.effectiveSalesPrice;
+  const hasActual = effectivePrice > 0;
+  const displayPrice = hasActual ? effectivePrice : (pr.suggestedPrice || 0);
   const indicator = hasActual ? c?.actualIndicator : c?.suggestedIndicator;
   const marginPct = hasActual ? c?.actualMargin?.marginPct : pr.suggestedMarginPct;
 
@@ -507,7 +509,7 @@ function renderSummaryCard(p) {
     <div class="summary-card-grid">
       <div class="summary-stat"><span class="summary-stat-label">Production</span><span class="summary-stat-value">${fmt(pr.productionCost)}</span></div>
       <div class="summary-stat"><span class="summary-stat-label">Suggested</span><span class="summary-stat-value">${fmt(pr.suggestedPrice)}</span></div>
-      <div class="summary-stat"><span class="summary-stat-label">Actual</span><span class="summary-stat-value">${hasActual ? fmt(p.actual_sales_price) : '<span style="opacity:.4">-</span>'}</span></div>
+      <div class="summary-stat"><span class="summary-stat-label">Actual</span><span class="summary-stat-value">${hasActual ? `${fmt(effectivePrice)}${c?.marginLock?.locked ? ' <span class="lock-badge lock-badge--mini" title="Margin locked">&#128274;</span>' : ''}` : '<span style="opacity:.4">-</span>'}</span></div>
       <div class="summary-stat"><span class="summary-stat-label">Margin</span><span class="summary-stat-value"><span class="margin-badge ${indicator || 'green'}">${marginPct != null ? fmtPct(marginPct) : '-'}</span></span></div>
     </div>
     <div class="summary-card-meta">${productionPlateCount} plate${productionPlateCount !== 1 ? 's' : ''}${p.items_per_set > 1 ? ` \u00b7 set of ${p.items_per_set}` : ''}</div>
@@ -1691,15 +1693,30 @@ function renderPricingSection(p) {
   const minPriceForGreen = denominator > 0 ? pr.productionCost / denominator : 0;
 
   // Actual price section
+  const lock = c.marginLock;
+  const isLocked = !!lock?.locked;
+  const effPrice = c.effectiveSalesPrice;
   let actualBlock = '';
-  if (p.actual_sales_price > 0 && c.actualMargin) {
+  if (isLocked && !effPrice) {
+    // Locked but no price can be derived — say why instead of rendering a blank.
+    const why = lock.reason === 'no-cost'
+      ? 'No production cost yet, so there is nothing to apply the margin to. Add plates to get a price.'
+      : `A margin of ${fmtPct(lock.targetPct)} is not reachable at ${settings.vat_rate}% VAT (max ${fmtPct(lock.maxMarginPct)}).`;
+    actualBlock = `<div class="pricing-block pricing-block--locked">
+      <h4>Actual Sales Price (incl. VAT) ${lockBadge(lock)}</h4>
+      <div class="big-price" style="opacity:.4">&mdash;</div>
+      <div class="sub" style="color:var(--danger)">${why}</div>
+    </div>`;
+  } else if (effPrice > 0 && c.actualMargin) {
     const am = c.actualMargin;
-    actualBlock = `<div class="pricing-block">
-      <h4>Actual Sales Price (incl. VAT)</h4>
-      <div class="big-price">${fmt(p.actual_sales_price)}</div>
+    actualBlock = `<div class="pricing-block ${isLocked ? 'pricing-block--locked' : ''}">
+      <h4>Actual Sales Price (incl. VAT) ${isLocked ? lockBadge(lock) : ''}</h4>
+      <div class="big-price">${fmt(effPrice)}</div>
       <div class="sub">${fmt(am.actualExclVat)} excl. VAT</div>
-      <div class="sub">Profit: ${fmt(am.profitAmount)} <span class="margin-badge ${c.actualIndicator}">${fmtPct(am.marginPct)}</span></div>
-      ${isSet ? `<div class="sub" style="opacity:.6">${pi(am.actualExclVat)} excl. &middot; ${pi(p.actual_sales_price)} incl. VAT</div>` : ''}
+      <div class="sub">Profit: ${fmt(am.profitAmount)} <span class="margin-badge ${c.actualIndicator} ${isLocked ? 'margin-badge--editable' : ''}"
+        ${isLocked ? `title="Click to change the locked margin" onclick="promptTargetMargin(${p.id}, ${lock.targetPct})"` : `title="Click to lock a target margin" onclick="promptTargetMargin(${p.id}, ${am.marginPct.toFixed(2)})"`}>${fmtPct(am.marginPct)}</span></div>
+      ${isLocked ? `<div class="sub" style="opacity:.7">Price is derived from the locked margin and follows cost changes.</div>` : ''}
+      ${isSet ? `<div class="sub" style="opacity:.6">${pi(am.actualExclVat)} excl. &middot; ${pi(effPrice)} incl. VAT</div>` : ''}
     </div>`;
   } else {
     actualBlock = `<div class="pricing-block">
@@ -1712,7 +1729,7 @@ function renderPricingSection(p) {
     </div>`;
   }
 
-  const basisActual = p.actual_sales_price > 0 && !!c.actualMargin;
+  const basisActual = effPrice > 0 && !!c.actualMargin;
   const baseExclSet = basisActual ? c.actualMargin.actualExclVat : pr.suggestedExclVat;
   const basisLabel = basisActual ? 'actual sales price' : 'suggested price';
   const allInExclSet = baseExclSet + (c.designCosts?.designTotal || 0);
@@ -1749,15 +1766,17 @@ function renderPricingSection(p) {
       <h4>Suggested Price</h4>
       <div class="big-price">${fmt(pr.suggestedPrice)}</div>
       <div class="sub">${fmt(pr.suggestedExclVat)} excl. VAT</div>
-      <div class="sub">Profit: ${fmt(pr.suggestedProfitAmount)} <span class="margin-badge ${c.suggestedIndicator}">${fmtPct(pr.suggestedMarginPct)}</span></div>
+      <div class="sub">Profit: ${fmt(pr.suggestedProfitAmount)} <span class="margin-badge ${c.suggestedIndicator} margin-badge--editable"
+        title="Click to lock a target margin" onclick="promptTargetMargin(${p.id}, ${pr.suggestedMarginPct.toFixed(2)})">${fmtPct(pr.suggestedMarginPct)}</span></div>
       ${isSet ? `<div class="sub" style="opacity:.6">${pi(pr.suggestedExclVat)} excl. &middot; ${pi(pr.suggestedPrice)} incl. VAT</div>` : ''}
     </div>
     ${actualBlock}
     ${designCostBlock}
   </div>
   <div style="padding:8px 0 0;text-align:right">
-    ${p.actual_sales_price > 0 ? `<button class="btn btn-sm" onclick="updateActualPrice(${p.id}, null)">Clear actual price</button>
-    <button class="btn btn-sm" onclick="promptActualPrice(${p.id}, ${p.actual_sales_price})">Change price</button>` : ''}
+    ${isLocked ? `<button class="btn btn-sm" onclick="setMarginLock(${p.id}, false)">Unlock margin</button>` : ''}
+    ${(p.actual_sales_price > 0 || isLocked) ? `<button class="btn btn-sm" onclick="clearActualPrice(${p.id})">Clear actual price</button>` : ''}
+    ${(p.actual_sales_price > 0 && !isLocked) ? `<button class="btn btn-sm" onclick="promptActualPrice(${p.id}, ${p.actual_sales_price})">Change price</button>` : ''}
     <button class="btn btn-sm" onclick="openVerifyModal(${p.id})">Verify batch</button>
   </div>
   </div>`;
@@ -2197,6 +2216,53 @@ async function updateActualPrice(projectId, value) {
     items_per_set: p.items_per_set, tags: p.tags || '', notes: p.notes || null,
     actual_sales_price: value ? parseFloat(value) : null,
   });
+  await reloadSingleProject(projectId);
+}
+
+/* ================================================================== */
+/*  Margin lock                                                        */
+/* ================================================================== */
+// Visible marker that the percentage — not the price — is the driving figure.
+function lockBadge(lock) {
+  return `<span class="lock-badge" title="Margin locked at ${fmtPct(lock.targetPct)} — the price follows the margin">
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+    ${fmtPct(lock.targetPct)} locked</span>`;
+}
+
+async function setMarginLock(projectId, locked, targetPct) {
+  const body = { locked };
+  if (targetPct != null) body.target_margin_pct = targetPct;
+  const res = await PATCH(`/api/projects/${projectId}/margin-lock`, body);
+  await reloadSingleProject(projectId);
+  return res;
+}
+
+async function promptTargetMargin(projectId, current) {
+  const vatRate = Number(settings.vat_rate) || 21;
+  const maxPct = 100 / (1 + vatRate / 100);
+  const val = await showPrompt({
+    title: 'Lock target margin',
+    message: `Enter the margin you want to hold. The sales price is recalculated from the production cost and follows it when costs change. Max ${fmtPct(maxPct)} at ${vatRate}% VAT.`,
+    label: 'Target margin (%)',
+    placeholder: '60',
+    initialValue: current != null ? String(current) : '',
+    validate: v => {
+      const t = String(v || '').trim();
+      if (!t) return 'Margin is required';
+      const n = parseFloat(t.replace(',', '.'));
+      if (!isFinite(n)) return 'Enter a valid number';
+      if (n >= maxPct) return `Must be below ${maxPct.toFixed(2)}% at ${vatRate}% VAT`;
+      if (n < -100) return 'Margin cannot be below -100%';
+      return null;
+    },
+  });
+  if (val == null) return;
+  await setMarginLock(projectId, true, parseFloat(String(val).replace(',', '.')));
+}
+
+// Full reset — drops the manual price AND the lock in one call.
+async function clearActualPrice(projectId) {
+  await PATCH(`/api/projects/${projectId}/clear-price`);
   await reloadSingleProject(projectId);
 }
 
@@ -3589,7 +3655,7 @@ function openVerifyModal(projectId) {
 
   const pricing = p.calculation && p.calculation.pricing;
   const productionCost = pricing ? pricing.productionCost : 0;
-  const actualPrice    = p.actual_sales_price > 0 ? p.actual_sales_price : null;
+  const actualPrice    = p.calculation?.effectiveSalesPrice > 0 ? p.calculation.effectiveSalesPrice : null;
   const suggestedPrice = pricing ? pricing.suggestedPrice : 0;
   const sellingPrice      = actualPrice !== null ? actualPrice : suggestedPrice;
   // Label rename per task #352: project's stored/calculated price → "Calculated selling price"
