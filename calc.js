@@ -306,7 +306,20 @@ function calculateFinalPricing(opts) {
   const baseCostPerSet = perItemCosts.totalPerItem * itemsPerSet;
   const profitPerSet = profits.totalProfit * itemsPerSet;
 
-  // Production cost (all base costs + extras + extra hours, no margins)
+  // Production cost (all base costs + extras + extra hours, no margins).
+  //
+  // `designTotal` is DELIBERATELY AND PERMANENTLY ABSENT, and this is not an
+  // oversight to be tidied up later. It is also the base the target margin is
+  // applied to, so the omission is load-bearing: on a custom project the design
+  // figure can exceed the entire production cost (one real project carries
+  // EUR 550.48 design against EUR 554.49 production), which makes the asymmetry
+  // look like a bug worth "fixing". It is not.
+  //
+  // Design cost is already a marked-up figure. Per Dirk (2026-07-22) it is made
+  // up of test prints passed through, hours billed at a rate that already
+  // carries his profit, and materials — and he invoices it separately at that
+  // amount. Applying a target margin on top would charge margin on margin.
+  // Do not fold it in.
   const productionCost = baseCostPerSet + extraCostsTotal + extraHoursCost;
 
   // Total excl VAT = base costs + profits + extras + extra hours (no margin on hours)
@@ -710,7 +723,9 @@ function calculateProject(opts) {
   // Extra hours (project-level human-time, no margin)
   const extraHoursCost = calculateExtraHoursCost(extraHours);
 
-  // Design costs (only for custom projects)
+  // Design costs (only for custom projects). Reported alongside the pricing and
+  // billed separately — never added to `productionCost`, and therefore never
+  // part of the target-margin base. See the note in `calculateFinalPricing`.
   const designCosts = isCustom
     ? calculateDesignCosts({ designHours, testPrints: opts.testPrints || [], designExtras })
     : null;
