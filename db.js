@@ -272,12 +272,18 @@ function migrateMarginBasisToExVat(db) {
   const vatRate = readNum('vat_rate') ?? 21;
   const factor = 1 + vatRate / 100;
 
+  // The cap is an exclusive bound — `calculateLockedPrice` and the margin-lock
+  // route both reject `target >= maxPct`. Clamping to the cap itself would
+  // therefore write a value the app's own API would 400 on: the lock stays set,
+  // no price can be derived, and the project renders "—". Land strictly below.
+  const clampCeiling = MAX_TARGET_MARGIN_PCT - 0.01;
+
   const pins = db.prepare('SELECT id, target_margin_pct FROM projects WHERE target_margin_pct IS NOT NULL').all();
   const updPin = db.prepare('UPDATE projects SET target_margin_pct = ? WHERE id = ?');
   for (const row of pins) {
     const old = Number(row.target_margin_pct);
     if (!Number.isFinite(old)) continue;
-    updPin.run(Math.min(old * factor, MAX_TARGET_MARGIN_PCT), row.id);
+    updPin.run(Math.min(old * factor, clampCeiling), row.id);
   }
 
   const updSetting = db.prepare('UPDATE settings SET value = ? WHERE key = ?');

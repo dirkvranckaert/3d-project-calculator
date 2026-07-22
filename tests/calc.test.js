@@ -383,6 +383,24 @@ describe('calculateFinalPricing', () => {
     expect(result.suggestedMarginPct).toBeCloseTo(69.67, 1);
   });
 
+  // Same fence as calculateActualMargin, but targeted rather than an exact
+  // shape: this function returns a dozen fields and legitimately gains more,
+  // and `totalInclVat` / `suggestedPrice` are prices, not margins. What must
+  // never come back is a second *margin or profit* read against the incl-VAT
+  // price — that figure is profit plus the VAT owed to the tax office.
+  test('reports no incl-VAT profit or margin field', () => {
+    const result = calc.calculateFinalPricing({
+      perItemCosts: { materialCost: 1, processingCost: 0.5, electricityCost: 0.2, printerUsageCost: 0.1, totalPerItem: 1.8 },
+      profits: { totalProfit: 1 },
+      extraCostsTotal: 0,
+      itemsPerSet: 1,
+      vatRate: 21,
+      priceRounding: 0.99,
+    });
+    const offenders = Object.keys(result).filter(k => /(margin|profit).*incl/i.test(k));
+    expect(offenders).toEqual([]);
+  });
+
   test('extraHoursCost adds to productionCost AND totalExclVat — no margin', () => {
     const perItemCosts = { materialCost: 1, processingCost: 0.5, electricityCost: 0.2, printerUsageCost: 0.1, totalPerItem: 1.8 };
     const profits = { totalProfit: 1 };

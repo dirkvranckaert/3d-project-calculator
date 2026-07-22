@@ -111,8 +111,41 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
 
     withFreshDbModule(() => {});
 
-    expect(readProject(id).target_margin_pct).toBe(calc.maxReachableMarginPct());
-    expect(readProject(id).target_margin_pct).toBe(95);
+    // Strictly below the cap, never equal to it: the cap is an exclusive bound.
+    expect(readProject(id).target_margin_pct).toBeLessThan(calc.maxReachableMarginPct());
+    expect(readProject(id).target_margin_pct).toBe(94.99);
+  });
+
+  // A migration must never write a value the app's own validators reject.
+  // Clamping to exactly 95 did: `calculateLockedPrice` and the margin-lock route
+  // both reject `target >= maxPct`, so the whole clamped band landed on locks
+  // that could not produce a price at all.
+  test.each([78.51, 78.6, 80, 82.6])(
+    'an old pin of %s%% migrates to a lock that still prices',
+    (oldPin) => {
+      rewindToOldBasis(21);
+      const id = seedProject(`Pinned ${oldPin}`, oldPin);
+
+      withFreshDbModule(() => {});
+
+      const migrated = readProject(id).target_margin_pct;
+      expect(migrated).toBeLessThan(95);
+
+      const lock = calc.calculateLockedPrice(100, migrated, 21, 0.99);
+      expect(lock.reason).toBeNull();
+      expect(lock.price).toBeGreaterThan(0);
+    }
+  );
+
+  test('the whole legal old-basis range survives migration priceable', () => {
+    // Everything below the old 82.64% ceiling was a legal pin, so nothing in
+    // that range may migrate into an unpriceable lock.
+    for (let oldPin = 1; oldPin < 82.64; oldPin += 0.5) {
+      const migrated = Math.min(oldPin * 1.21, 95 - 0.01);
+      const lock = calc.calculateLockedPrice(100, migrated, 21, 0.99);
+      expect(lock.reason).toBeNull();
+      expect(lock.price).toBeGreaterThan(0);
+    }
   });
 
   test('leaves projects without a pin alone', () => {

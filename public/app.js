@@ -1753,7 +1753,7 @@ function renderPricingSection(p) {
       <div class="big-price">${fmt(pr.productionCost)}</div>
       <div class="sub">excl. VAT, no margins</div>
       ${isSet ? `<div class="sub" style="opacity:.6">${pi(pr.productionCost)}</div>` : ''}
-      ${minPriceForGreen > 0 ? `<div class="sub" style="margin-top:4px">Min. for ${greenPct}% margin excl. VAT: <strong>${fmt(minPriceForGreen)}</strong></div>` : ''}
+      ${minPriceForGreen > 0 ? `<div class="sub" style="margin-top:4px">Min. for ${greenPct}% margin excl. VAT: <strong>${fmt(minPriceForGreen)}</strong> incl. VAT</div>` : ''}
     </div>
     <div class="pricing-block">
       <h4>Total excl. VAT</h4>
