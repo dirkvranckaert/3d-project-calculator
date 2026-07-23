@@ -1729,9 +1729,14 @@ function renderPricingSection(p) {
       ? `Margin on the price excl. VAT — click to change the locked margin`
       : `Margin on the price excl. VAT — click to lock a target margin`;
     const marginArg = isLocked ? lock.targetPct : am.marginPct.toFixed(2);
+    // When unlocked, the price value itself is the edit entry point — clicking
+    // it opens the same prompt the margin badge uses. When locked, the price is
+    // derived from the margin, so it stays plain and the margin badge is edited.
+    const priceEditable = !isLocked;
     actualBlock = `<div class="pricing-block ${isLocked ? 'pricing-block--locked' : ''}">
       <h4>Actual Sales Price (incl. VAT) ${isLocked ? lockBadge(lock) : ''}</h4>
-      <div class="big-price">${fmt(effPrice)}</div>
+      <div class="big-price${priceEditable ? ' big-price--editable' : ''}"${priceEditable
+        ? ` title="Click to change the actual sales price" onclick="promptActualPrice(${p.id}, ${p.actual_sales_price})"` : ''}>${fmt(effPrice)}</div>
       <div class="sub">${fmt(am.actualExclVat)} excl. VAT</div>
       <div class="sub">Profit excl. VAT: ${fmt(am.profitAmount)} <span class="margin-badge ${c.actualIndicator} margin-badge--editable"
         title="${marginTitle}" onclick="promptTargetMargin(${p.id}, ${marginArg})">${fmtPct(am.marginPct)}</span></div>
@@ -1803,7 +1808,6 @@ function renderPricingSection(p) {
   <div style="padding:8px 0 0;text-align:right">
     ${isLocked ? `<button class="btn btn-sm" onclick="setMarginLock(${p.id}, false)">Unlock margin</button>` : ''}
     ${(p.actual_sales_price > 0 || isLocked) ? `<button class="btn btn-sm" onclick="clearActualPrice(${p.id})">Clear actual price</button>` : ''}
-    ${(p.actual_sales_price > 0 && !isLocked) ? `<button class="btn btn-sm" onclick="promptActualPrice(${p.id}, ${p.actual_sales_price})">Change price</button>` : ''}
     <button class="btn btn-sm" onclick="openVerifyModal(${p.id})">Verify batch</button>
   </div>
   </div>`;

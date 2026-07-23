@@ -580,6 +580,10 @@ body {
 /* Placeholder variant: no margin to colour yet, but still the lock entry point. */
 .margin-badge--empty { background: var(--surface-hover); color: var(--text-muted); }
 .margin-badge--editable:hover { filter: brightness(1.08); }
+/* Unlocked actual sales price is click-to-edit — mirror the margin badge's
+   affordance so the price value itself reads as clickable. */
+.big-price--editable { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.big-price--editable:hover { filter: brightness(1.08); }
 
 /* Margin lock */
 .lock-badge {
