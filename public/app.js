@@ -1767,11 +1767,21 @@ function renderPricingSection(p) {
   const allInExclSet = baseExclSet + (c.designCosts?.designTotal || 0);
   const allInInclSet = allInExclSet * vatMult;
 
+  // `designTotal` is an excl. VAT figure — every setup & design input is entered
+  // excl. VAT (see the tab's table headers). This card sits directly beside
+  // "Actual Sales Price (incl. VAT)", so an unlabelled big number on the other
+  // basis reads as addable and is not (Dirk 2026-07-24: 539.83 + 200 is neither
+  // basis). Lead with incl. VAT in the same shape as the sales-price card and
+  // label both bases. VAT is still applied once, at the end.
+  const designExclSet = c.designCosts?.designTotal || 0;
+  const designInclSet = designExclSet * vatMult;
+
   const designCostBlock = p.is_custom && c.designCosts?.designTotal > 0 ? `
     <div class="pricing-block pricing-block--summary">
-      <h4>Setup &amp; Design (one-time)</h4>
-      <div class="big-price">${fmt(c.designCosts.designTotal)}</div>
-      ${isSet ? `<div class="sub" style="opacity:.6">${pi(c.designCosts.designTotal)}</div>` : ''}
+      <h4>Setup &amp; Design (one-time, incl. VAT)</h4>
+      <div class="big-price">${fmt(designInclSet)}</div>
+      <div class="sub">${fmt(designExclSet)} excl. VAT</div>
+      ${isSet ? `<div class="sub" style="opacity:.6">${pi(designExclSet)} excl. &middot; ${pi(designInclSet)} incl. VAT</div>` : ''}
       <div class="sub" style="opacity:.6">Not included in unit price — <a href="javascript:void(0)"
         onclick="switchDetailTab('design', ${p.id})" style="color:var(--primary);text-decoration:none">see Setup &amp; Design tab</a></div>
       <div class="sub" style="margin-top:4px"><strong>All-in / item incl. setup &amp; design: ${fmt(allInExclSet / setSize)} excl. &middot; ${fmt(allInInclSet / setSize)} incl. VAT</strong></div>
