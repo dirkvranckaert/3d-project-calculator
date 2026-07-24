@@ -134,7 +134,11 @@ npm test                # parallel — flaky, see below
 
 **Coverage stops at the backend.** The Jest suite is effectively backend-only — `public/app.js` frontend code is not covered, and `node --check` catches syntax only. A logic break there (infinite recursion, wrong lookup) passes both gates and ships. Escape hatch, already used by `tests/tags-widget.test.js`, `tests/hours-format.test.js`, `tests/import-3mf-colors.test.js` and `tests/preserved-project-fields.test.js`: extract a **named, DOM-free** function in `public/app.js` and pull it out via `vm` in the test. Anonymous click handlers are unreachable that way — name the function first. Follow this pattern whenever frontend logic needs coverage.
 
-**Parallel runs are flaky (pre-existing, 2026-07-09).** The full parallel `jest` run fails a rotating handful of `server.test.js` cases with `socket hang up` / 404. Cause: the integration suites share one SQLite/WAL test DB + express socket lifecycle across jest's parallel workers. Serial (`--runInBand`) and per-suite runs are deterministic and green. Don't chase a "new" failure until you've reproduced it serially. Real fix (unassigned): give each worker its own `DB_PATH`, or pin `--runInBand` in the `test` script.
+**Parallel runs are flaky (pre-existing, 2026-07-09).** The full parallel `jest` run fails a rotating handful of `server.test.js` cases with `socket hang up` / 404. Cause: the integration suites share one SQLite/WAL test DB + express socket lifecycle across jest's parallel workers. Serial (`--runInBand`) and per-suite runs are deterministic and green. Don't chase a "new" failure until you've reproduced it serially.
+
+**Mechanism (reproduced 2026-07-24):** an aborted or concurrent jest run leaves dirty state in the shared test DB; the *next* run trips over it. Kill a run mid-flight → next run 23 failures → run again 1 failure → run again green. So a red parallel run says more about the previous run than about your diff.
+
+**Sharp edge:** `"test": "jest --verbose"` in `package.json` is still the parallel — i.e. flaky — variant, while the coding conventions above say "run `npm test` before claiming done". Pinning `--runInBand` in the `test` script fixes both in one line. Real fix (**unassigned**): give each worker its own `DB_PATH`, or pin `--runInBand`.
 
 ## Deploy
 
@@ -148,6 +152,7 @@ Deployed via the shared infrastructure repo: `../infrastructure/apps/project-cal
 - rsync-releases pattern (no server-side `git pull`): rsync → `releases/<ts>/` → `npm ci --omit=dev` → flip `current` symlink → pm2 `delete + start` (not restart) → health check `/login` 200 + dummy-creds POST 401. **Auto-rollback on a failed health check**; manual rollback via `deploy.sh --rollback`.
 - Prod `.env` and `data/` are symlinked from `shared/` and are never overwritten by a deploy.
 - **Static assets sit behind auth — a 302 is not a failed deploy.** A public `GET https://3dprojects.app3.be/app.js` returns **302** (redirect to login), never the file, so you cannot smoke-test new frontend code over plain HTTP. Verify server-side over ssh instead: compare the sha256 of the deployed `public/app.js` against the local one. Don't read a 302 as "the deploy didn't take".
+- **A green health check proves almost nothing.** `GET /login` 200 + dummy-creds `POST /login` 401 both run entirely off env-var creds and never touch the DB (see Gotchas: lazy migrations) and never touch the frontend bundle. Green means "the process boots and serves", not "migrations applied" and not "the new `app.js` shipped". **The only real frontend verification is the server-side sha256 of `current/public/app.js` vs the local file.** No cache-bump step is needed — the service worker is network-only.
 
 ## Gotchas
 
@@ -345,6 +350,10 @@ Route looks up printer and material from DB, calls `resolveKwh`, calls `calc.cal
 
 ### VAT model (whole app)
 Every **cost input** is excl. VAT. Margins apply on the excl. base. VAT applied **once**, at the end → suggested/actual selling price is **incl. VAT**. `projects.actual_sales_price` and the Verify "actual selling total" are incl. VAT (both divided by `1 + vat_rate/100`). All money inputs, table headers, section totals and summary cards carry an explicit `excl. VAT` / `incl. VAT` label. Deliberately unlabeled: per-plate cost columns (cards above already say it), gram-only figures, catalog-picker dropdown prices.
+
+**Invariant — adjacent big numbers must share one VAT base.** The labeling rule is not cosmetic. An unlabeled large amount sitting next to a card that says "(INCL. VAT)" invites the reader to add across two different VAT bases; that is exactly how the "wrong price" report on project 20 arose (a €539,83 incl. figure added to a €200 excl. figure — no calculation bug). New summary cards: big amount **incl. VAT**, excl. underneath, per-item lines showing both bases.
+
+**Data pitfall — setup/design amounts entered 2026-06-02 … 2026-07-09 may be wrong data.** The Design Cost Module landed in `4a95168` (2026-06-02); the `(excl. VAT)` labels on the design input fields only landed in `218dcdc` (2026-07-09). Code always treated those amounts as excl. VAT, but during that window the form never said so — so a value may have been typed as incl. VAT. Since the labeling fix this shows up loudly (the card renders a visibly too-high incl. amount) instead of computing quietly wrong. When an old project's setup/design cost looks off, check this first: it is a **data correction, not a code fix**.
 
 ### `materialRequirements` — grams per brand + type + colour
 `calc.js` `aggregateMaterialRequirements(enabledPlates, itemsPerSet)`, returned by `calculateProject`. Enabled non-test plates only (`enabled && !isTestPrint`), same filter and same `(totalPlasticGrams / items_per_plate) × itemsPerSet` scaling as Material Cost.
