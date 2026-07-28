@@ -79,7 +79,9 @@ project-calculator/
 Code ships in a fixed order: **code → review round → reviewer signoff (`APPROVED`) → push → deploy.**
 
 - The review round starts automatically once a coder lands a commit — no need to ask for it.
-- The coder never pushes and never deploys. The **reviewer** pushes, once they have signed off.
+- The **reviewer signs off only** (`APPROVED` / `CHANGES REQUESTED`) — never pushes, never deploys, never touches git.
+- On `APPROVED`, the **dev** merges to `main`, deletes the feature branch (local + remote), and **pushes `origin/main`**. The dev owns the push, not the reviewer.
+- **Senne** runs the production deploy (`../infrastructure/apps/project-calculator/deploy.sh`) under standing auto-deploy authority.
 - `CHANGES REQUESTED` sends it back to the coder and the review round repeats.
 - After `APPROVED`, push and deploy proceed without waiting on Dirk — unless he asks to hold (see Deploy). He is informed of the result afterwards.
 - Applies to every change size, trivial one-liners included.
