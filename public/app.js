@@ -3464,6 +3464,67 @@ async function schedulePrint(projectId, fileId) {
   }
 }
 
+// direction: -1 = up, +1 = down. Returns a fresh copy of `order` with the
+// entry at fromIdx swapped toward `direction`; an out-of-range target is a
+// no-op (returns an unchanged copy). Mirrors tests/import-3mf-ordering.test.js.
+function reorderPlates(order, fromIdx, direction) {
+  const next = order.slice();
+  const target = fromIdx + direction;
+  if (target < 0 || target >= next.length) return next;
+  [next[fromIdx], next[target]] = [next[target], next[fromIdx]];
+  return next;
+}
+
+// Clamp a Copies input to an integer in [1, max]. Non-numeric or < 1 falls
+// back to 1; anything above the cap is clamped down to the cap.
+function sanitizeCopies(value, max = 50) {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 1) return 1;
+  if (n > max) return max;
+  return n;
+}
+
+// Build the ordered plate payload for the planner. `order` is the user-defined
+// sequence of plate indices; `inputs` maps a plate index to its row values.
+// Only checked rows are emitted, in `order`. `copies` is passed through as a
+// count — the planner expands each plate into N back-to-back jobs in place.
+function buildScheduleQueue(order, inputs) {
+  return order
+    .map(i => inputs[i])
+    .filter(row => row && row.checked)
+    .map(row => ({
+      plateIndex: row.plateIndex,
+      name: row.name,
+      printerId: row.printerId,
+      customerName: row.customerName,
+      orderNr: row.orderNr,
+      durationMins: row.durationMins,
+      bedType: row.bedType,
+      copies: row.copies,
+      colors: row.colors,
+    }));
+}
+
+// Swap a schedule-dialog row toward `direction` (-1 up / +1 down) and reflow
+// the DOM to match, preserving each row's entered values (appendChild moves
+// existing nodes rather than recreating them).
+function moveScheduleRow(plateIdx, direction) {
+  const order = window._spOrder || [];
+  const pos = order.indexOf(plateIdx);
+  if (pos < 0) return;
+  window._spOrder = reorderPlates(order, pos, direction);
+  applyScheduleRowOrder();
+}
+
+function applyScheduleRowOrder() {
+  const container = document.getElementById('sp-rows');
+  if (!container) return;
+  (window._spOrder || []).forEach(i => {
+    const row = container.querySelector(`[data-sp-row="${i}"]`);
+    if (row) container.appendChild(row);
+  });
+}
+
 function showSchedulePreview(parsed, plannerPrinters, fileId, project, sourceFilename) {
   const printerLabel = parsed.printerName ? ` (${parsed.printerName})` : '';
   document.getElementById('edit-dialog-title').textContent = `Schedule Print${printerLabel} — ${parsed.plates.length} plate${parsed.plates.length > 1 ? 's' : ''}`;
@@ -3494,13 +3555,19 @@ function showSchedulePreview(parsed, plannerPrinters, fileId, project, sourceFil
       f.color ? `<span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${f.color};border:1px solid rgba(0,0,0,.15)" title="${hexToName(f.color)}"></span>` : ''
     ).join(' ');
 
-    return `<div style="display:flex;gap:12px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:6px">
+    const reorderCtrl = parsed.plates.length > 1 ? `<span style="margin-left:auto;display:inline-flex;gap:2px">
+            <button type="button" class="btn btn-sm" title="Move up" onclick="moveScheduleRow(${i},-1)" style="padding:2px 7px;line-height:1">&#9650;</button>
+            <button type="button" class="btn btn-sm" title="Move down" onclick="moveScheduleRow(${i},1)" style="padding:2px 7px;line-height:1">&#9660;</button>
+          </span>` : '';
+
+    return `<div data-sp-row="${i}" style="display:flex;gap:12px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:6px">
       ${thumb ? `<img src="${thumb}" style="width:64px;height:64px;object-fit:cover;border-radius:4px;border:1px solid var(--border);flex-shrink:0" alt="">` : ''}
       <div style="flex:1;min-width:0">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
           <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin:0"><input type="checkbox" checked data-sp-check="${i}" style="width:auto"> <strong>Plate ${pl.index}</strong></label>
           <span style="color:var(--text-muted);font-size:12px">${typeInfo}${pl.bedType ? ` / ${pl.bedType.replace(/_/g,' ')}` : ''}</span>
           ${colorDots}
+          ${reorderCtrl}
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:13px">
           <div><label style="font-size:11px;color:var(--text-muted)">Name</label><input type="text" value="${esc(nameDefault)}" data-sp-name="${i}" style="width:100%;padding:4px 8px;font-size:13px"></div>
@@ -3513,6 +3580,7 @@ function showSchedulePreview(parsed, plannerPrinters, fileId, project, sourceFil
           </select></div>
           <div><label style="font-size:11px;color:var(--text-muted)">Customer</label><input type="text" value="${esc(project?.customer_name || '')}" data-sp-customer="${i}" style="width:100%;padding:4px 8px;font-size:13px"></div>
           <div><label style="font-size:11px;color:var(--text-muted)">Order #</label><input type="text" value="" data-sp-ordernr="${i}" style="width:100%;padding:4px 8px;font-size:13px"></div>
+          <div><label style="font-size:11px;color:var(--text-muted)">Copies</label><input type="number" min="1" max="50" value="1" data-sp-copies="${i}" style="width:100%;padding:4px 8px;font-size:13px"></div>
         </div>
       </div>
     </div>`;
@@ -3534,13 +3602,15 @@ function showSchedulePreview(parsed, plannerPrinters, fileId, project, sourceFil
           Jobs will be scheduled at the first available moment per printer.
         </div>
       </div>
-      ${rows.join('')}
+      <div id="sp-rows" style="display:flex;flex-direction:column;gap:12px">${rows.join('')}</div>
     </div>`;
 
   // Store data for confirm
   window._spParsed = parsed;
   window._spFileId = fileId;
   window._spProject = project;
+  // User-defined scheduling order (plate indices); mutated by moveScheduleRow.
+  window._spOrder = parsed.plates.map((_, i) => i);
 
   // Wire up mode toggle + total update
   document.querySelectorAll('input[name="sp-mode"]').forEach(r => {
@@ -3585,8 +3655,7 @@ async function confirmSchedulePrint() {
     // hexToName when the sibling app is unreachable or has no matching hex.
     const filamentCatalog = await fetchFilamentCatalog().catch(() => []);
 
-    const plates = parsed.plates.map((pl, i) => {
-      if (!document.querySelector(`[data-sp-check="${i}"]`)?.checked) return null;
+    const inputs = parsed.plates.map((pl, i) => {
       const isDual = pl.isDualExtruder || (pl.nozzleCount || 1) >= 2;
       const colors = (pl.filaments || []).map(f => {
         const profile = parsed.filamentProfiles?.[f.id - 1];
@@ -3602,6 +3671,7 @@ async function confirmSchedulePrint() {
         };
       });
       return {
+        checked: !!document.querySelector(`[data-sp-check="${i}"]`)?.checked,
         plateIndex: pl.index,
         name: document.querySelector(`[data-sp-name="${i}"]`)?.value || `Plate ${pl.index}`,
         printerId: parseInt(document.querySelector(`[data-sp-printer="${i}"]`)?.value) || null,
@@ -3609,9 +3679,15 @@ async function confirmSchedulePrint() {
         orderNr: document.querySelector(`[data-sp-ordernr="${i}"]`)?.value || null,
         durationMins: Math.round(pl.printTimeMinutes || 0),
         bedType: pl.bedType || null,
+        copies: sanitizeCopies(document.querySelector(`[data-sp-copies="${i}"]`)?.value),
         colors,
       };
-    }).filter(Boolean);
+    });
+
+    // Emit checked plates in the user-defined order; the planner expands each
+    // plate's `copies` into N sequential jobs on the plate's printer.
+    const order = window._spOrder || parsed.plates.map((_, i) => i);
+    const plates = buildScheduleQueue(order, inputs);
 
     if (!plates.length) { await showAlert({ title: 'Scheduler', message: 'No plates selected.' }); return; }
 
