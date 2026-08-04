@@ -3598,6 +3598,10 @@ function showSchedulePreview(parsed, plannerPrinters, fileId, project, sourceFil
           <div><label style="font-size:12px;font-weight:600;color:var(--text-muted)">Start Date</label><input type="date" id="sp-date" value="${todayStr}" style="padding:6px 10px;font-size:14px"></div>
           <div><label style="font-size:12px;font-weight:600;color:var(--text-muted)">Start Time</label><input type="time" id="sp-time" value="08:00" style="padding:6px 10px;font-size:14px"></div>
         </div>
+        <div style="margin-top:8px">
+          <label style="font-size:12px;font-weight:600;color:var(--text-muted)">Project (in PrintFarm)</label>
+          <input type="text" id="sp-project" value="${esc(project?.name || '')}" placeholder="Optional — new or existing" style="width:100%;padding:6px 10px;font-size:14px">
+        </div>
         <div id="sp-auto" style="display:none;font-size:13px;color:var(--text-muted);padding:6px 0">
           Jobs will be scheduled at the first available moment per printer.
         </div>
@@ -3703,7 +3707,7 @@ async function confirmSchedulePrint() {
       credentials: 'include',
       headers: {
         'Content-Type': 'application/octet-stream',
-        'X-Schedule': encodeURIComponent(JSON.stringify({ plates, startISO, mode: mode === 'first-available' ? 'first-available' : 'manual' })),
+        'X-Schedule': encodeURIComponent(JSON.stringify({ plates, startISO, mode: mode === 'first-available' ? 'first-available' : 'manual', project: document.getElementById('sp-project')?.value?.trim() || null })),
       },
       body: fileBuffer,
     });
