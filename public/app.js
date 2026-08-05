@@ -3501,6 +3501,7 @@ function buildScheduleQueue(order, inputs) {
       durationMins: row.durationMins,
       bedType: row.bedType,
       copies: row.copies,
+      items: row.items ?? null,
       colors: row.colors,
     }));
 }
@@ -3684,6 +3685,9 @@ async function confirmSchedulePrint() {
         durationMins: Math.round(pl.printTimeMinutes || 0),
         bedType: pl.bedType || null,
         copies: sanitizeCopies(document.querySelector(`[data-sp-copies="${i}"]`)?.value),
+        // Physical item count on this plate (objects excl. wipe tower). Forwarded
+        // to the planner so each created job seeds its `items` from the 3MF.
+        items: pl.objectCount ?? null,
         colors,
       };
     });
