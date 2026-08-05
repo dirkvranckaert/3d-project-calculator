@@ -3139,6 +3139,8 @@ async function saveTheme(value) { await PUT(`/api/settings/theme`, { value }); s
 /*  Utility                                                            */
 /* ================================================================== */
 function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+// Attribute-safe escape: like esc() but also encodes quotes so a value is safe inside "..." / '...'.
+function escAttr(s) { return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
 function inlineConfirm(message, anchorEl) {
   return new Promise(resolve => {
@@ -3623,7 +3625,7 @@ function showSchedulePreview(parsed, plannerPrinters, fileId, project, sourceFil
         <div style="margin-top:8px">
           <label style="font-size:12px;font-weight:600;color:var(--text-muted)">Project (in PrintFarm)</label>
           <input type="text" id="sp-project" list="sp-project-list" value="${esc(project?.name || '')}" placeholder="Optional — new or existing" style="width:100%;padding:6px 10px;font-size:14px">
-          <datalist id="sp-project-list">${(openProjects || []).map(p => `<option value="${esc(p.label)}"></option>`).join('')}</datalist>
+          <datalist id="sp-project-list">${(openProjects || []).map(p => `<option value="${escAttr(p.label)}"></option>`).join('')}</datalist>
         </div>
         <div id="sp-auto" style="display:none;font-size:13px;color:var(--text-muted);padding:6px 0">
           Jobs will be scheduled at the first available moment per printer.
