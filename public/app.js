@@ -3139,6 +3139,8 @@ async function saveTheme(value) { await PUT(`/api/settings/theme`, { value }); s
 /*  Utility                                                            */
 /* ================================================================== */
 function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+// Attribute-safe escape: like esc() but also encodes quotes so a value is safe inside "..." / '...'.
+function escAttr(s) { return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
 function inlineConfirm(message, anchorEl) {
   return new Promise(resolve => {
@@ -3431,6 +3433,23 @@ async function confirmPlateMapping() {
 /* ================================================================== */
 /*  Schedule Print to Planner (cross-app)                              */
 /* ================================================================== */
+// Fetch the planner's currently-OPEN projects for the schedule-dialog project
+// suggestions. Cross-origin GET carrying the shared-auth cookie — same mechanism
+// as the /api/printers fetch above. Fail-soft: any error (planner down, CORS,
+// not logged in) yields [] so the project field silently degrades to plain
+// free-text (a console warning is the only signal).
+async function fetchOpenPlannerProjects() {
+  try {
+    const res = await fetch(`${plannerPublicUrl}/api/projects`, { credentials: 'include' });
+    if (!res.ok) throw new Error(`projects fetch ${res.status}`);
+    const all = await res.json();
+    return (Array.isArray(all) ? all : []).filter(p => p && p.status !== 'closed');
+  } catch (e) {
+    console.warn('Could not fetch open PrintFarm projects for suggestions:', e);
+    return [];
+  }
+}
+
 async function schedulePrint(projectId, fileId) {
   if (!plannerAvailable || !plannerPublicUrl) { await showAlert({ title: 'Scheduler', message: 'PrintFarm Planner not available.' }); return; }
 
@@ -3453,9 +3472,13 @@ async function schedulePrint(projectId, fileId) {
     if (!printersRes.ok) throw new Error('Could not fetch printers from planner');
     const plannerPrinters = await printersRes.json();
 
+    // 3. Fetch the planner's OPEN projects for the project-field suggestions
+    //    (fail-soft — never blocks scheduling).
+    const openProjects = await fetchOpenPlannerProjects();
+
     // 4. Show preview dialog
     const fileRecord = (project?.files || []).find(f => f.id === fileId);
-    showSchedulePreview(parsed, plannerPrinters, fileId, project, fileRecord?.filename);
+    showSchedulePreview(parsed, plannerPrinters, fileId, project, fileRecord?.filename, openProjects);
   } catch (e) {
     document.getElementById('edit-dialog-body').innerHTML = `<p style="color:var(--danger);padding:12px">${esc(e.message)}</p>`;
     document.getElementById('btn-edit-dialog-save').style.display = '';
@@ -3526,7 +3549,7 @@ function applyScheduleRowOrder() {
   });
 }
 
-function showSchedulePreview(parsed, plannerPrinters, fileId, project, sourceFilename) {
+function showSchedulePreview(parsed, plannerPrinters, fileId, project, sourceFilename, openProjects = []) {
   const printerLabel = parsed.printerName ? ` (${parsed.printerName})` : '';
   document.getElementById('edit-dialog-title').textContent = `Schedule Print${printerLabel} — ${parsed.plates.length} plate${parsed.plates.length > 1 ? 's' : ''}`;
 
@@ -3601,7 +3624,8 @@ function showSchedulePreview(parsed, plannerPrinters, fileId, project, sourceFil
         </div>
         <div style="margin-top:8px">
           <label style="font-size:12px;font-weight:600;color:var(--text-muted)">Project (in PrintFarm)</label>
-          <input type="text" id="sp-project" value="${esc(project?.name || '')}" placeholder="Optional — new or existing" style="width:100%;padding:6px 10px;font-size:14px">
+          <input type="text" id="sp-project" list="sp-project-list" value="${esc(project?.name || '')}" placeholder="Optional — new or existing" style="width:100%;padding:6px 10px;font-size:14px">
+          <datalist id="sp-project-list">${(openProjects || []).map(p => `<option value="${escAttr(p.label)}"></option>`).join('')}</datalist>
         </div>
         <div id="sp-auto" style="display:none;font-size:13px;color:var(--text-muted);padding:6px 0">
           Jobs will be scheduled at the first available moment per printer.
