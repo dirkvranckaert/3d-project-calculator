@@ -165,6 +165,7 @@ Deployed via the shared infrastructure repo: `../infrastructure/apps/project-cal
 - **Schema migrations are lazy — they run on the FIRST DB-touching request, not at boot.** `getDb()` defers `bootstrap()`/`migrate()` until first call. The deploy health checks (GET `/login`, plus a dummy POST `/login` that 401s against env-var creds) never touch the DB, so after a deploy a new column/migration is still PENDING until the first real authenticated DB request. Don't conclude "the migration failed" if you inspect the DB right after deploy and the column is missing — load any project page (or run `require('./db').getDb()` once) to apply it.
 - **Undefined CSS custom properties fail silently — a whole bug class.** `var(--undefined-token, #f7f7f8)` always resolves to the light fallback, in *every* theme, so the element renders light in dark mode with no error in console, build or tests. Without a fallback the entire declaration is invalid and the property drops, also silently. Four undefined tokens shipped live here (`--bg-muted`, `--bg-subtle`, `--bg-card`, `--red`). Sweep for them by comparing every `var(--x)` reference in `public/app.js`, `public/style.css`, `public/index.html` and `public/login.html` against the tokens actually defined in `style.css`. A token counts as defined only when it is in all three theme blocks: `:root`, the `prefers-color-scheme: dark` media query, and `[data-theme="dark"]`.
 - **Inspecting the live DB: use a normal (read-write) connection, never `readonly`.** Prod runs WAL. A `readonly` better-sqlite3 connection on a WAL DB only sees the last checkpoint in the main `.db` file and misses everything in `-wal` (recent writes, just-applied migrations) — so a `readonly` `PRAGMA table_info` can show a stale schema, and the main `.db` mtime/size can look old while `-wal` holds the live data. Open RW (do only SELECTs) to see true state.
+- **`esc()` is UNSAFE in HTML attribute context.** `esc()` (`public/app.js`, textContent→innerHTML) escapes only `& < >`, NOT quotes → `value="${esc(...)}"` breaks out on a `"` in the value. For attribute context use `escAttr()` = `esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;')`. Datalist option in the schedule dialog uses `escAttr`. KNOWN DEBT: plain `esc()` still used in other `value="${esc(...)}"` sites repo-wide (house convention) — repo-wide attr-safe audit is a pending task, not yet done.
 
 ## Files section — sliced vs model 3MF (added 2026-06-17)
 
@@ -376,6 +377,12 @@ Every **cost input** is excl. VAT. Margins apply on the excl. base. VAT applied 
 
 ### `fmtTime`
 Single shared helper (`public/app.js`). ≥24h → `Dd Hh Mm` with zero components dropped (`485h 46m` → `20d 5h 46m`, `48h` → `2d`). <24h unchanged. `formatHoursMinutes` (H:MM rate inputs) is a separate concern — leave it alone.
+
+## Schedule dialog → planner (items + project datalist)
+
+- **X-Schedule payload** sends per-plate `items: pl.objectCount ?? null` (planner import sets `job.items`).
+- **`#sp-project`** in the schedule dialog is free-text AND offers a `<datalist>` of OPEN planner projects, fetched via `GET ${plannerPublicUrl}/api/projects` (`credentials:'include'`, fail-soft → `[]` on any error; filter `status !== 'closed'`). Datalist options use `escAttr` (see Gotchas).
+- Planner side needs no change — `GET /api/projects` already CORS-allowed for the calculator origin.
 
 ## Architecture guide
 
