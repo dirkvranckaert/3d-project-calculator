@@ -110,9 +110,12 @@ describe('Setup & Design card — VAT basis', () => {
     expect(block).toContain(`<div class="sub">€${DESIGN_EXCL.toFixed(2)} excl. VAT</div>`);
   });
 
-  test('the per-item line carries both bases', () => {
+  // The per-item design-cost line was removed 2026-08-31 (Dirk) — the All-in
+  // / item line below already carries the per-item reading; this one was
+  // redundant and easy to misread as addable to it.
+  test('the per-item design-cost line is gone — only the all-in line remains', () => {
     const block = designBlock(renderPricingSection(customProject({ itemsPerSet: 40 })));
-    expect(block).toContain('€5.00 / item excl. &middot; €6.05 / item incl. VAT');
+    expect(block).not.toContain('/ item excl.');
   });
 
   test('a single-item project shows no per-item line', () => {

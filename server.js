@@ -471,6 +471,7 @@ function enrichProject(db, project) {
     marginLocked: !!project.margin_locked,
     targetMarginPct: project.target_margin_pct,
     lockedMarginPct: project.locked_margin_pct,
+    designInvoicedSeparately: !!project.design_invoiced_separately,
   });
 
   return {
@@ -573,6 +574,7 @@ function enrichProjectLite(db, project) {
     marginLocked: !!project.margin_locked,
     targetMarginPct: project.target_margin_pct,
     lockedMarginPct: project.locked_margin_pct,
+    designInvoicedSeparately: !!project.design_invoiced_separately,
   });
 
   return {
@@ -730,12 +732,13 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
   // The margin lock is a pricing policy, not a recorded sale, so it follows the
   // copy — unlike actual_sales_price, which stays empty on a duplicate.
   const r = db.prepare(`INSERT INTO projects
-    (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, margin_locked, target_margin_pct, locked_margin_pct)
-    VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, margin_locked, target_margin_pct, locked_margin_pct, design_invoiced_separately)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
     .run(`${src.name} (copy)`, src.customer_name, src.items_per_set, src.tags || '', src.notes, src.is_custom || 0,
       src.design_notes || null, src.margin_locked || 0,
       src.target_margin_pct ?? defaultTargetMargin(db),
-      src.locked_margin_pct ?? null);
+      src.locked_margin_pct ?? null,
+      src.design_invoiced_separately || 0);
   const newId = r.lastInsertRowid;
 
   // Copy plates (including test-print plates — orphan plates copied as orphans with test_print_id=null)
@@ -810,6 +813,17 @@ app.patch('/api/projects/:id/custom', (req, res) => {
   const newVal = project.is_custom ? 0 : 1;
   db.prepare("UPDATE projects SET is_custom = ?, updated_at = datetime('now') WHERE id = ?").run(newVal, req.params.id);
   res.json({ ok: true, is_custom: newVal });
+});
+
+// Toggle whether setup & design is invoiced separately (drives only the
+// all-in profit/margin figure — see calc.calculateAllInMargin). Default false.
+app.patch('/api/projects/:id/design-invoiced-separately', (req, res) => {
+  const db = getDb();
+  const project = db.prepare('SELECT design_invoiced_separately FROM projects WHERE id = ?').get(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Not found' });
+  const newVal = project.design_invoiced_separately ? 0 : 1;
+  db.prepare("UPDATE projects SET design_invoiced_separately = ?, updated_at = datetime('now') WHERE id = ?").run(newVal, req.params.id);
+  res.json({ ok: true, design_invoiced_separately: newVal });
 });
 
 app.delete('/api/projects/:id', (req, res) => {

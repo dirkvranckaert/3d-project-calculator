@@ -486,6 +486,65 @@ describe('calculateActualMargin', () => {
 });
 
 /* ================================================================== */
+/*  calculateAllInMargin                                               */
+/* ================================================================== */
+describe('calculateAllInMargin', () => {
+  // Reference project (Dirk, set of 100): productionCost 616.20,
+  // actualExclVat 1972.00, designTotalExcl 550.48.
+  test('toggle OFF — design absorbed into unit price: 40.84% margin', () => {
+    const r = calc.calculateAllInMargin({
+      actualExclVat: 1972.00,
+      productionCost: 616.20,
+      designTotalExcl: 550.48,
+      designInvoicedSeparately: false,
+    });
+    expect(r.revenue).toBeCloseTo(1972.00, 2);
+    expect(r.cost).toBeCloseTo(1166.68, 2);
+    expect(r.profitAmount).toBeCloseTo(805.32, 2);
+    expect(r.marginPct).toBeCloseTo(40.84, 2);
+  });
+
+  test('toggle ON — design invoiced separately, on top: 75.57% margin', () => {
+    const r = calc.calculateAllInMargin({
+      actualExclVat: 1972.00,
+      productionCost: 616.20,
+      designTotalExcl: 550.48,
+      designInvoicedSeparately: true,
+    });
+    expect(r.revenue).toBeCloseTo(2522.48, 2);
+    expect(r.cost).toBeCloseTo(616.20, 2);
+    expect(r.profitAmount).toBeCloseTo(1906.28, 2);
+    expect(r.marginPct).toBeCloseTo(75.57, 2);
+  });
+
+  test('zero design cost — OFF and ON collapse to the same margin', () => {
+    const off = calc.calculateAllInMargin({
+      actualExclVat: 1972.00, productionCost: 616.20, designTotalExcl: 0, designInvoicedSeparately: false,
+    });
+    const on = calc.calculateAllInMargin({
+      actualExclVat: 1972.00, productionCost: 616.20, designTotalExcl: 0, designInvoicedSeparately: true,
+    });
+    expect(off.revenue).toBeCloseTo(on.revenue, 6);
+    expect(off.cost).toBeCloseTo(on.cost, 6);
+    expect(off.marginPct).toBeCloseTo(on.marginPct, 6);
+    expect(off.profitAmount).toBeCloseTo(1355.80, 2);
+  });
+
+  test('zero sales price — revenue 0, margin guarded to 0 not -Infinity', () => {
+    const r = calc.calculateAllInMargin({
+      actualExclVat: 0, productionCost: 616.20, designTotalExcl: 550.48, designInvoicedSeparately: false,
+    });
+    expect(r.revenue).toBe(0);
+    expect(r.marginPct).toBe(0);
+    expect(r.profitAmount).toBeCloseTo(-1166.68, 2);
+  });
+
+  test('missing opts default to 0/false', () => {
+    expect(calc.calculateAllInMargin({})).toEqual({ revenue: 0, cost: 0, profitAmount: 0, marginPct: 0 });
+  });
+});
+
+/* ================================================================== */
 /*  marginIndicator                                                    */
 /* ================================================================== */
 describe('marginIndicator', () => {
@@ -1086,6 +1145,58 @@ describe('calculateProject — design cost module', () => {
     expect(withDesign.pricing.productionCost).toBeCloseTo(withoutDesign.pricing.productionCost, 4);
     expect(withDesign.pricing.totalExclVat).toBeCloseTo(withoutDesign.pricing.totalExclVat, 4);
     expect(withDesign.pricing.suggestedPrice).toBeCloseTo(withoutDesign.pricing.suggestedPrice, 4);
+  });
+
+  // Reference project (Dirk, set of 100), reproduced end-to-end through
+  // calculateProject rather than the pure calculateAllInMargin function:
+  //   productionCost 616.20 (via a single extra cost line, no plates)
+  //   designTotal    550.48 (via a single design-hours line)
+  //   actualSalesPrice 2386.12 incl. VAT -> actualExclVat 1972.00
+  describe('allInMargin (design-invoiced-separately toggle)', () => {
+    const referenceOpts = (designInvoicedSeparately) => ({
+      plates: [],
+      extras: [{ price_excl_vat: 616.20, quantity: 1 }],
+      settings: defaultSettings,
+      itemsPerSet: 1,
+      isCustom: true,
+      designHours: [{ hours: 1, hourly_rate: 550.48 }],
+      actualSalesPrice: 2386.12,
+      designInvoicedSeparately,
+    });
+
+    test('toggle OFF: 40.84% margin', () => {
+      const r = calc.calculateProject(referenceOpts(false));
+      expect(r.pricing.productionCost).toBeCloseTo(616.20, 2);
+      expect(r.designCosts.designTotal).toBeCloseTo(550.48, 2);
+      expect(r.allInMargin.profitAmount).toBeCloseTo(805.32, 2);
+      expect(r.allInMargin.marginPct).toBeCloseTo(40.84, 2);
+    });
+
+    test('toggle ON: 75.57% margin', () => {
+      const r = calc.calculateProject(referenceOpts(true));
+      expect(r.allInMargin.profitAmount).toBeCloseTo(1906.28, 2);
+      expect(r.allInMargin.marginPct).toBeCloseTo(75.57, 2);
+    });
+
+    test('defaults to OFF when designInvoicedSeparately is omitted', () => {
+      const opts = referenceOpts(false);
+      delete opts.designInvoicedSeparately;
+      const r = calc.calculateProject(opts);
+      expect(r.allInMargin.marginPct).toBeCloseTo(40.84, 2);
+    });
+
+    test('isCustom:false → allInMargin and allInIndicator are null', () => {
+      const r = calc.calculateProject({
+        plates: [],
+        extras: [{ price_excl_vat: 616.20, quantity: 1 }],
+        settings: defaultSettings,
+        itemsPerSet: 1,
+        isCustom: false,
+        actualSalesPrice: 2386.12,
+      });
+      expect(r.allInMargin).toBeNull();
+      expect(r.allInIndicator).toBeNull();
+    });
   });
 
   test('mixed enabled/disabled/test-print plates — only production-enabled count', () => {
