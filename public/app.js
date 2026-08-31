@@ -1054,7 +1054,6 @@ function renderDesignCostSection(p) {
         <span style="font-weight:600">Setup &amp; Design Total (one-time, excl. VAT)</span>
         <span style="font-size:18px;font-weight:700">${fmt(dc.designTotal || 0)}</span>
       </div>
-      <div class="sub" style="text-align:right;margin-top:4px;opacity:.6">Not included in unit price</div>
     </div>
   </div>`;
 }
@@ -1794,8 +1793,8 @@ function renderPricingSection(p) {
       <h4>Setup &amp; Design (one-time, incl. VAT)</h4>
       <div class="big-price">${fmt(designInclSet)}</div>
       <div class="sub">${fmt(designExclSet)} excl. VAT</div>
-      <div class="sub" style="margin-top:4px"><strong>All-in / item incl. setup &amp; design: ${fmt(allInExclSet / setSize)} excl. &middot; ${fmt(allInInclSet / setSize)} incl. VAT</strong></div>
-      <div class="sub" style="opacity:.55">Based on ${basisLabel} + one-time setup &amp; design spread over ${setSize} item${setSize > 1 ? 's' : ''}</div>
+      <div class="sub" style="margin-top:4px"><strong>All-in value / item: ${fmt(allInExclSet / setSize)} excl. &middot; ${fmt(allInInclSet / setSize)} incl. VAT</strong></div>
+      <div class="sub" style="opacity:.55">Based on ${basisLabel} + one-time setup &amp; design spread over ${setSize} item${setSize > 1 ? 's' : ''} &mdash; the loaded job value per item, not the amount actually invoiced per item</div>
       ${aim ? `<div class="sub" style="margin-top:4px">Profit excl. VAT: ${fmt(aim.profitAmount)} <span class="margin-badge ${c.allInIndicator}"
         title="All-in margin — production cost + setup &amp; design vs. revenue, per the design-invoicing toggle">${fmtPct(aim.marginPct)}</span></div>` : ''}
     </div>` : '';

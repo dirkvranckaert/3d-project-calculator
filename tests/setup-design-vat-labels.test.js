@@ -142,7 +142,7 @@ describe('Setup & Design card — the all-in line is unchanged', () => {
     const p = customProject();
     const block = designBlock(renderPricingSection(p));
     const expected = (p.calculation.actualMargin.actualExclVat + DESIGN_EXCL) / 40;
-    const m = block.match(/All-in \/ item incl\. setup &amp; design: €([\d.]+) excl\./);
+    const m = block.match(/All-in value \/ item: €([\d.]+) excl\./);
     expect(m).not.toBeNull();
     expect(Number(m[1])).toBeCloseTo(expected, 2);
   });
