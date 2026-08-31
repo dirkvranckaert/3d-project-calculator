@@ -400,6 +400,48 @@ function calculateActualMargin(actualSalesPrice, productionCost, vatRate) {
 }
 
 /**
+ * All-in profit/margin — folds the one-time setup & design cost into (or
+ * keeps it out of) the profit picture, depending on whether the project
+ * bills design separately (`designInvoicedSeparately`, per-project toggle,
+ * default false = design absorbed into the unit price).
+ *
+ *   OFF (absorbed, Dirk's normal case):
+ *     revenue = actualExclVat
+ *     cost    = productionCost + designTotalExcl
+ *   ON (invoiced separately, on top):
+ *     revenue = actualExclVat + designTotalExcl
+ *     cost    = productionCost
+ *
+ * A descriptive margin like `calculateActualMargin` — not a pinnable target,
+ * so MAX_MARGIN_PCT does not apply here (that cap bounds what can be locked
+ * in, not what a resulting margin can read).
+ *
+ * @param {object} opts
+ *   - actualExclVat            {number} net revenue basis, ex-VAT (actual
+ *     sales price when known, else the suggested price — same basis the
+ *     "All-in / item" figure uses)
+ *   - productionCost           {number}
+ *   - designTotalExcl          {number}
+ *   - designInvoicedSeparately {boolean}
+ * @returns {{ revenue: number, cost: number, profitAmount: number, marginPct: number }}
+ */
+function calculateAllInMargin(opts) {
+  const {
+    actualExclVat = 0,
+    productionCost = 0,
+    designTotalExcl = 0,
+    designInvoicedSeparately = false,
+  } = opts;
+
+  const revenue = designInvoicedSeparately ? actualExclVat + designTotalExcl : actualExclVat;
+  const cost = designInvoicedSeparately ? productionCost : productionCost + designTotalExcl;
+  const profitAmount = revenue - cost;
+  const marginPct = revenue > 0 ? (profitAmount / revenue) * 100 : 0;
+
+  return { revenue, cost, profitAmount, marginPct };
+}
+
+/**
  * Determine margin color indicator.
  *
  * Thresholds are ex-VAT margins (Dirk 2026-07-22). Green at 40% sits just above
@@ -663,6 +705,7 @@ function calculateProject(opts) {
     marginLocked = false,
     targetMarginPct = null,
     lockedMarginPct = null,
+    designInvoicedSeparately = false,
   } = opts;
 
   const s = {
@@ -804,6 +847,22 @@ function calculateProject(opts) {
     );
   }
 
+  // All-in profit/margin — only meaningful when the project carries design
+  // costs. Uses the same revenue basis as the UI's "All-in / item" figure:
+  // the actual sales price when known, else the suggested price.
+  let allInMargin = null;
+  let allInIndicator = null;
+  if (designCosts) {
+    const revenueBasis = actualMargin ? actualMargin.actualExclVat : pricing.suggestedExclVat;
+    allInMargin = calculateAllInMargin({
+      actualExclVat: revenueBasis,
+      productionCost: pricing.productionCost,
+      designTotalExcl: designCosts.designTotal,
+      designInvoicedSeparately,
+    });
+    allInIndicator = marginIndicator(allInMargin.marginPct, projectTarget, s.lowest_target_margin_pct);
+  }
+
   return {
     plateBreakdowns,
     perItemCosts,
@@ -820,6 +879,8 @@ function calculateProject(opts) {
     actualIndicator,
     marginLock,
     effectiveSalesPrice,
+    allInMargin,
+    allInIndicator,
     targetMarginPct: projectTarget,
     settings: s,
   };
@@ -991,6 +1052,7 @@ module.exports = {
   calculateDesignCosts,
   calculateFinalPricing,
   calculateActualMargin,
+  calculateAllInMargin,
   roundToPriceEnding,
   numOr,
   maxReachableMarginPct,

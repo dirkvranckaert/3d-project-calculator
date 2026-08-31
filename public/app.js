@@ -864,6 +864,17 @@ function renderDesignCostSection(p) {
       onblur="saveDesignNotes(${p.id}, this.value)">${esc(p.design_notes || '')}</textarea>
   </div>`;
 
+  // ── Design invoiced separately toggle ───────────────────────────────
+  // Drives only the all-in profit/margin figure on the pricing tab (see
+  // calc.calculateAllInMargin). Default off: design absorbed into unit price.
+  const invoicedSeparatelyBlock = `<div class="project-notes-section">
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+      <label class="toggle"><input type="checkbox" ${p.design_invoiced_separately ? 'checked' : ''}
+        onchange="toggleDesignInvoicedSeparately(${p.id})"><span class="toggle-slider"></span></label>
+      <span>Design invoiced separately (not folded into the unit price)</span>
+    </label>
+  </div>`;
+
   // ── Design hours sub-table rows ─────────────────────────────────────
   const dhRows = designHoursItems.map((e, i) => {
     const decHours = Number(e.hours) || 0;
@@ -1001,6 +1012,7 @@ function renderDesignCostSection(p) {
     <div class="extras-section-header"><h3>Setup &amp; Design</h3></div>
 
     ${notesBlock}
+    ${invoicedSeparatelyBlock}
 
     <h4 style="font-size:13px;margin:8px 0 4px;color:var(--text-muted)">Design Hours</h4>
     <div data-design-hours-panel="${p.id}">
@@ -1042,7 +1054,6 @@ function renderDesignCostSection(p) {
         <span style="font-weight:600">Setup &amp; Design Total (one-time, excl. VAT)</span>
         <span style="font-size:18px;font-weight:700">${fmt(dc.designTotal || 0)}</span>
       </div>
-      <div class="sub" style="text-align:right;margin-top:4px;opacity:.6">Not included in unit price</div>
     </div>
   </div>`;
 }
@@ -1776,29 +1787,30 @@ function renderPricingSection(p) {
   const designExclSet = c.designCosts?.designTotal || 0;
   const designInclSet = designExclSet * vatMult;
 
+  const aim = c.allInMargin;
   const designCostBlock = p.is_custom && c.designCosts?.designTotal > 0 ? `
     <div class="pricing-block pricing-block--summary">
       <h4>Setup &amp; Design (one-time, incl. VAT)</h4>
       <div class="big-price">${fmt(designInclSet)}</div>
       <div class="sub">${fmt(designExclSet)} excl. VAT</div>
-      ${isSet ? `<div class="sub" style="opacity:.6">${pi(designExclSet)} excl. &middot; ${pi(designInclSet)} incl. VAT</div>` : ''}
-      <div class="sub" style="opacity:.6">Not included in unit price — <a href="javascript:void(0)"
-        onclick="switchDetailTab('design', ${p.id})" style="color:var(--primary);text-decoration:none">see Setup &amp; Design tab</a></div>
-      <div class="sub" style="margin-top:4px"><strong>All-in / item incl. setup &amp; design: ${fmt(allInExclSet / setSize)} excl. &middot; ${fmt(allInInclSet / setSize)} incl. VAT</strong></div>
-      <div class="sub" style="opacity:.55">Based on ${basisLabel} + one-time setup &amp; design spread over ${setSize} item${setSize > 1 ? 's' : ''}</div>
+      <div class="sub" style="margin-top:4px"><strong>All-in value / item: ${fmt(allInExclSet / setSize)} excl. &middot; ${fmt(allInInclSet / setSize)} incl. VAT</strong></div>
+      <div class="sub" style="opacity:.55">Based on ${basisLabel} + one-time setup &amp; design spread over ${setSize} item${setSize > 1 ? 's' : ''} &mdash; the loaded job value per item, not the amount actually invoiced per item</div>
+      ${aim ? `<div class="sub" style="margin-top:4px">Profit excl. VAT: ${fmt(aim.profitAmount)} <span class="margin-badge ${c.allInIndicator}"
+        title="All-in margin — production cost + setup &amp; design vs. revenue, per the design-invoicing toggle">${fmtPct(aim.marginPct)}</span></div>` : ''}
     </div>` : '';
 
   return `<div class="pricing-section"><div class="pricing-grid">
     <div class="pricing-block">
-      <h4>Production Cost (${itemLabel})</h4>
+      <h4>Raw Production Cost (${itemLabel})</h4>
       <div class="big-price">${fmt(pr.productionCost)}</div>
       <div class="sub">excl. VAT, no margins</div>
       ${isSet ? `<div class="sub" style="opacity:.6">${pi(pr.productionCost)}</div>` : ''}
       ${minPriceForGreen > 0 ? `<div class="sub" style="margin-top:4px">Min. for ${greenPct}% margin excl. VAT: <strong>${fmt(minPriceForGreen)}</strong> incl. VAT</div>` : ''}
     </div>
     <div class="pricing-block">
-      <h4>Total excl. VAT</h4>
+      <h4>Total excl. VAT (basic margins applied)</h4>
       <div class="big-price">${fmt(pr.totalExclVat)}</div>
+      <div class="sub" style="opacity:.6">Material/labour/machine margins applied</div>
       ${pr.extraHoursCost > 0 ? `<div class="sub">Extra hours: ${fmt(pr.extraHoursCost)}</div>` : ''}
       <div class="sub">+ VAT (${settings.vat_rate}%): ${fmt(pr.vatAmount)}</div>
       <div class="sub">Total incl. VAT: ${fmt(pr.totalInclVat)}</div>
@@ -1908,6 +1920,11 @@ async function toggleCustomFlag(projectId) {
     currentDetailTab = 'print';
   }
   await PATCH(`/api/projects/${projectId}/custom`);
+  await reloadSingleProject(projectId);
+}
+
+async function toggleDesignInvoicedSeparately(projectId) {
+  await PATCH(`/api/projects/${projectId}/design-invoiced-separately`);
   await reloadSingleProject(projectId);
 }
 

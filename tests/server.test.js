@@ -1171,6 +1171,72 @@ describe('Design Cost Module', () => {
 });
 
 /* ================================================================== */
+/*  Design invoiced separately toggle                                  */
+/* ================================================================== */
+describe('PATCH /api/projects/:id/design-invoiced-separately', () => {
+  let pid;
+
+  beforeAll(async () => {
+    const res = await request(app).post('/api/projects').set('Cookie', cookie)
+      .send({ name: 'Invoiced Separately Test', items_per_set: 1 });
+    pid = res.body.id;
+  });
+
+  afterAll(async () => {
+    await request(app).delete(`/api/projects/${pid}`).set('Cookie', cookie);
+  });
+
+  test('new project defaults to design_invoiced_separately=0', async () => {
+    const res = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    expect(res.body.design_invoiced_separately).toBe(0);
+  });
+
+  test('toggles design_invoiced_separately 0→1', async () => {
+    const res = await request(app).patch(`/api/projects/${pid}/design-invoiced-separately`).set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.design_invoiced_separately).toBe(1);
+    const check = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    expect(check.body.design_invoiced_separately).toBe(1);
+  });
+
+  test('toggles design_invoiced_separately 1→0', async () => {
+    const res = await request(app).patch(`/api/projects/${pid}/design-invoiced-separately`).set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.body.design_invoiced_separately).toBe(0);
+    const check = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookie);
+    expect(check.body.design_invoiced_separately).toBe(0);
+  });
+
+  test('returns 404 for a missing project', async () => {
+    const res = await request(app).patch('/api/projects/999999/design-invoiced-separately').set('Cookie', cookie);
+    expect(res.status).toBe(404);
+  });
+
+  test('returns 404 rather than throwing on a non-numeric id', async () => {
+    const res = await request(app).patch('/api/projects/not-a-number/design-invoiced-separately').set('Cookie', cookie);
+    expect(res.status).toBe(404);
+  });
+
+  test('requires auth', async () => {
+    const res = await request(app).patch(`/api/projects/${pid}/design-invoiced-separately`);
+    expect(res.status).toBe(401);
+  });
+
+  test('a duplicate carries design_invoiced_separately over', async () => {
+    // pid is currently 0 (toggled back above) — flip it on so the copy is meaningful.
+    await request(app).patch(`/api/projects/${pid}/design-invoiced-separately`).set('Cookie', cookie);
+    const dup = await request(app).post(`/api/projects/${pid}/duplicate`).set('Cookie', cookie).send({});
+    expect(dup.status).toBe(201);
+    expect(dup.body.design_invoiced_separately).toBe(1);
+    // Cleanup
+    await request(app).delete(`/api/projects/${dup.body.id}`).set('Cookie', cookie);
+    // Restore pid to 0 for isolation from any test order changes.
+    await request(app).patch(`/api/projects/${pid}/design-invoiced-separately`).set('Cookie', cookie);
+  });
+});
+
+/* ================================================================== */
 /*  3MF sliced-vs-model detection (is_sliced)                          */
 /* ================================================================== */
 describe('Files — is_sliced detection', () => {
