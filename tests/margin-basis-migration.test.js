@@ -120,15 +120,26 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
     expect(readProject(id).target_margin_pct).toBeCloseTo(53, 6);
   });
 
-  test('clamps a converted value that would exceed the 95% cap', () => {
+  test('clamps a converted value that would exceed the cap', () => {
     rewindToOldBasis(21);
-    const id = seedProject('Pinned 80', 80); // 80 * 1.21 = 96.8
+    // The old basis topped out at 1/1.21 = 82.64%, which converts to 100% —
+    // exactly the cap, so the steepest legal old pin is the one that clamps.
+    const id = seedProject('Pinned 82.64', 82.64); // 82.64 * 1.21 = 99.9944
 
     withFreshDbModule(() => {});
 
     // Strictly below the cap, never equal to it: the cap is an exclusive bound.
     expect(readProject(id).target_margin_pct).toBeLessThan(calc.maxReachableMarginPct());
-    expect(readProject(id).target_margin_pct).toBe(94.99);
+    expect(readProject(id).target_margin_pct).toBeCloseTo(calc.maxReachableMarginPct() - 0.01, 6);
+  });
+
+  test('a pin that fits under the raised cap is no longer clamped', () => {
+    rewindToOldBasis(21);
+    const id = seedProject('Pinned 80', 80); // 80 * 1.21 = 96.8, legal since the cap is 100
+
+    withFreshDbModule(() => {});
+
+    expect(readProject(id).target_margin_pct).toBeCloseTo(96.8, 6);
   });
 
   // A migration must never write a value the app's own validators reject.
@@ -144,7 +155,7 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
       withFreshDbModule(() => {});
 
       const migrated = readProject(id).target_margin_pct;
-      expect(migrated).toBeLessThan(95);
+      expect(migrated).toBeLessThan(calc.maxReachableMarginPct());
 
       const lock = calc.calculateLockedPrice(100, migrated, 21);
       expect(lock.reason).toBeNull();
@@ -156,7 +167,7 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
     // Everything below the old 82.64% ceiling was a legal pin, so nothing in
     // that range may migrate into an unpriceable lock.
     for (let oldPin = 1; oldPin < 82.64; oldPin += 0.5) {
-      const migrated = Math.min(oldPin * 1.21, 95 - 0.01);
+      const migrated = Math.min(oldPin * 1.21, calc.maxReachableMarginPct() - 0.01);
       const lock = calc.calculateLockedPrice(100, migrated, 21);
       expect(lock.reason).toBeNull();
       expect(lock.price).toBeGreaterThan(0);

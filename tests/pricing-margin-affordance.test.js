@@ -101,8 +101,8 @@ describe('pricing section — margin affordance', () => {
     'no actual price, no lock': project(),
     'actual price, no lock': project({ actualSalesPrice: 500 }),
     'locked': project({ marginLocked: true, targetMarginPct: 60 }),
-    // Above the 95% cap: locked, but no price can be derived.
-    'locked but underivable': project({ marginLocked: true, targetMarginPct: 95 }),
+    // At the 100% cap: locked, but no price can be derived.
+    'locked but underivable': project({ marginLocked: true, targetMarginPct: 100 }),
   };
 
   test.each(Object.keys(states))('%s — exactly one clickable margin badge', (name) => {

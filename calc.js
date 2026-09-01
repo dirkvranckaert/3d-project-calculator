@@ -221,17 +221,26 @@ function roundToPriceEnding(value, priceRounding = 0.99) {
 }
 
 /**
- * Hard cap on a pinnable margin.
+ * Hard cap on a pinnable margin — the mathematical bound, not a house rule.
  *
- * On the ex-VAT basis there is no VAT-derived ceiling any more — the
- * mathematical limit is 100% (price -> infinity as margin -> 100%). 95% is a
- * sane practical stop well short of the asymptote, where the price still
- * behaves: at 95% the price is 20x cost, at 99% it is 100x.
+ * On the ex-VAT basis the price inverts as price_ex = cost / (1 - margin): at
+ * exactly 100% the denominator is 0 (infinite price) and above it negative (a
+ * price under cost, reported as a profit). So the cap is an EXCLUSIVE 100 —
+ * every value strictly below it prices, however steep: 95% is 20x cost, 99% is
+ * 100x, 99.9% is 1000x.
+ *
+ * Raised from a flat 95 (Dirk, 2026-09-01): 95 was a practical stop short of
+ * the asymptote with no mathematical reason behind it, and it rejected steep
+ * pins that price perfectly well.
+ *
+ * This is a MARGIN (profit / selling price), never a markup (profit / cost).
+ * There is no such thing as a margin above 100%; a 150% *markup* is legal and
+ * equals a 60% margin.
  *
  * Independent of the VAT rate. The argument is ignored and kept only so
  * existing call sites do not have to be threaded differently.
  */
-const MAX_MARGIN_PCT = 95;
+const MAX_MARGIN_PCT = 100;
 
 function maxReachableMarginPct() {
   return MAX_MARGIN_PCT;
@@ -266,7 +275,7 @@ function roundToCents(value) {
  *
  * Returns `{ price, rawPrice, reason, maxMarginPct }`. `price` is null when no
  * price can be derived, with `reason` explaining why:
- *   'unreachable' — target margin >= the hard cap (95%)
+ *   'unreachable' — target margin >= the hard cap (100%)
  *   'no-cost'     — production cost is 0 or missing, so there is nothing to mark up
  */
 function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21) {

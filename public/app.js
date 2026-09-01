@@ -2380,14 +2380,16 @@ async function setMarginLock(projectId, locked, lockedPct) {
   return res;
 }
 
-// Hard cap on a pinnable margin — mirrors calc.js `MAX_MARGIN_PCT`.
-const MAX_MARGIN_PCT = 95;
+// Hard cap on a pinnable margin — mirrors calc.js `MAX_MARGIN_PCT`. An
+// exclusive bound: at 100% the derived price is infinite (price = cost / (1 -
+// margin)), above it negative. Not a house rule, and not a markup ceiling.
+const MAX_MARGIN_PCT = 100;
 
 async function promptTargetMargin(projectId, current) {
   const maxPct = MAX_MARGIN_PCT;
   const val = await showPrompt({
     title: 'Lock target margin',
-    message: `Enter the margin you want to hold, measured on the price excl. VAT. The sales price is recalculated from the production cost and follows it when costs change. Max ${maxPct}%.`,
+    message: `Enter the margin you want to hold, measured on the price excl. VAT. The sales price is recalculated from the production cost and follows it when costs change. Must be below ${maxPct}% — margin is profit as a share of the selling price, so ${maxPct}% would mean an infinite price.`,
     label: 'Target margin excl. VAT (%)',
     placeholder: '60',
     initialValue: current != null ? String(current) : '',
@@ -2396,7 +2398,7 @@ async function promptTargetMargin(projectId, current) {
       if (!t) return 'Margin is required';
       const n = parseFloat(t.replace(',', '.'));
       if (!isFinite(n)) return 'Enter a valid number';
-      if (n >= maxPct) return `Must be below ${maxPct}%`;
+      if (n >= maxPct) return `Must be below ${maxPct}% — margin is profit as a share of the selling price, so ${maxPct}% is an infinite price. A markup on cost converts: 150% markup = 60% margin.`;
       if (n < -100) return 'Margin cannot be below -100%';
       return null;
     },

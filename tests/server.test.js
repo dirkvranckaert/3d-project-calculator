@@ -863,11 +863,11 @@ describe('Margin lock routes', () => {
     expect(p.target_margin_pct).toBe(40);
   });
 
-  test('a locked pct at or above the 95% cap is rejected', async () => {
+  test('a locked pct at or above the 100% cap is rejected', async () => {
     const res = await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
-      .send({ locked: true, locked_margin_pct: 95 });
+      .send({ locked: true, locked_margin_pct: 100 });
     expect(res.status).toBe(400);
-    expect(res.body.maxMarginPct).toBe(95);
+    expect(res.body.maxMarginPct).toBe(100);
     expect(res.body.error).not.toMatch(/82\.6/);
     // Still on the previous valid lock; target untouched throughout.
     const p = await getProject(pid);
@@ -884,6 +884,37 @@ describe('Margin lock routes', () => {
     // Put the fixture back on its 60% lock for the tests that follow.
     await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
       .send({ locked: true, locked_margin_pct: 60 });
+  });
+
+  test.each([95, 96, 99, 99.99])(
+    '%s%% is accepted — above the old 95%% cap, below the 100%% asymptote',
+    async (pct) => {
+      const res = await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+        .send({ locked: true, locked_margin_pct: pct });
+      expect(res.status).toBe(200);
+      expect(res.body.locked_margin_pct).toBe(pct);
+      expect(res.body.calculation.effectiveSalesPrice).toBeGreaterThan(0);
+      // Put the fixture back on its 60% lock for the tests that follow.
+      await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+        .send({ locked: true, locked_margin_pct: 60 });
+    }
+  );
+
+  test.each([100, 150, 1000])('%s%% is rejected — no margin can exceed the selling price', async (pct) => {
+    const res = await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: true, locked_margin_pct: pct });
+    expect(res.status).toBe(400);
+    expect(res.body.maxMarginPct).toBe(100);
+    const p = await getProject(pid);
+    expect(p.locked_margin_pct).toBe(60);
+  });
+
+  test('a non-numeric locked pct is rejected', async () => {
+    const res = await request(app).patch(`/api/projects/${pid}/margin-lock`).set('Cookie', cookie)
+      .send({ locked: true, locked_margin_pct: 'abc' });
+    expect(res.status).toBe(400);
+    const p = await getProject(pid);
+    expect(p.locked_margin_pct).toBe(60);
   });
 
   test('locking with no pct in the body and no prior lock is rejected', async () => {
