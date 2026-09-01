@@ -2915,10 +2915,10 @@ function renderMarginsSettings() {
     <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
     <div class="settings-row"><label>Default Target Margin (% excl. VAT)<br>
       <span style="font-size:12px;color:var(--text-muted)">Seeds new projects only — existing projects keep their own target</span></label>
-      <input type="number" value="${settings.default_target_margin_pct ?? 40}" step="1" onchange="saveSetting('default_target_margin_pct', this.value)"></div>
+      <input type="number" value="${settings.default_target_margin_pct ?? 40}" step="0.01" min="-100" max="99.99" onchange="saveSetting('default_target_margin_pct', this.value)"></div>
     <div class="settings-row"><label>Lowest Target Margin (% excl. VAT)<br>
       <span style="font-size:12px;color:var(--text-muted)">Global floor — any margin below this shows red</span></label>
-      <input type="number" value="${settings.lowest_target_margin_pct ?? 25}" step="1" onchange="saveSetting('lowest_target_margin_pct', this.value)"></div>
+      <input type="number" value="${settings.lowest_target_margin_pct ?? 25}" step="0.01" min="-100" max="99.99" onchange="saveSetting('lowest_target_margin_pct', this.value)"></div>
     ${renderTargetMarginGuidance()}`;
 }
 function renderThemeSettings() {
@@ -3154,7 +3154,20 @@ async function saveSetting(key, value) {
     'material_profit_pct', 'processing_profit_pct', 'electricity_profit_pct', 'printer_cost_profit_pct',
     'default_target_margin_pct', 'lowest_target_margin_pct'];
   const val = numericKeys.includes(key) ? parseFloat(value) : value;
-  await PUT(`/api/settings/${key}`, { value: val });
+  // The margin settings are validated server-side (they seed and floor every
+  // project target), so a save can legitimately 400. Without this the rejection
+  // was unhandled: the field kept the refused value and said nothing.
+  try {
+    await PUT(`/api/settings/${key}`, { value: val });
+  } catch (e) {
+    await showAlert({ title: 'Setting not saved', message: e.message });
+    // Repaint the tab so the field falls back to the stored value instead of
+    // showing a number the server refused.
+    if (typeof renderSettingsTab === 'function' && typeof activeSettingsTab !== 'undefined') {
+      try { renderSettingsTab(activeSettingsTab); } catch (_) { /* tab not open, no-op */ }
+    }
+    return;
+  }
   settings[key] = val;
   await reloadProjects();
   // currency_symbol is referenced in setting labels themselves — re-render the
