@@ -254,7 +254,13 @@ function maxReachableMarginPct() {
  * rounding down.
  */
 function roundToCents(value) {
-  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+  const n = Number(value);
+  // Past MAX_SAFE_INTEGER/100 the `* 100` cannot represent cents any more, and
+  // past ~1.7e306 it overflows to Infinity — turning a finite price into a
+  // blank one. Such a value is already an exact number of cents as far as a
+  // double can tell, so hand it back untouched instead.
+  if (!Number.isFinite(n) || Math.abs(n) > Number.MAX_SAFE_INTEGER / 100) return n;
+  return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
 /**
@@ -292,16 +298,23 @@ function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21) {
   // `(100 - target) / 100`, never `1 - target / 100`. The two are algebraically
   // equal but not in floating point: a target a hair under the cap makes the
   // second cancel catastrophically (at 99.99999999999999 it is out by 28%), and
-  // the error lands straight in the price. Divide before the subtraction loses
-  // the significant digits.
-  const priceExVat = (Number(productionCost) * 100) / (100 - target);
+  // the error lands straight in the price. Subtracting at full scale first
+  // keeps the significant digits. Dividing the cost by that fraction, rather
+  // than multiplying the cost by 100 first, also keeps a huge cost from
+  // overflowing on its way to a perfectly finite price.
+  const priceExVat = Number(productionCost) / ((100 - target) / 100);
   const rawPrice = priceExVat * (1 + vatRate / 100);
-  // A target close enough to the cap overflows to Infinity on a large enough
-  // cost. An unpriceable lock is exactly what 'unreachable' means; returning
-  // Infinity would serialise to null and render a blank price with no reason.
-  if (!Number.isFinite(rawPrice)) return { ...base, reason: 'unreachable' };
+  const price = roundToCents(rawPrice);
+  // A target close enough to the cap overflows on a large enough cost — and
+  // `roundToCents` multiplies by 100, so it can overflow on its own after a
+  // finite `rawPrice`. An unpriceable lock is exactly what 'unreachable'
+  // means; returning Infinity would serialise to null and render a blank price
+  // with no reason given.
+  if (!Number.isFinite(rawPrice) || !Number.isFinite(price)) {
+    return { ...base, reason: 'unreachable' };
+  }
   return {
-    price: roundToCents(rawPrice),
+    price,
     rawPrice,
     reason: null,
     maxMarginPct,
@@ -375,10 +388,16 @@ function calculateFinalPricing(opts) {
   const targetUsable = Number.isFinite(target) && target < MAX_MARGIN_PCT && productionCost > 0;
   // Same stable inversion as `calculateLockedPrice` — see the comment there.
   const targetPrice = targetUsable
-    ? ((productionCost * 100) / (100 - target)) * (1 + vatRate / 100)
+    ? (productionCost / ((100 - target) / 100)) * (1 + vatRate / 100)
     : NaN;
-  const suggestedPrice = Number.isFinite(targetPrice)
+  // `roundToPriceEnding` maps a non-finite input to 0, so the fallback has to
+  // be decided on `targetPrice` itself — 0 is a price, and a silent 0 here
+  // would read as "free" rather than "no target".
+  const targetPriceRounded = Number.isFinite(targetPrice)
     ? roundToPriceEnding(targetPrice, priceRounding)
+    : NaN;
+  const suggestedPrice = Number.isFinite(targetPriceRounded)
+    ? targetPriceRounded
     : roundToPriceEnding(totalInclVat, priceRounding);
 
   // Sales excl VAT

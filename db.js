@@ -298,6 +298,9 @@ function migrateMarginBasisToExVat(db) {
     const old = Number(row.target_margin_pct);
     if (!Number.isFinite(old)) continue;
     const converted = old * factor;
+    // A stored pin large enough to overflow the multiplication is not data any
+    // conversion can rescue — leaving it is better than writing +/-Infinity.
+    if (!Number.isFinite(converted)) continue;
     updPin.run(converted < MAX_TARGET_MARGIN_PCT ? converted : clampCeiling, row.id);
   }
 

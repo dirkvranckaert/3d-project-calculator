@@ -2036,6 +2036,34 @@ describe('margin lock', () => {
         expect(res.reason).toBe('unreachable');
       });
 
+      test('a finite price survives the cent rounding instead of overflowing', () => {
+        // `roundToCents` multiplies by 100, which used to turn this finite
+        // price into Infinity — serialised as null, a blank price with no reason.
+        const res = calc.calculateLockedPrice(1e300, 99.99999, 21);
+        expect(res.reason).toBeNull();
+        expect(Number.isFinite(res.price)).toBe(true);
+        expect(res.price / res.rawPrice).toBeCloseTo(1, 9);
+      });
+
+      test('a huge cost at a modest target still prices — no overflow on the way', () => {
+        // The inversion must not multiply the cost by 100 first: 2e306 * 100
+        // overflows, while the answer it is heading for is perfectly finite.
+        for (const pct of [0, 50]) {
+          const res = calc.calculateLockedPrice(2e306, pct, 21);
+          expect(res.reason).toBeNull();
+          expect(Number.isFinite(res.price)).toBe(true);
+        }
+      });
+
+      test('a huge cost at a modest target does not fall back to the legacy engine', () => {
+        const r = calc.calculateFinalPricing({
+          perItemCosts: { totalPerItem: 2e306 }, profits: { totalProfit: 0 },
+          extraCostsTotal: 0, vatRate: 21, priceRounding: 0.99, targetMarginPct: 50,
+        });
+        expect(Number.isFinite(r.suggestedPrice)).toBe(true);
+        expect(r.suggestedPrice).toBeGreaterThan(2e306);
+      });
+
       test('an overflowing target falls back instead of a suggested Infinity', () => {
         const r = calc.calculateFinalPricing({
           perItemCosts: { totalPerItem: 1e300 }, profits: { totalProfit: 0 },

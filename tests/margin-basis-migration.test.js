@@ -185,6 +185,18 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
     }
   });
 
+  test.each([1.7e308, -1.7e308])('a stored pin of %p overflows the conversion and is left alone', (pin) => {
+    rewindToOldBasis(21);
+    const id = seedProject(`Overflowing ${pin}`, pin);
+
+    withFreshDbModule(() => {});
+
+    // Writing +/-Infinity into the column would be worse than leaving the
+    // nonsense value that was already there.
+    expect(Number.isFinite(readProject(id).target_margin_pct)).toBe(true);
+    expect(readProject(id).target_margin_pct).toBe(pin);
+  });
+
   test('does not invent a pin for a project that had none', () => {
     rewindToOldBasis(21);
     const id = seedProject('Unpinned', null);
