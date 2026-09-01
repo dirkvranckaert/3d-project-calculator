@@ -285,6 +285,11 @@ function migrateMarginBasisToExVat(db) {
   // route both reject `target >= maxPct`. Clamping to the cap itself would
   // therefore write a value the app's own API would 400 on: the lock stays set,
   // no price can be derived, and the project renders "—". Land strictly below.
+  //
+  // Clamp ONLY what actually reaches the cap. The whole point of this migration
+  // is that a pinned price does not move, and an unconditional `Math.min` moved
+  // it: a legal old pin of 82.64% converts to 99.9944%, which prices fine, yet
+  // a blanket clamp to 99.99% cut that price by 44%.
   const clampCeiling = MAX_TARGET_MARGIN_PCT - 0.01;
 
   const pins = db.prepare('SELECT id, target_margin_pct FROM projects WHERE target_margin_pct IS NOT NULL').all();
@@ -292,7 +297,8 @@ function migrateMarginBasisToExVat(db) {
   for (const row of pins) {
     const old = Number(row.target_margin_pct);
     if (!Number.isFinite(old)) continue;
-    updPin.run(Math.min(old * factor, clampCeiling), row.id);
+    const converted = old * factor;
+    updPin.run(converted < MAX_TARGET_MARGIN_PCT ? converted : clampCeiling, row.id);
   }
 
   const updSetting = db.prepare('UPDATE settings SET value = ? WHERE key = ?');

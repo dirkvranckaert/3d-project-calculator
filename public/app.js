@@ -2312,6 +2312,17 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
   };
   const targetRaw = document.getElementById('proj-target-margin')?.value;
   const targetNum = parseFloat(String(targetRaw ?? '').replace(',', '.'));
+  // The `max=` attribute alone does not hold: this handler reads `.value`
+  // without consulting the field's validity, so a typed 150 would be sent and
+  // stored (the server rejects it too, this is the readable half).
+  if (Number.isFinite(targetNum) && targetNum >= MAX_MARGIN_PCT) {
+    await showAlert({
+      title: 'Target margin too high',
+      message: `The target margin must be below ${MAX_MARGIN_PCT}%. Margin is profit as a share of the selling price, `
+        + `so ${MAX_MARGIN_PCT}% would mean an infinite price. A markup on cost converts: 150% markup = 60% margin.`,
+    });
+    return;
+  }
   if (Number.isFinite(targetNum)) data.target_margin_pct = targetNum;
   if (!data.name) return;
   if (editingProjectId) {

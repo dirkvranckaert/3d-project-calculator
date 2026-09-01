@@ -98,10 +98,31 @@ app.get('/api/settings', (_req, res) => {
   res.json(getAllSettings(getDb()));
 });
 
+/**
+ * Reject a margin setting at or above the cap.
+ *
+ * `default_target_margin_pct` SEEDS every new project's target, so an
+ * out-of-range value there hands out targets the project routes themselves
+ * refuse. Returns an error string, or null when the value is fine (including
+ * for any key that is not a margin).
+ */
+function marginSettingError(key, value) {
+  if (key !== 'default_target_margin_pct' && key !== 'lowest_target_margin_pct') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return `${key} must be a number`;
+  const maxPct = calc.maxReachableMarginPct();
+  if (n >= maxPct) return `${key} must be below ${maxPct}%`;
+  return null;
+}
+
 app.put('/api/settings', (req, res) => {
   const db = getDb();
   const entries = req.body;
   if (typeof entries !== 'object') return res.status(400).json({ error: 'Expected object' });
+  for (const [k, v] of Object.entries(entries)) {
+    const err = marginSettingError(k, v);
+    if (err) return res.status(400).json({ error: err, maxMarginPct: calc.maxReachableMarginPct() });
+  }
   for (const [k, v] of Object.entries(entries)) {
     setSetting(db, k, v);
   }
@@ -114,6 +135,8 @@ app.get('/api/settings/:key', (req, res) => {
 });
 
 app.put('/api/settings/:key', (req, res) => {
+  const err = marginSettingError(req.params.key, req.body.value);
+  if (err) return res.status(400).json({ error: err, maxMarginPct: calc.maxReachableMarginPct() });
   setSetting(getDb(), req.params.key, req.body.value);
   res.json({ ok: true });
 });
@@ -640,6 +663,17 @@ app.put('/api/projects/:id', (req, res) => {
   const targetMarginRaw = target_margin_pct !== undefined && target_margin_pct !== null
     ? Number(target_margin_pct)
     : NaN;
+  // The same exclusive cap the margin-lock route enforces. Without it the
+  // `max=` attribute on the modal input was the only guard, and the save
+  // handler reads the field's value without consulting its validity — so a
+  // typed 150 was stored and then silently fell back to the legacy component
+  // pricing, showing a price that had nothing to do with the target.
+  if (Number.isFinite(targetMarginRaw) && targetMarginRaw >= calc.maxReachableMarginPct()) {
+    return res.status(400).json({
+      error: `Target margin (excl. VAT) must be below ${calc.maxReachableMarginPct()}%`,
+      maxMarginPct: calc.maxReachableMarginPct(),
+    });
+  }
   const targetMarginVal = Number.isFinite(targetMarginRaw)
     ? targetMarginRaw
     : (existing?.target_margin_pct ?? defaultTargetMargin(db));

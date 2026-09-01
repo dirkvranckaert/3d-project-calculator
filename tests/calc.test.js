@@ -2017,6 +2017,34 @@ describe('margin lock', () => {
         }
       );
 
+      test.each([99.999, 99.99999, 99.99999999999999])(
+        'a target of %s%% still prices off a stable inversion',
+        (pct) => {
+          const res = calc.calculateLockedPrice(100, pct, 21);
+          expect(res.reason).toBeNull();
+          expect(Number.isFinite(res.rawPrice)).toBe(true);
+          // `100 * 100 / (100 - pct)` is the same algebra without the
+          // catastrophic cancellation of `1 - pct / 100`.
+          // Ratio, not an absolute delta: these prices run to 1e18.
+          expect(res.rawPrice / (((100 * 100) / (100 - pct)) * 1.21)).toBeCloseTo(1, 12);
+        }
+      );
+
+      test('a target close enough to the cap to overflow is unreachable, not Infinity', () => {
+        const res = calc.calculateLockedPrice(1e300, 99.99999999999999, 21);
+        expect(res.price).toBeNull();
+        expect(res.reason).toBe('unreachable');
+      });
+
+      test('an overflowing target falls back instead of a suggested Infinity', () => {
+        const r = calc.calculateFinalPricing({
+          perItemCosts: { totalPerItem: 1e300 }, profits: { totalProfit: 0 },
+          extraCostsTotal: 0, vatRate: 21, priceRounding: 0.99,
+          targetMarginPct: 99.99999999999999,
+        });
+        expect(Number.isFinite(r.suggestedPrice)).toBe(true);
+      });
+
       test('the suggested price follows the same bound', () => {
         const near = calc.calculateFinalPricing({
           perItemCosts: { totalPerItem: 100 }, profits: { totalProfit: 0 },

@@ -289,8 +289,17 @@ function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21) {
   if (!Number.isFinite(target)) return { ...base, reason: 'unreachable' };
   if (target >= maxMarginPct) return { ...base, reason: 'unreachable' };
   if (!(Number(productionCost) > 0)) return { ...base, reason: 'no-cost' };
-  const priceExVat = Number(productionCost) / (1 - target / 100);
+  // `(100 - target) / 100`, never `1 - target / 100`. The two are algebraically
+  // equal but not in floating point: a target a hair under the cap makes the
+  // second cancel catastrophically (at 99.99999999999999 it is out by 28%), and
+  // the error lands straight in the price. Divide before the subtraction loses
+  // the significant digits.
+  const priceExVat = (Number(productionCost) * 100) / (100 - target);
   const rawPrice = priceExVat * (1 + vatRate / 100);
+  // A target close enough to the cap overflows to Infinity on a large enough
+  // cost. An unpriceable lock is exactly what 'unreachable' means; returning
+  // Infinity would serialise to null and render a blank price with no reason.
+  if (!Number.isFinite(rawPrice)) return { ...base, reason: 'unreachable' };
   return {
     price: roundToCents(rawPrice),
     rawPrice,
@@ -364,8 +373,12 @@ function calculateFinalPricing(opts) {
     ? NaN
     : Number(targetMarginPct);
   const targetUsable = Number.isFinite(target) && target < MAX_MARGIN_PCT && productionCost > 0;
-  const suggestedPrice = targetUsable
-    ? roundToPriceEnding((productionCost / (1 - target / 100)) * (1 + vatRate / 100), priceRounding)
+  // Same stable inversion as `calculateLockedPrice` — see the comment there.
+  const targetPrice = targetUsable
+    ? ((productionCost * 100) / (100 - target)) * (1 + vatRate / 100)
+    : NaN;
+  const suggestedPrice = Number.isFinite(targetPrice)
+    ? roundToPriceEnding(targetPrice, priceRounding)
     : roundToPriceEnding(totalInclVat, priceRounding);
 
   // Sales excl VAT

@@ -120,11 +120,11 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
     expect(readProject(id).target_margin_pct).toBeCloseTo(53, 6);
   });
 
-  test('clamps a converted value that would exceed the cap', () => {
+  test('clamps a converted value that would reach the cap', () => {
     rewindToOldBasis(21);
-    // The old basis topped out at 1/1.21 = 82.64%, which converts to 100% —
-    // exactly the cap, so the steepest legal old pin is the one that clamps.
-    const id = seedProject('Pinned 82.64', 82.64); // 82.64 * 1.21 = 99.9944
+    // 83% was never legal on the old basis (it topped out at 1/1.21 = 82.64%),
+    // but a stored value is not a validated one: 83 * 1.21 = 100.43, at the cap.
+    const id = seedProject('Pinned 83', 83);
 
     withFreshDbModule(() => {});
 
@@ -133,14 +133,25 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
     expect(readProject(id).target_margin_pct).toBeCloseTo(calc.maxReachableMarginPct() - 0.01, 6);
   });
 
-  test('a pin that fits under the raised cap is no longer clamped', () => {
-    rewindToOldBasis(21);
-    const id = seedProject('Pinned 80', 80); // 80 * 1.21 = 96.8, legal since the cap is 100
+  test.each([80, 82, 82.64])(
+    'a pin of %s%% converts untouched — clamping it would silently reprice the project',
+    (oldPin) => {
+      rewindToOldBasis(21);
+      const id = seedProject(`Pinned ${oldPin}`, oldPin);
 
-    withFreshDbModule(() => {});
+      withFreshDbModule(() => {});
 
-    expect(readProject(id).target_margin_pct).toBeCloseTo(96.8, 6);
-  });
+      const migrated = readProject(id).target_margin_pct;
+      expect(migrated).toBeCloseTo(oldPin * 1.21, 6);
+
+      // The whole point of the conversion: the derived price does not move.
+      // Old basis: margin = (price_ex - cost) / price_incl, so
+      // price_ex = cost / (1 - oldPin/100 * 1.21).
+      const oldPriceIncl = (100 / (1 - (oldPin / 100) * 1.21)) * 1.21;
+      // Ratio, not an absolute delta: a steep pin prices in the millions.
+      expect(calc.calculateLockedPrice(100, migrated, 21).rawPrice / oldPriceIncl).toBeCloseTo(1, 9);
+    }
+  );
 
   // A migration must never write a value the app's own validators reject.
   // Clamping to exactly 95 did: `calculateLockedPrice` and the margin-lock route
