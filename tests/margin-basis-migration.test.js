@@ -120,16 +120,38 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
     expect(readProject(id).target_margin_pct).toBeCloseTo(53, 6);
   });
 
-  test('clamps a converted value that would exceed the 95% cap', () => {
+  test('clamps a converted value that would reach the cap', () => {
     rewindToOldBasis(21);
-    const id = seedProject('Pinned 80', 80); // 80 * 1.21 = 96.8
+    // 83% was never legal on the old basis (it topped out at 1/1.21 = 82.64%),
+    // but a stored value is not a validated one: 83 * 1.21 = 100.43, at the cap.
+    const id = seedProject('Pinned 83', 83);
 
     withFreshDbModule(() => {});
 
     // Strictly below the cap, never equal to it: the cap is an exclusive bound.
     expect(readProject(id).target_margin_pct).toBeLessThan(calc.maxReachableMarginPct());
-    expect(readProject(id).target_margin_pct).toBe(94.99);
+    expect(readProject(id).target_margin_pct).toBeCloseTo(calc.maxReachableMarginPct() - 0.01, 6);
   });
+
+  test.each([80, 82, 82.64])(
+    'a pin of %s%% converts untouched — clamping it would silently reprice the project',
+    (oldPin) => {
+      rewindToOldBasis(21);
+      const id = seedProject(`Pinned ${oldPin}`, oldPin);
+
+      withFreshDbModule(() => {});
+
+      const migrated = readProject(id).target_margin_pct;
+      expect(migrated).toBeCloseTo(oldPin * 1.21, 6);
+
+      // The whole point of the conversion: the derived price does not move.
+      // Old basis: margin = (price_ex - cost) / price_incl, so
+      // price_ex = cost / (1 - oldPin/100 * 1.21).
+      const oldPriceIncl = (100 / (1 - (oldPin / 100) * 1.21)) * 1.21;
+      // Ratio, not an absolute delta: a steep pin prices in the millions.
+      expect(calc.calculateLockedPrice(100, migrated, 21).rawPrice / oldPriceIncl).toBeCloseTo(1, 9);
+    }
+  );
 
   // A migration must never write a value the app's own validators reject.
   // Clamping to exactly 95 did: `calculateLockedPrice` and the margin-lock route
@@ -144,7 +166,7 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
       withFreshDbModule(() => {});
 
       const migrated = readProject(id).target_margin_pct;
-      expect(migrated).toBeLessThan(95);
+      expect(migrated).toBeLessThan(calc.maxReachableMarginPct());
 
       const lock = calc.calculateLockedPrice(100, migrated, 21);
       expect(lock.reason).toBeNull();
@@ -156,11 +178,23 @@ describe('margin basis migration (incl-VAT -> ex-VAT)', () => {
     // Everything below the old 82.64% ceiling was a legal pin, so nothing in
     // that range may migrate into an unpriceable lock.
     for (let oldPin = 1; oldPin < 82.64; oldPin += 0.5) {
-      const migrated = Math.min(oldPin * 1.21, 95 - 0.01);
+      const migrated = Math.min(oldPin * 1.21, calc.maxReachableMarginPct() - 0.01);
       const lock = calc.calculateLockedPrice(100, migrated, 21);
       expect(lock.reason).toBeNull();
       expect(lock.price).toBeGreaterThan(0);
     }
+  });
+
+  test.each([1.7e308, -1.7e308])('a stored pin of %p overflows the conversion and is left alone', (pin) => {
+    rewindToOldBasis(21);
+    const id = seedProject(`Overflowing ${pin}`, pin);
+
+    withFreshDbModule(() => {});
+
+    // Writing +/-Infinity into the column would be worse than leaving the
+    // nonsense value that was already there.
+    expect(Number.isFinite(readProject(id).target_margin_pct)).toBe(true);
+    expect(readProject(id).target_margin_pct).toBe(pin);
   });
 
   test('does not invent a pin for a project that had none', () => {

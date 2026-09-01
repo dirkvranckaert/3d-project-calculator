@@ -221,17 +221,26 @@ function roundToPriceEnding(value, priceRounding = 0.99) {
 }
 
 /**
- * Hard cap on a pinnable margin.
+ * Hard cap on a pinnable margin — the mathematical bound, not a house rule.
  *
- * On the ex-VAT basis there is no VAT-derived ceiling any more — the
- * mathematical limit is 100% (price -> infinity as margin -> 100%). 95% is a
- * sane practical stop well short of the asymptote, where the price still
- * behaves: at 95% the price is 20x cost, at 99% it is 100x.
+ * On the ex-VAT basis the price inverts as price_ex = cost / (1 - margin): at
+ * exactly 100% the denominator is 0 (infinite price) and above it negative (a
+ * price under cost, reported as a profit). So the cap is an EXCLUSIVE 100 —
+ * every value strictly below it prices, however steep: 95% is 20x cost, 99% is
+ * 100x, 99.9% is 1000x.
+ *
+ * Raised from a flat 95 (Dirk, 2026-09-01): 95 was a practical stop short of
+ * the asymptote with no mathematical reason behind it, and it rejected steep
+ * pins that price perfectly well.
+ *
+ * This is a MARGIN (profit / selling price), never a markup (profit / cost).
+ * There is no such thing as a margin above 100%; a 150% *markup* is legal and
+ * equals a 60% margin.
  *
  * Independent of the VAT rate. The argument is ignored and kept only so
  * existing call sites do not have to be threaded differently.
  */
-const MAX_MARGIN_PCT = 95;
+const MAX_MARGIN_PCT = 100;
 
 function maxReachableMarginPct() {
   return MAX_MARGIN_PCT;
@@ -245,7 +254,13 @@ function maxReachableMarginPct() {
  * rounding down.
  */
 function roundToCents(value) {
-  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+  const n = Number(value);
+  // Past MAX_SAFE_INTEGER/100 the `* 100` cannot represent cents any more, and
+  // past ~1.7e306 it overflows to Infinity — turning a finite price into a
+  // blank one. Such a value is already an exact number of cents as far as a
+  // double can tell, so hand it back untouched instead.
+  if (!Number.isFinite(n) || Math.abs(n) > Number.MAX_SAFE_INTEGER / 100) return n;
+  return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
 /**
@@ -266,7 +281,7 @@ function roundToCents(value) {
  *
  * Returns `{ price, rawPrice, reason, maxMarginPct }`. `price` is null when no
  * price can be derived, with `reason` explaining why:
- *   'unreachable' — target margin >= the hard cap (95%)
+ *   'unreachable' — target margin >= the hard cap (100%)
  *   'no-cost'     — production cost is 0 or missing, so there is nothing to mark up
  */
 function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21) {
@@ -280,10 +295,26 @@ function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21) {
   if (!Number.isFinite(target)) return { ...base, reason: 'unreachable' };
   if (target >= maxMarginPct) return { ...base, reason: 'unreachable' };
   if (!(Number(productionCost) > 0)) return { ...base, reason: 'no-cost' };
-  const priceExVat = Number(productionCost) / (1 - target / 100);
+  // `(100 - target) / 100`, never `1 - target / 100`. The two are algebraically
+  // equal but not in floating point: a target a hair under the cap makes the
+  // second cancel catastrophically (at 99.99999999999999 it is out by 28%), and
+  // the error lands straight in the price. Subtracting at full scale first
+  // keeps the significant digits. Dividing the cost by that fraction, rather
+  // than multiplying the cost by 100 first, also keeps a huge cost from
+  // overflowing on its way to a perfectly finite price.
+  const priceExVat = Number(productionCost) / ((100 - target) / 100);
   const rawPrice = priceExVat * (1 + vatRate / 100);
+  const price = roundToCents(rawPrice);
+  // A target close enough to the cap overflows on a large enough cost — and
+  // `roundToCents` multiplies by 100, so it can overflow on its own after a
+  // finite `rawPrice`. An unpriceable lock is exactly what 'unreachable'
+  // means; returning Infinity would serialise to null and render a blank price
+  // with no reason given.
+  if (!Number.isFinite(rawPrice) || !Number.isFinite(price)) {
+    return { ...base, reason: 'unreachable' };
+  }
   return {
-    price: roundToCents(rawPrice),
+    price,
     rawPrice,
     reason: null,
     maxMarginPct,
@@ -355,8 +386,18 @@ function calculateFinalPricing(opts) {
     ? NaN
     : Number(targetMarginPct);
   const targetUsable = Number.isFinite(target) && target < MAX_MARGIN_PCT && productionCost > 0;
-  const suggestedPrice = targetUsable
-    ? roundToPriceEnding((productionCost / (1 - target / 100)) * (1 + vatRate / 100), priceRounding)
+  // Same stable inversion as `calculateLockedPrice` — see the comment there.
+  const targetPrice = targetUsable
+    ? (productionCost / ((100 - target) / 100)) * (1 + vatRate / 100)
+    : NaN;
+  // `roundToPriceEnding` maps a non-finite input to 0, so the fallback has to
+  // be decided on `targetPrice` itself — 0 is a price, and a silent 0 here
+  // would read as "free" rather than "no target".
+  const targetPriceRounded = Number.isFinite(targetPrice)
+    ? roundToPriceEnding(targetPrice, priceRounding)
+    : NaN;
+  const suggestedPrice = Number.isFinite(targetPriceRounded)
+    ? targetPriceRounded
     : roundToPriceEnding(totalInclVat, priceRounding);
 
   // Sales excl VAT

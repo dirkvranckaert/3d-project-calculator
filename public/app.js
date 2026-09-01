@@ -2312,6 +2312,17 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
   };
   const targetRaw = document.getElementById('proj-target-margin')?.value;
   const targetNum = parseFloat(String(targetRaw ?? '').replace(',', '.'));
+  // The `max=` attribute alone does not hold: this handler reads `.value`
+  // without consulting the field's validity, so a typed 150 would be sent and
+  // stored (the server rejects it too, this is the readable half).
+  if (Number.isFinite(targetNum) && targetNum >= MAX_MARGIN_PCT) {
+    await showAlert({
+      title: 'Target margin too high',
+      message: `The target margin must be below ${MAX_MARGIN_PCT}%. Margin is profit as a share of the selling price, `
+        + `so ${MAX_MARGIN_PCT}% would mean an infinite price. A markup on cost converts: 150% markup = 60% margin.`,
+    });
+    return;
+  }
   if (Number.isFinite(targetNum)) data.target_margin_pct = targetNum;
   if (!data.name) return;
   if (editingProjectId) {
@@ -2380,14 +2391,16 @@ async function setMarginLock(projectId, locked, lockedPct) {
   return res;
 }
 
-// Hard cap on a pinnable margin — mirrors calc.js `MAX_MARGIN_PCT`.
-const MAX_MARGIN_PCT = 95;
+// Hard cap on a pinnable margin — mirrors calc.js `MAX_MARGIN_PCT`. An
+// exclusive bound: at 100% the derived price is infinite (price = cost / (1 -
+// margin)), above it negative. Not a house rule, and not a markup ceiling.
+const MAX_MARGIN_PCT = 100;
 
 async function promptTargetMargin(projectId, current) {
   const maxPct = MAX_MARGIN_PCT;
   const val = await showPrompt({
     title: 'Lock target margin',
-    message: `Enter the margin you want to hold, measured on the price excl. VAT. The sales price is recalculated from the production cost and follows it when costs change. Max ${maxPct}%.`,
+    message: `Enter the margin you want to hold, measured on the price excl. VAT. The sales price is recalculated from the production cost and follows it when costs change. Must be below ${maxPct}% — margin is profit as a share of the selling price, so ${maxPct}% would mean an infinite price.`,
     label: 'Target margin excl. VAT (%)',
     placeholder: '60',
     initialValue: current != null ? String(current) : '',
@@ -2396,7 +2409,7 @@ async function promptTargetMargin(projectId, current) {
       if (!t) return 'Margin is required';
       const n = parseFloat(t.replace(',', '.'));
       if (!isFinite(n)) return 'Enter a valid number';
-      if (n >= maxPct) return `Must be below ${maxPct}%`;
+      if (n >= maxPct) return `Must be below ${maxPct}% — margin is profit as a share of the selling price, so ${maxPct}% is an infinite price. A markup on cost converts: 150% markup = 60% margin.`;
       if (n < -100) return 'Margin cannot be below -100%';
       return null;
     },
@@ -2902,10 +2915,10 @@ function renderMarginsSettings() {
     <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
     <div class="settings-row"><label>Default Target Margin (% excl. VAT)<br>
       <span style="font-size:12px;color:var(--text-muted)">Seeds new projects only — existing projects keep their own target</span></label>
-      <input type="number" value="${settings.default_target_margin_pct ?? 40}" step="1" onchange="saveSetting('default_target_margin_pct', this.value)"></div>
+      <input type="number" value="${settings.default_target_margin_pct ?? 40}" step="0.01" min="-100" max="99.99" onchange="saveSetting('default_target_margin_pct', this.value)"></div>
     <div class="settings-row"><label>Lowest Target Margin (% excl. VAT)<br>
       <span style="font-size:12px;color:var(--text-muted)">Global floor — any margin below this shows red</span></label>
-      <input type="number" value="${settings.lowest_target_margin_pct ?? 25}" step="1" onchange="saveSetting('lowest_target_margin_pct', this.value)"></div>
+      <input type="number" value="${settings.lowest_target_margin_pct ?? 25}" step="0.01" min="-100" max="99.99" onchange="saveSetting('lowest_target_margin_pct', this.value)"></div>
     ${renderTargetMarginGuidance()}`;
 }
 function renderThemeSettings() {
@@ -3141,7 +3154,20 @@ async function saveSetting(key, value) {
     'material_profit_pct', 'processing_profit_pct', 'electricity_profit_pct', 'printer_cost_profit_pct',
     'default_target_margin_pct', 'lowest_target_margin_pct'];
   const val = numericKeys.includes(key) ? parseFloat(value) : value;
-  await PUT(`/api/settings/${key}`, { value: val });
+  // The margin settings are validated server-side (they seed and floor every
+  // project target), so a save can legitimately 400. Without this the rejection
+  // was unhandled: the field kept the refused value and said nothing.
+  try {
+    await PUT(`/api/settings/${key}`, { value: val });
+  } catch (e) {
+    await showAlert({ title: 'Setting not saved', message: e.message });
+    // Repaint the tab so the field falls back to the stored value instead of
+    // showing a number the server refused.
+    if (typeof renderSettingsTab === 'function' && typeof activeSettingsTab !== 'undefined') {
+      try { renderSettingsTab(activeSettingsTab); } catch (_) { /* tab not open, no-op */ }
+    }
+    return;
+  }
   settings[key] = val;
   await reloadProjects();
   // currency_symbol is referenced in setting labels themselves — re-render the

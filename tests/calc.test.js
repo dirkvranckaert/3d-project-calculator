@@ -1926,10 +1926,10 @@ describe('margin lock', () => {
   });
 
   describe('maxReachableMarginPct', () => {
-    test('is a flat 95% cap, independent of the VAT rate', () => {
-      expect(calc.maxReachableMarginPct()).toBe(95);
-      expect(calc.maxReachableMarginPct(21)).toBe(95);
-      expect(calc.maxReachableMarginPct(0)).toBe(95);
+    test('is a flat 100% cap, independent of the VAT rate', () => {
+      expect(calc.maxReachableMarginPct()).toBe(100);
+      expect(calc.maxReachableMarginPct(21)).toBe(100);
+      expect(calc.maxReachableMarginPct(0)).toBe(100);
     });
 
     test('the old VAT-derived 82.64% ceiling is gone', () => {
@@ -1964,11 +1964,131 @@ describe('margin lock', () => {
       expect(Math.round(price * 100)).toBe(price * 100);
     });
 
-    test('a margin at or above the 95% cap is unreachable', () => {
-      const res = calc.calculateLockedPrice(100, 95, 21);
+    test('a margin at or above the 100% cap is unreachable', () => {
+      const res = calc.calculateLockedPrice(100, 100, 21);
       expect(res.price).toBeNull();
       expect(res.reason).toBe('unreachable');
-      expect(res.maxMarginPct).toBe(95);
+      expect(res.maxMarginPct).toBe(100);
+    });
+
+    /* ---------------- cap bounds (raised from 95 to 100, 2026-09-01) -------- */
+
+    describe('cap bounds', () => {
+      test('0% prices at cost', () => {
+        const res = calc.calculateLockedPrice(100, 0, 21);
+        expect(res.reason).toBeNull();
+        expect(res.price).toBe(121);
+      });
+
+      test.each([95, 96, 99, 99.9, 99.99])(
+        '%s%% is now priceable — it was rejected under the old 95%% cap',
+        (pct) => {
+          const res = calc.calculateLockedPrice(100, pct, 21);
+          expect(res.reason).toBeNull();
+          expect(res.price).toBeGreaterThan(0);
+          expect(Number.isFinite(res.price)).toBe(true);
+          // The derived price still reproduces the target exactly.
+          expect(calc.calculateActualMargin(res.rawPrice, 100, 21).marginPct).toBeCloseTo(pct, 6);
+        }
+      );
+
+      test.each([100, 100.01, 150, 1000])(
+        '%s%% is rejected — at or past the asymptote the price is infinite or negative',
+        (pct) => {
+          const res = calc.calculateLockedPrice(100, pct, 21);
+          expect(res.price).toBeNull();
+          expect(res.reason).toBe('unreachable');
+          expect(res.maxMarginPct).toBe(100);
+        }
+      );
+
+      test('a negative margin still prices, below cost', () => {
+        const res = calc.calculateLockedPrice(100, -50, 21);
+        expect(res.reason).toBeNull();
+        expect(res.price).toBeCloseTo(80.67, 2);
+      });
+
+      test.each([null, undefined, '', 'abc', NaN])(
+        'a non-numeric target (%p) is unreachable, never priced at 0%%',
+        (pct) => {
+          const res = calc.calculateLockedPrice(100, pct, 21);
+          expect(res.price).toBeNull();
+          expect(res.reason).toBe('unreachable');
+        }
+      );
+
+      test.each([99.999, 99.99999, 99.99999999999999])(
+        'a target of %s%% still prices off a stable inversion',
+        (pct) => {
+          const res = calc.calculateLockedPrice(100, pct, 21);
+          expect(res.reason).toBeNull();
+          expect(Number.isFinite(res.rawPrice)).toBe(true);
+          // `100 * 100 / (100 - pct)` is the same algebra without the
+          // catastrophic cancellation of `1 - pct / 100`.
+          // Ratio, not an absolute delta: these prices run to 1e18.
+          expect(res.rawPrice / (((100 * 100) / (100 - pct)) * 1.21)).toBeCloseTo(1, 12);
+        }
+      );
+
+      test('a target close enough to the cap to overflow is unreachable, not Infinity', () => {
+        const res = calc.calculateLockedPrice(1e300, 99.99999999999999, 21);
+        expect(res.price).toBeNull();
+        expect(res.reason).toBe('unreachable');
+      });
+
+      test('a finite price survives the cent rounding instead of overflowing', () => {
+        // `roundToCents` multiplies by 100, which used to turn this finite
+        // price into Infinity — serialised as null, a blank price with no reason.
+        const res = calc.calculateLockedPrice(1e300, 99.99999, 21);
+        expect(res.reason).toBeNull();
+        expect(Number.isFinite(res.price)).toBe(true);
+        expect(res.price / res.rawPrice).toBeCloseTo(1, 9);
+      });
+
+      test('a huge cost at a modest target still prices — no overflow on the way', () => {
+        // The inversion must not multiply the cost by 100 first: 2e306 * 100
+        // overflows, while the answer it is heading for is perfectly finite.
+        for (const pct of [0, 50]) {
+          const res = calc.calculateLockedPrice(2e306, pct, 21);
+          expect(res.reason).toBeNull();
+          expect(Number.isFinite(res.price)).toBe(true);
+        }
+      });
+
+      test('a huge cost at a modest target does not fall back to the legacy engine', () => {
+        const r = calc.calculateFinalPricing({
+          perItemCosts: { totalPerItem: 2e306 }, profits: { totalProfit: 0 },
+          extraCostsTotal: 0, vatRate: 21, priceRounding: 0.99, targetMarginPct: 50,
+        });
+        expect(Number.isFinite(r.suggestedPrice)).toBe(true);
+        expect(r.suggestedPrice).toBeGreaterThan(2e306);
+      });
+
+      test('an overflowing target falls back instead of a suggested Infinity', () => {
+        const r = calc.calculateFinalPricing({
+          perItemCosts: { totalPerItem: 1e300 }, profits: { totalProfit: 0 },
+          extraCostsTotal: 0, vatRate: 21, priceRounding: 0.99,
+          targetMarginPct: 99.99999999999999,
+        });
+        expect(Number.isFinite(r.suggestedPrice)).toBe(true);
+      });
+
+      test('the suggested price follows the same bound', () => {
+        const near = calc.calculateFinalPricing({
+          perItemCosts: { totalPerItem: 100 }, profits: { totalProfit: 0 },
+          extraCostsTotal: 0, vatRate: 21, priceRounding: 0.99, targetMarginPct: 99,
+        });
+        // 100 / 0.01 * 1.21 = 12100 -> .99 ending
+        expect(near.suggestedPrice).toBeCloseTo(12100.99, 2);
+
+        const over = calc.calculateFinalPricing({
+          perItemCosts: { totalPerItem: 100 }, profits: { totalProfit: 0 },
+          extraCostsTotal: 0, vatRate: 21, priceRounding: 0.99, targetMarginPct: 100,
+        });
+        // Falls back to the old component engine rather than dividing by zero.
+        expect(Number.isFinite(over.suggestedPrice)).toBe(true);
+        expect(over.suggestedPrice).toBeGreaterThan(0);
+      });
     });
 
     // The numbers Dirk sanity-checks against: cost EUR 100, 21% VAT.
@@ -2100,10 +2220,10 @@ describe('margin lock', () => {
       expect(r.actualIndicator).toBeNull();
     });
 
-    test('locked above the VAT ceiling yields no price rather than a nonsense one', () => {
+    test('locked at the cap yields no price rather than a nonsense one', () => {
       const r = calc.calculateProject({
         plates: [lockPlate], settings: defaultSettings, itemsPerSet: 1,
-        marginLocked: true, targetMarginPct: 95, lockedMarginPct: 95,
+        marginLocked: true, targetMarginPct: 100, lockedMarginPct: 100,
       });
       expect(r.marginLock.reason).toBe('unreachable');
       expect(r.effectiveSalesPrice).toBeNull();
