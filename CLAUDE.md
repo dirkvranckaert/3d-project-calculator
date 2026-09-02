@@ -128,19 +128,23 @@ PATH="/opt/homebrew/bin:$PATH" pm2 save
 ## Tests
 
 ```bash
-npx jest --runInBand    # serial — reliable
-npm test                # parallel — flaky, see below
+npx jest --runInBand    # serial — less flaky, still not deterministic
+npm test                # parallel — flakiest, see below
 ```
 
-~272 tests covering the calculation engine and all API endpoints.
+Tests cover the calculation engine and all API endpoints.
+
+**Test totals depend on fixtures — reconcile nothing.** 24 tests are gates on gitignored fixtures (22 in `parse3mf`, 2 in `server`). Dirk's checkout has those fixtures, so there the suite reports **544 passed / 0 skipped**; a fixture-less checkout reports **520 passed / 24 skipped**. Same coverage, different totals — a changed skip count is not a regression signal.
 
 **Coverage stops at the backend.** The Jest suite is effectively backend-only — `public/app.js` frontend code is not covered, and `node --check` catches syntax only. A logic break there (infinite recursion, wrong lookup) passes both gates and ships. Escape hatch, already used by `tests/tags-widget.test.js`, `tests/hours-format.test.js`, `tests/import-3mf-colors.test.js` and `tests/preserved-project-fields.test.js`: extract a **named, DOM-free** function in `public/app.js` and pull it out via `vm` in the test. Anonymous click handlers are unreachable that way — name the function first. Follow this pattern whenever frontend logic needs coverage.
 
-**Parallel runs are flaky (pre-existing, 2026-07-09).** The full parallel `jest` run fails a rotating handful of `server.test.js` cases with `socket hang up` / 404. Cause: the integration suites share one SQLite/WAL test DB + express socket lifecycle across jest's parallel workers. Serial (`--runInBand`) and per-suite runs are deterministic and green. Don't chase a "new" failure until you've reproduced it serially.
+**Parallel runs are flaky (pre-existing, 2026-07-09).** The full parallel `jest` run fails a rotating handful of `server.test.js` cases with `socket hang up` / 404. Cause: the integration suites share one SQLite/WAL test DB + express socket lifecycle across jest's parallel workers.
+
+**Serial is less flaky, NOT deterministic (measured 2026-09-01, release `20260901-200036`).** The shared-DB + socket-lifecycle flake survives `--runInBand`. Full suite on `main`, 5× serial: runs 1, 3, 4 green (544/544); runs 2 and 5 red — 5 failures, then 1. The failing cast rotates across unrelated suites (image ordering, margin-lock reads) and is shaped like infra flake (HTTP 501, `undefined` body fields), not logic errors. The previous release commit `59f1b25`, 5× serial in a throwaway worktree: 4 green, 1 red on yet another unrelated test (`Custom one-off project lines`) — so the flake **predates** the margin-cap merge and was already live in production. Practical rule: reproduce a failure across **several** serial runs before treating it as real, and read a rotating cast of unrelated failing suites as flake, not as a regression from your diff.
 
 **Mechanism (reproduced 2026-07-24):** an aborted or concurrent jest run leaves dirty state in the shared test DB; the *next* run trips over it. Kill a run mid-flight → next run 23 failures → run again 1 failure → run again green. So a red parallel run says more about the previous run than about your diff.
 
-**Sharp edge:** `"test": "jest --verbose"` in `package.json` is still the parallel — i.e. flaky — variant, while the coding conventions above say "run `npm test` before claiming done". Pinning `--runInBand` in the `test` script fixes both in one line. Real fix (**unassigned**): give each worker its own `DB_PATH`, or pin `--runInBand`.
+**Sharp edge:** `"test": "jest --verbose"` in `package.json` is still the parallel — i.e. flaky — variant, while the coding conventions above say "run `npm test` before claiming done". Pinning `--runInBand` in the `test` script lines the two up, but only lowers the flake rate — it does not remove it. Real fix (**unassigned**): give each worker its own `DB_PATH`. That is now the fix for the serial flake too, not just the parallel one.
 
 ## Deploy
 
@@ -383,6 +387,15 @@ Single shared helper (`public/app.js`). ≥24h → `Dd Hh Mm` with zero componen
 - **X-Schedule payload** sends per-plate `items: pl.objectCount ?? null` (planner import sets `job.items`).
 - **`#sp-project`** in the schedule dialog is free-text AND offers a `<datalist>` of OPEN planner projects, fetched via `GET ${plannerPublicUrl}/api/projects` (`credentials:'include'`, fail-soft → `[]` on any error; filter `status !== 'closed'`). Datalist options use `escAttr` (see Gotchas).
 - Planner side needs no change — `GET /api/projects` already CORS-allowed for the calculator origin.
+
+## Target-margin cap — exclusive 100% (2026-09-01, merge `a444769`, release `20260901-200036`)
+
+- **Cap is an exclusive 100, not 95.** `calc.js` `MAX_MARGIN_PCT = 100`, exposed as `maxReachableMarginPct()`; HTML/UI inputs use `max="99.99" step="0.01"`.
+- **The bound is mathematical, not stylistic.** Margin is an ex-VAT **revenue** margin: `priceExVat = productionCost / ((100 - target) / 100)`. At 100 the denominator is 0 → infinite price; above 100 → negative price. The old 95 was an arbitrary "sane practical stop well short of the asymptote"; the asymptote at 100 is not arbitrary. Do not lower the cap back to a round number.
+- **`>= 100` is rejected everywhere now.** Engine (`calculateLockedPrice` → `reason: 'unreachable'`), **both** server routes — `PUT /api/projects/:id` (project target) and the margin settings incl. `default_target_margin_pct` / `lowest_target_margin_pct` — and both UI entry points. Before this release the server routes had **no cap at all**: enforcement was UI-only, and an over-cap value silently fell back to legacy component pricing.
+- **Margin ≠ markup.** Dirk asked for 150; 150 is a **markup** (profit/cost) and cannot exist as a revenue margin. Convert: `margin = markup / (100 + markup) * 100` → 150% markup = 60% margin. A markup-mode input was proposed and Dirk **declined** it (2026-09-01, "nothing for now") — considered and rejected, do not re-propose. Do not "fix" the cap to accommodate a markup number.
+- **`tests/margin-cap-mirror.test.js` pins the layers together** — engine ↔ `public/app.js` `MAX_MARGIN_PCT` ↔ the HTML `max=` attribute. A half-applied cap change fails loudly. Change all layers, not one.
+- **Migration clamp gotcha (fixed in `0837c39`).** The margin-basis migration (`db.js`) used to clamp **every** converted pin to `MAX - 0.01`, not only the ones reaching the cap: a legal old pin of 82.64% converts to 99.9944% — priceable — and got cut to 99.99%, a silent **44% price drop** on a not-yet-migrated DB. It now clamps only pins that actually reach the cap, and skips a pin whose conversion overflows rather than writing ±Infinity.
 
 ## Architecture guide
 
