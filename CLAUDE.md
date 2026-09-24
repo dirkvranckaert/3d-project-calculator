@@ -74,17 +74,18 @@ project-calculator/
 - **No CSS framework** — custom CSS with variables. Do not install Tailwind/Bootstrap.
 - **No native `confirm()`** — use custom modal dialogs
 
-## Ship order — this repo only (Dirk 2026-07-21)
+## MR & review process (2026-09-24)
 
-Code ships in a fixed order: **code → review round → reviewer signoff (`APPROVED`) → push → deploy.**
+Canonical process: `/Users/dirkvranckaert/Documents/personal-assistant/logs/process/mr-review-process.md`.
+Supersedes the 2026-07-21 "dev merges, no PR" ship order — this repo now works
+through GitHub PRs (§11 "Out of scope — old way": class **autonomous**, PRs
+since 2026-09-24). Host: GitHub. Target: PR → `main`. CI: no.
 
-- The review round starts automatically once a coder lands a commit — no need to ask for it.
-- The **reviewer signs off only** (`APPROVED` / `CHANGES REQUESTED`) — never pushes, never deploys, never touches git.
-- On `APPROVED`, the **dev** merges to `main`, deletes the feature branch (local + remote), and **pushes `origin/main`**. The dev owns the push, not the reviewer.
-- **Senne** runs the production deploy (`../infrastructure/apps/project-calculator/deploy.sh`) under standing auto-deploy authority.
-- `CHANGES REQUESTED` sends it back to the coder and the review round repeats.
-- After `APPROVED`, push and deploy proceed without waiting on Dirk — unless he asks to hold (see Deploy). He is informed of the result afterwards.
-- Applies to every change size, trivial one-liners included.
+- **Old way** applies (GitHub, not `git.app3.be`): the reviewer returns the
+  full review text; the PM relays or acts on it and merges. The dev never
+  merges or approves its own PR.
+- **Deploy stays Senne's**, unchanged: `../infrastructure/apps/project-calculator/deploy.sh`
+  under standing auto-deploy authority, after merge.
 - Scoped to `project-calculator`. Do not assume it holds for the other Printseed repos.
 
 ## Running locally
@@ -154,7 +155,7 @@ Deployed via the shared infrastructure repo: `../infrastructure/apps/project-cal
 - **Domain:** `3dprojects.app3.be` (NOT `calculator.app3.be` — that subdomain 404s)
 - **PM2 name:** `project-calculator`
 - **Server:** `app3-node-01` (142.93.105.91)
-- **Auto-deploy is standing-authorised** (Dirk, 2026-07-09): merged + pushed work ships to production without a per-deploy confirmation, unless he asks to hold. This authority starts *after* a reviewer returns `APPROVED` — see "Ship order"; it is not a licence to push unreviewed work. Always push to `origin/main` before deploying — the engine rsyncs the working tree, so an unpushed tree silently ships something `origin` doesn't have.
+- **Auto-deploy is standing-authorised** (Dirk, 2026-07-09): merged + pushed work ships to production without a per-deploy confirmation, unless he asks to hold. This authority starts *after* the PM merges the reviewed PR — see "MR & review process"; it is not a licence to push unreviewed work. Always push to `origin/main` before deploying — the engine rsyncs the working tree, so an unpushed tree silently ships something `origin` doesn't have.
 - rsync-releases pattern (no server-side `git pull`): rsync → `releases/<ts>/` → `npm ci --omit=dev` → flip `current` symlink → pm2 `delete + start` (not restart) → health check `/login` 200 + dummy-creds POST 401. **Auto-rollback on a failed health check**; manual rollback via `deploy.sh --rollback`.
 - Prod `.env` and `data/` are symlinked from `shared/` and are never overwritten by a deploy.
 - **Static assets sit behind auth — a 302 is not a failed deploy.** A public `GET https://3dprojects.app3.be/app.js` returns **302** (redirect to login), never the file, so you cannot smoke-test new frontend code over plain HTTP. Verify server-side over ssh instead: compare the sha256 of the deployed `public/app.js` against the local one. Don't read a 302 as "the deploy didn't take".
