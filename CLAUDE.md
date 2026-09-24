@@ -74,17 +74,18 @@ project-calculator/
 - **No CSS framework** — custom CSS with variables. Do not install Tailwind/Bootstrap.
 - **No native `confirm()`** — use custom modal dialogs
 
-## Ship order — this repo only (Dirk 2026-07-21)
+## MR & review process (2026-09-24)
 
-Code ships in a fixed order: **code → review round → reviewer signoff (`APPROVED`) → push → deploy.**
+Canonical process: `/Users/dirkvranckaert/Documents/personal-assistant/logs/process/mr-review-process.md`.
+Supersedes the 2026-07-21 "dev merges, no PR" ship order — this repo now works
+through GitHub PRs (§11 "Out of scope — old way": class **autonomous**, PRs
+since 2026-09-24). Host: GitHub. Target: PR → `main`. CI: no.
 
-- The review round starts automatically once a coder lands a commit — no need to ask for it.
-- The **reviewer signs off only** (`APPROVED` / `CHANGES REQUESTED`) — never pushes, never deploys, never touches git.
-- On `APPROVED`, the **dev** merges to `main`, deletes the feature branch (local + remote), and **pushes `origin/main`**. The dev owns the push, not the reviewer.
-- **Senne** runs the production deploy (`../infrastructure/apps/project-calculator/deploy.sh`) under standing auto-deploy authority.
-- `CHANGES REQUESTED` sends it back to the coder and the review round repeats.
-- After `APPROVED`, push and deploy proceed without waiting on Dirk — unless he asks to hold (see Deploy). He is informed of the result afterwards.
-- Applies to every change size, trivial one-liners included.
+- **Old way** applies (GitHub, not `git.app3.be`): the reviewer returns the
+  full review text; the PM relays or acts on it and merges. The dev never
+  merges or approves its own PR.
+- **Deploy stays Senne's**, unchanged: `../infrastructure/apps/project-calculator/deploy.sh`
+  under standing auto-deploy authority, after merge.
 - Scoped to `project-calculator`. Do not assume it holds for the other Printseed repos.
 
 ## Running locally
