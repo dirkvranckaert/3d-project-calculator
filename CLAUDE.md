@@ -81,9 +81,13 @@ Supersedes the 2026-07-21 "dev merges, no PR" ship order — this repo now works
 through GitHub PRs (§11 "Out of scope — old way": class **autonomous**, PRs
 since 2026-09-24). Host: GitHub. Target: PR → `main`. CI: no.
 
-- **Old way** applies (GitHub, not `git.app3.be`): the reviewer returns the
-  full review text; the PM relays or acts on it and merges. The dev never
-  merges or approves its own PR.
+- **Flow:** feature branch in a worktree -> **draft** PR -> Codex review -> PM
+  un-drafts + merges -> deploy. No direct push to `main` for code. The dev never
+  merges, un-drafts or approves own PR. Reviewer findings go on the PR.
+- **Screenshots** (UI PRs): captured once, after APPROVE, from `git archive` of
+  the approved SHA on a fresh empty DB with invented data. Stored on orphan
+  branch `pr-assets` under `pr<N>/`, embedded in PR body by raw URL. Never on
+  feature branch or `main`. Never real project/customer names (public repo).
 - **Deploy stays Senne's**, unchanged: `../infrastructure/apps/project-calculator/deploy.sh`
   under standing auto-deploy authority, after merge.
 - Scoped to `project-calculator`. Do not assume it holds for the other Printseed repos.
@@ -135,15 +139,11 @@ npm test                # parallel — flakiest, see below
 
 Tests cover the calculation engine and all API endpoints.
 
-**Test totals depend on fixtures — reconcile nothing.** 24 tests are gates on gitignored fixtures (22 in `parse3mf`, 2 in `server`). Dirk's checkout has those fixtures, so there the suite reports **544 passed / 0 skipped**; a fixture-less checkout reports **520 passed / 24 skipped**. Same coverage, different totals — a changed skip count is not a regression signal.
+**Test totals depend on fixtures — reconcile nothing.** 24 tests are gates on gitignored fixtures (22 in `parse3mf`, 2 in `server`). Fixture-less checkout (as of PR #6): **661 passed / 24 skipped**. Checkout with fixtures: those 24 run instead of skip. Same coverage, different totals — a changed skip count is not a regression signal. Counts grow with every PR; do not hard-code them elsewhere.
 
 **Coverage stops at the backend.** The Jest suite is effectively backend-only — `public/app.js` frontend code is not covered, and `node --check` catches syntax only. A logic break there (infinite recursion, wrong lookup) passes both gates and ships. Escape hatch, already used by `tests/tags-widget.test.js`, `tests/hours-format.test.js`, `tests/import-3mf-colors.test.js` and `tests/preserved-project-fields.test.js`: extract a **named, DOM-free** function in `public/app.js` and pull it out via `vm` in the test. Anonymous click handlers are unreachable that way — name the function first. Follow this pattern whenever frontend logic needs coverage.
 
-**Parallel runs are flaky (pre-existing, 2026-07-09).** The full parallel `jest` run fails a rotating handful of `server.test.js` cases with `socket hang up` / 404. Cause: the integration suites share one SQLite/WAL test DB + express socket lifecycle across jest's parallel workers.
-
-**Serial is less flaky, NOT deterministic (measured 2026-09-01, release `20260901-200036`).** The shared-DB + socket-lifecycle flake survives `--runInBand`. Full suite on `main`, 5× serial: runs 1, 3, 4 green (544/544); runs 2 and 5 red — 5 failures, then 1. The failing cast rotates across unrelated suites (image ordering, margin-lock reads) and is shaped like infra flake (HTTP 501, `undefined` body fields), not logic errors. The previous release commit `59f1b25`, 5× serial in a throwaway worktree: 4 green, 1 red on yet another unrelated test (`Custom one-off project lines`) — so the flake **predates** the margin-cap merge and was already live in production. Practical rule: reproduce a failure across **several** serial runs before treating it as real, and read a rotating cast of unrelated failing suites as flake, not as a regression from your diff.
-
-**Mechanism (reproduced 2026-07-24):** an aborted or concurrent jest run leaves dirty state in the shared test DB; the *next* run trips over it. Kill a run mid-flight → next run 23 failures → run again 1 failure → run again green. So a red parallel run says more about the previous run than about your diff.
+**Flaky `server.test.js` — fixed (PR #4, 2026-09-30).** Root cause: `request(app)` x231 made supertest open + close a new ephemeral-port server per request; on Node 26 that raced (`socket hang up`, `Parse Error: Expected HTTP/`, `Invalid value "undefined" for header "Cookie"` when login itself failed). Fix: one `http.createServer(app).listen(0)` per test file, closed in `afterAll`; `app` name kept so `request(app)` call sites unchanged. Measured: 5/8 failing before, 0/30 after. **Any new supertest file must share one listening server the same way** (`tests/plate-mode-followups-2146.test.js` does). The older shared-DB / `--runInBand` flake notes were mostly this same socket race; the shared test DB (`DB_PATH`) is still one file, so an aborted jest run can leave dirty state that trips the next run — rerun before believing a red result.
 
 **Sharp edge:** `"test": "jest --verbose"` in `package.json` is still the parallel — i.e. flaky — variant, while the coding conventions above say "run `npm test` before claiming done". Pinning `--runInBand` in the `test` script lines the two up, but only lowers the flake rate — it does not remove it. Real fix (**unassigned**): give each worker its own `DB_PATH`. That is now the fix for the serial flake too, not just the parallel one.
 
@@ -378,7 +378,7 @@ Every **cost input** is excl. VAT. Margins apply on the excl. base. VAT applied 
 ### `totalPrintTimeMinutes`
 `calc.js` `calculateTotalPrintTime(plates, itemsPerSet)`, rendered as a 5th summary card. Enabled non-test plates only.
 
-**Plate-print count is `Math.ceil(itemsPerSet / items_per_plate)`** — a partly-filled final plate still runs a full print (100 items @ 8/plate = 13 prints, not 12.5). This **deliberately diverges** from grams/cost, which scale linearly. Dirk confirmed 2026-07-09.
+**Plate-print count is `Math.ceil(itemsPerSet / items_per_plate)`** — a partly-filled final plate still runs a full print (100 items @ 8/plate = 13 prints, not 12.5). Dirk confirmed 2026-07-09. Since plate mode (#2135) this run count also drives cost and material, not only time; see "Plate mode" below.
 
 ### `fmtTime`
 Single shared helper (`public/app.js`). ≥24h → `Dd Hh Mm` with zero components dropped (`485h 46m` → `20d 5h 46m`, `48h` → `2d`). <24h unchanged. `formatHoursMinutes` (H:MM rate inputs) is a separate concern — leave it alone.
@@ -397,6 +397,20 @@ Single shared helper (`public/app.js`). ≥24h → `Dd Hh Mm` with zero componen
 - **Margin ≠ markup.** Dirk asked for 150; 150 is a **markup** (profit/cost) and cannot exist as a revenue margin. Convert: `margin = markup / (100 + markup) * 100` → 150% markup = 60% margin. A markup-mode input was proposed and Dirk **declined** it (2026-09-01, "nothing for now") — considered and rejected, do not re-propose. Do not "fix" the cap to accommodate a markup number.
 - **`tests/margin-cap-mirror.test.js` pins the layers together** — engine ↔ `public/app.js` `MAX_MARGIN_PCT` ↔ the HTML `max=` attribute. A half-applied cap change fails loudly. Change all layers, not one.
 - **Migration clamp gotcha (fixed in `0837c39`).** The margin-basis migration (`db.js`) used to clamp **every** converted pin to `MAX - 0.01`, not only the ones reaching the cap: a legal old pin of 82.64% converts to 99.9944% — priceable — and got cut to 99.99%, a silent **44% price drop** on a not-yet-migrated DB. It now clamps only pins that actually reach the cap, and skips a pin whose conversion overflows rather than writing ±Infinity.
+
+## Plate mode — whole print runs (#2135, PRs #3/#5/#6, 2026-09-30)
+
+- **`projects.plate_mode`**: `parts` (default, "Parts of one item") | `batch` ("Batch run"). API: on project POST/PUT/duplicate, validated, absent = keep.
+  - `parts`: runs = `ceil(items_per_set / items_per_plate)` per plate. Time, plastic, material requirements, costs all from that one run count. `calc.effectiveRunInputs` = the one input normalisation (`Number(x) || 1`); `PlateModeText.runInputs` (frontend) must agree.
+  - `batch`: every enabled plate printed exactly once; total = plain sum; per item = total / `items_per_set`. Quantity note: shortfall (red), spare (neutral), equal (none).
+- **`project_plates.charge_share_only`** (per-plate override, parts mode only, ignored + hidden in batch): charge the share the set uses instead of whole runs. Time is prorated too, not only money.
+- **Migration gotcha — money preserved.** The lazy `addCol` migration that adds `charge_share_only` also runs a one-time idempotent backfill: override ON for every existing plate whose project `items_per_set` is not a multiple of its #/plate (disabled plates included). Runs only in the call that adds the column; never re-applies after a user turns it off. Without it old projects jump several-fold. Existing projects stay `parts`. Consequence: print time of migrated plates changed vs pre-mode `main` (whole-run time before, prorated now).
+- **Cents rounding.** Per-run cost rounded to cents per component BEFORE x runs; a share rounded once from raw per-run cost. Totals, explanation rows, sum row, row Total column are sums of cent values so UI agrees to the cent. `plateBreakdowns[].materialCost` etc. stay UNROUNDED (test-print costs must equal them). Profits/pricing/suggested price still use unrounded per-item costs (pre-existing). Locked-margin price is cent-rounded, so margin can land a hair under the pin (tests use `closeTo`).
+- **Wording lives in `public/plate-mode-text.js`** (UMD, unit tested via `require`). Run text comes from ONE rounded value; "exact" only when quotient equals shown value, no tolerance (`1999/1000` -> "just under 2 runs, not 2 whole runs"). Euro example in override help shows only while every cost-driving plate field equals the saved plate (`costFieldsChanged`).
+- **Explanation block "How these numbers are built"**: native `<details>`, collapsed by default; open state kept in memory in `calcExplainOpenId` (per project id, cleared on other project, not persisted across reload).
+- **Run-count validation.** `parseRunCount`: safe integer 1..1000000 for `items_per_set` / `items_per_plate` on project POST/PUT, plate POST/PUT/PATCH, `import-3mf` -> 400 otherwise. Omitted = default 1 on create/import, keep-stored on update; explicit `null` = 400. **Unchanged legacy stored value passes** so saving an unrelated field on a legacy row is never blocked. 3MF import validates all plates first. No DB CHECK constraints (table rebuild on live data out of scope).
+- **Plate duplicate**: `POST /api/projects/:projectId/plates/:plateId/duplicate`. `copyPlateRow` copies every column from `PRAGMA table_info` (column names via `quoteIdent`), so a newly added column is never dropped by omission; only id, name (" (copy)"), project_id, sort_order set explicitly; nothing from body. Test-print source plate -> 400. Project duplicate uses same helper. Duplicate/create/PUT/PATCH/import each run in one `db.transaction`.
+- **`.field-hint`** is one shared rule (`margin: 6px 0 10px`); `.field-hint--info` uses muted colour (specificity fix, earlier amber). Explanation table "How it counts" column has `min-width` 200px for 390px screens.
 
 ## Architecture guide
 

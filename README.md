@@ -31,7 +31,10 @@ A web-based cost estimation and pricing tool for 3D printing projects. Calculate
 
 ### Per Item
 
-Each cost component is divided by `items_per_plate` and summed across all included plates.
+Depends on the project's `plate_mode`:
+
+- `parts` (default): each plate runs `ceil(items_per_set / items_per_plate)` whole prints; per-run cost is rounded to cents, multiplied by runs, then divided by `items_per_set`. Per-plate override `charge_share_only` charges only the share the set uses.
+- `batch`: every included plate printed once; total is the plain sum, divided by `items_per_set`.
 
 ### Pricing
 
@@ -155,6 +158,7 @@ Packaging, hardware, shipping items:
 | `GET/PUT/DELETE` | `/api/projects/:id` | Get/update/delete project |
 | `POST` | `/api/projects/:id/plates` | Add plate to project |
 | `PUT/DELETE` | `/api/projects/:id/plates/:plateId` | Update/delete plate |
+| `POST` | `/api/projects/:id/plates/:plateId/duplicate` | Duplicate plate (production plates only) |
 | `PUT` | `/api/projects/:id/extras` | Set project extra costs |
 | `POST` | `/api/calculate` | Stateless calculation |
 | `GET` | `/api/export` | Full JSON backup |
@@ -166,7 +170,7 @@ Packaging, hardware, shipping items:
 npm test
 ```
 
-65 tests covering calculation engine and all API endpoints.
+Jest tests covering the calculation engine, plate-mode wording and all API endpoints.
 
 ## Tech Stack
 
