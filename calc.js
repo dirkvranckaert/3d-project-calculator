@@ -687,6 +687,25 @@ function aggregateMaterialRequirements(enabledPlates, itemsPerSet = 1) {
 /* ------------------------------------------------------------------ */
 
 /**
+ * Effective inputs of the run count: a missing/0 set or #/plate counts as 1.
+ * ONE definition, used by resolvePlateCount and by the db.js migration predicate.
+ */
+function effectiveRunInputs(itemsPerSet, itemsPerPlate) {
+  return { set: itemsPerSet || 1, ipp: itemsPerPlate || 1 };
+}
+
+/**
+ * True when charging whole runs (ceil(set / ipp)) costs something other than the
+ * proportional share (set / ipp), i.e. the real quotient is not integral. This is
+ * the ONE rule behind both the runtime count and the migration backfill; never
+ * use SQL `%` for it (SQLite coerces REAL operands to integers).
+ */
+function wholeRunsDifferFromShare(itemsPerSet, itemsPerPlate) {
+  const { set, ipp } = effectiveRunInputs(itemsPerSet, itemsPerPlate);
+  return Math.ceil(set / ipp) !== set / ipp;
+}
+
+/**
  * How many plate-runs a project is charged for on one plate. ONE number drives
  * time, plastic, material cost, processing, electricity and printer usage, so
  * they can never disagree with each other.
@@ -705,8 +724,7 @@ function aggregateMaterialRequirements(enabledPlates, itemsPerSet = 1) {
  *   shareNum: number, shareDen: number}}
  */
 function resolvePlateCount(plate, itemsPerSet = 1, plateMode = 'parts') {
-  const set = itemsPerSet || 1;
-  const ipp = plate.items_per_plate || plate.itemsPerPlate || 1;
+  const { set, ipp } = effectiveRunInputs(itemsPerSet, plate.items_per_plate || plate.itemsPerPlate);
   if (plateMode === 'batch') {
     return { mode: 'once', runs: 1, factor: 1, shareNum: set, shareDen: ipp };
   }
@@ -1207,6 +1225,8 @@ module.exports = {
   aggregateMaterialRequirements,
   calculateTotalPrintTime,
   resolvePlateCount,
+  wholeRunsDifferFromShare,
+  roundToCents,
   calculateQuantityCheck,
   applyProfitMargins,
   calculateExtraCosts,

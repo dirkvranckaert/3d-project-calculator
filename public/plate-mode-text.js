@@ -84,15 +84,56 @@
   }
 
   /**
-   * Every plate form field that moves the plate's cost. The euro example in the
-   * help is only true for the SAVED plate, so it is shown only while all of these
-   * still equal the saved values.
+   * Every plate field that moves the plate's cost. The euro example in the help is
+   * only true for the SAVED plate, so it is shown only while all of these still
+   * equal the saved values. `minutes` is the TOTAL print time (the form splits it
+   * into hour and minute inputs and rounds the minute part, so the baseline must
+   * never be read back from those controls).
    */
-  const COST_FIELDS = ['hours', 'minutes', 'plastic', 'items', 'risk', 'waste', 'pre', 'post', 'printer', 'material'];
+  const COST_FIELDS = ['minutes', 'plastic', 'items', 'risk', 'waste', 'pre', 'post', 'printer', 'material'];
+
+  /** Baseline from the RAW saved plate row, never from rendered form controls. */
+  function savedCostFields(plate) {
+    return {
+      minutes: plate.print_time_minutes, plastic: plate.plastic_grams, items: plate.items_per_plate,
+      risk: plate.risk_multiplier, waste: plate.material_waste_grams,
+      pre: plate.pre_processing_minutes, post: plate.post_processing_minutes,
+      printer: plate.printer_id, material: plate.material_id,
+    };
+  }
+
+  /** Current values from the form's raw control values ({hours, minutes, plastic, ...}). */
+  function formCostFields(f) {
+    return {
+      minutes: (parseInt(f.hours, 10) || 0) * 60 + (parseInt(f.minutes, 10) || 0), plastic: f.plastic,
+      items: f.items, risk: f.risk, waste: f.waste, pre: f.pre, post: f.post,
+      printer: f.printer, material: f.material,
+    };
+  }
 
   /** True when any cost-driving field differs between two snapshots ({field: value}). */
   function costFieldsChanged(saved, current) {
     return COST_FIELDS.some(k => Number(saved[k] || 0) !== Number(current[k] || 0));
+  }
+
+  /**
+   * Whole cents, half up, the SAME rule as calc.js roundToCents (tests compare
+   * them). The `+ Number.EPSILON` nudge keeps binary half-cents (2.675) rounding
+   * up. Every displayed money figure of the plate table, sum row, explanation
+   * block and help text goes through this, so a total is always the sum of the
+   * cells shown beside it.
+   */
+  function cents(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || Math.abs(n) > Number.MAX_SAFE_INTEGER / 100) return n;
+    return Math.round((n + Number.EPSILON) * 100) / 100;
+  }
+
+  const MONEY_KEYS = ['materialCost', 'processingCost', 'electricityCost', 'printerUsageCost'];
+
+  /** Row total = sum of the four cent-rounded cells shown beside it. */
+  function rowTotal(pb) {
+    return cents(MONEY_KEYS.reduce((s, k) => s + cents(Number(pb[k]) || 0), 0));
   }
 
   /** Tooltip for the row badge: the same explanation, addressed to that row. */
@@ -131,6 +172,6 @@
   const RISK_NOTE = 'The Risk column multiplies each run\'s print time (electricity, printer usage) and plastic (material) '
     + 'by the plate\'s risk factor. It does not multiply processing time, and the Time column shows the raw print time.';
 
-  return { MODES, SHARE_LABEL, COST_FIELDS, costFieldsChanged, RISK_NOTE, fraction, modeLabel, modeHelp, modeExplanation,
+  return { MODES, SHARE_LABEL, COST_FIELDS, savedCostFields, formCostFields, costFieldsChanged, cents, rowTotal, RISK_NOTE, fraction, modeLabel, modeHelp, modeExplanation,
     shareBadge, shareHelp, shareTooltip, countLabel, quantityCheckMessage };
 }));

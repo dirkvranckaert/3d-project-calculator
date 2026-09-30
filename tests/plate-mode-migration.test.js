@@ -113,3 +113,100 @@ test('a new project defaults to parts', () => {
   expect(raw.prepare("SELECT plate_mode FROM projects WHERE name='new'").get().plate_mode).toBe('parts');
   raw.close();
 });
+
+/* ---- round 3: atomic backfill + real-quotient predicate ---- */
+const calc = require('../calc');
+
+const shareCol = () => {
+  const d = new Database(dbPath);
+  const has = d.prepare('PRAGMA table_info(project_plates)').all().some(c => c.name === 'charge_share_only');
+  d.close();
+  return has;
+};
+
+test('failed backfill rolls the column back too, so the next boot redoes it (recovery)', () => {
+  seedLegacy();
+  const d = new Database(dbPath);
+  d.exec(`CREATE TRIGGER boom BEFORE UPDATE ON project_plates BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
+  d.close();
+  expect(() => bootDb()).toThrow(/disk full/);
+  expect(shareCol()).toBe(false);          // ALTER rolled back with the UPDATE
+
+  const fix = new Database(dbPath);
+  fix.exec('DROP TRIGGER boom');
+  fix.close();
+  bootDb();                                // column present now, backfill ran
+  expect(shareCol()).toBe(true);
+  expect(overrides()['a-38']).toBe(1);
+  expect(overrides()['b-3']).toBe(1);
+  expect(overrides()['a-7']).toBe(0);
+});
+
+test('done backfill never runs again: manual OFF survives, later boots do not fire updates', () => {
+  seedLegacy();
+  bootDb();
+  const d = new Database(dbPath);
+  d.prepare("UPDATE project_plates SET charge_share_only = 0 WHERE name = 'b-3'").run();
+  d.exec(`CREATE TRIGGER boom BEFORE UPDATE ON project_plates BEGIN SELECT RAISE(ABORT, 'must not run'); END`);
+  d.close();
+  expect(() => bootDb()).not.toThrow();    // an UPDATE attempt would throw
+  expect(overrides()['b-3']).toBe(0);
+});
+
+// Legacy rows the old SQL `%` got wrong (REAL operands truncated to integers).
+test('REAL / 0 / negative legacy values use the real quotient, not SQL %', () => {
+  const raw = new Database(dbPath);
+  raw.exec('ALTER TABLE projects DROP COLUMN plate_mode');
+  raw.exec('ALTER TABLE project_plates DROP COLUMN charge_share_only');
+  const proj = raw.prepare('INSERT INTO projects (name, items_per_set) VALUES (?,?)');
+  const pl = raw.prepare('INSERT INTO project_plates (project_id, name, items_per_plate) VALUES (?,?,?)');
+  proj.run('real-set', 3.5); pl.run(1, 'set3.5-ipp3', 3);            // % says 0; quotient 1.1667
+  proj.run('real-ipp', 6);   pl.run(2, 'set6-ipp2.5', 2.5);          // % says 0; quotient 2.4
+  proj.run('exact', 3.5);    pl.run(3, 'set3.5-ipp0.5', 0.5);        // quotient 7 exactly -> off
+  proj.run('zero', 3);       pl.run(4, 'ipp0', 0);                   // runtime treats 0 as 1 -> off
+  proj.run('zero-set', 0);   pl.run(5, 'set0-ipp2', 2);              // runtime treats set 0 as 1 -> 1/2 -> on
+  proj.run('neg', 91);       pl.run(6, 'ipp-38', -38);               // not integral -> on
+  proj.run('neg-exact', 90); pl.run(7, 'ipp-3', -3);                 // -30 exactly -> off
+  raw.close();
+  bootDb();
+  expect(overrides()).toEqual({
+    'set3.5-ipp3': 1, 'set6-ipp2.5': 1, 'set3.5-ipp0.5': 0, 'ipp0': 0, 'set0-ipp2': 1, 'ipp-38': 1, 'ipp-3': 0,
+  });
+});
+
+test('runtime run count and migration predicate agree over the same value grid (REAL, 0, NULL, negative)', () => {
+  const sets = [1, 2, 3, 3.5, 6, 7, 40, 45, 90, 91, 100, 0, null, -3, 0.3, 2.5];
+  const ipps = [1, 2, 3, 3.5, 2.5, 0.5, 0.1, 7, 38, 0, null, -3, -38, 100];
+  for (const set of sets) {
+    for (const ipp of ipps) {
+      const whole = calc.resolvePlateCount({ items_per_plate: ipp }, set, 'parts');
+      const share = calc.resolvePlateCount({ items_per_plate: ipp, charge_share_only: 1 }, set, 'parts');
+      // Override needed exactly when whole runs charge something other than the share.
+      expect(calc.wholeRunsDifferFromShare(set, ipp)).toBe(whole.factor !== share.factor);
+    }
+  }
+});
+
+test('DB backfill result equals the runtime rule for every insertable grid pair', () => {
+  const sets = [1, 3, 3.5, 6, 45, 91, 100, 0, -3, 0.3, 2.5];
+  const ipps = [1, 3, 2.5, 0.5, 0.1, 7, 38, 0, -3, -38];
+  const raw = new Database(dbPath);
+  raw.exec('ALTER TABLE projects DROP COLUMN plate_mode');
+  raw.exec('ALTER TABLE project_plates DROP COLUMN charge_share_only');
+  const proj = raw.prepare('INSERT INTO projects (name, items_per_set) VALUES (?,?)');
+  const pl = raw.prepare('INSERT INTO project_plates (project_id, name, items_per_plate) VALUES (?,?,?)');
+  const expected = {};
+  for (const set of sets) {
+    const pid = proj.run(`s${set}`, set).lastInsertRowid;
+    for (const ipp of ipps) {
+      const name = `${set}/${ipp}`;
+      pl.run(pid, name, ipp);
+      const whole = calc.resolvePlateCount({ items_per_plate: ipp }, set, 'parts');
+      const share = calc.resolvePlateCount({ items_per_plate: ipp, charge_share_only: 1 }, set, 'parts');
+      expected[name] = whole.factor !== share.factor ? 1 : 0;
+    }
+  }
+  raw.close();
+  bootDb();
+  expect(overrides()).toEqual(expected);
+});

@@ -63,6 +63,8 @@ function fmt(n, decimals = 2) {
   const sym = settings.currency_symbol || '\u20ac';
   return `${sym}${Number(n || 0).toFixed(decimals)}`;
 }
+/** Money shown on screen: whole cents, half up (PlateModeText.cents), never toFixed on a raw float. */
+function fmtCents(n) { return fmt(PlateModeText.cents(n)); }
 function fmtPct(n) { return `${Number(n || 0).toFixed(2)}%`; }
 function fmtTime(minutes) {
   const total = Math.round(minutes || 0);   // whole minutes
@@ -632,11 +634,11 @@ function renderPlatesSection(p) {
       <td class="num col-hide-mobile editable" data-label="Risk" onclick="startInlineEdit(${p.id},${pl.id},'risk_multiplier',${pl.risk_multiplier},this,'float')">${pl.risk_multiplier}</td>
       <td class="col-hide-mobile editable" data-label="Printer" onclick="startInlineEdit(${p.id},${pl.id},'printer_id',${pl.printer_id||'null'},this,'select-printer')">${esc(pl.printer_name || '-')}</td>
       <td class="col-hide-mobile editable" data-label="Material" onclick="startInlineEdit(${p.id},${pl.id},'material_id',${pl.material_id||'null'},this,'select-material')">${esc(pl.material_name || '-')}</td>
-      <td class="num col-hide-mobile" data-label="Mat. cost">${fmt(pb?.materialCost)}</td>
-      <td class="num col-hide-mobile" data-label="Proc. cost">${fmt(pb?.processingCost)}</td>
-      <td class="num col-hide-mobile" data-label="Elec. cost">${fmt(pb?.electricityCost)}</td>
-      <td class="num col-hide-mobile" data-label="Print. cost">${fmt(pb?.printerUsageCost)}</td>
-      <td class="num" data-label="Total" style="font-weight:600">${pb ? fmt(plateRowTotal(pb)) : fmt(undefined)}</td>
+      <td class="num col-hide-mobile" data-label="Mat. cost">${fmtCents(pb?.materialCost)}</td>
+      <td class="num col-hide-mobile" data-label="Proc. cost">${fmtCents(pb?.processingCost)}</td>
+      <td class="num col-hide-mobile" data-label="Elec. cost">${fmtCents(pb?.electricityCost)}</td>
+      <td class="num col-hide-mobile" data-label="Print. cost">${fmtCents(pb?.printerUsageCost)}</td>
+      <td class="num" data-label="Total" style="font-weight:600">${pb ? fmtCents(plateRowTotal(pb)) : fmt(undefined)}</td>
       <td><div class="plate-actions">
         <button class="btn-icon" title="${toggleTitle}" onclick="togglePlate(${p.id}, ${pl.id})">${toggleIcon}</button>
         <button class="btn-icon" title="Duplicate" onclick="duplicatePlate(${p.id}, ${pl.id})"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>
@@ -653,11 +655,11 @@ function renderPlatesSection(p) {
       <td class="num" data-label="Time">${fmtTime(ps.minutes)}</td>
       <td class="num" data-label="Plastic" title="Including risk multiplier and material waste">${fmtGrams(ps.plasticGrams)}</td>
       <td></td><td class="col-hide-mobile"></td><td class="col-hide-mobile"></td><td class="col-hide-mobile"></td>
-      <td class="num col-hide-mobile" data-label="Mat. cost">${fmt(ps.materialCost)}</td>
-      <td class="num col-hide-mobile" data-label="Proc. cost">${fmt(ps.processingCost)}</td>
-      <td class="num col-hide-mobile" data-label="Elec. cost">${fmt(ps.electricityCost)}</td>
-      <td class="num col-hide-mobile" data-label="Print. cost">${fmt(ps.printerUsageCost)}</td>
-      <td class="num" data-label="Total">${fmt(ps.totalCost)}</td>
+      <td class="num col-hide-mobile" data-label="Mat. cost">${fmtCents(ps.materialCost)}</td>
+      <td class="num col-hide-mobile" data-label="Proc. cost">${fmtCents(ps.processingCost)}</td>
+      <td class="num col-hide-mobile" data-label="Elec. cost">${fmtCents(ps.electricityCost)}</td>
+      <td class="num col-hide-mobile" data-label="Print. cost">${fmtCents(ps.printerUsageCost)}</td>
+      <td class="num" data-label="Total">${fmtCents(ps.totalCost)}</td>
       <td></td>
     </tr>` : '';
   const qc = PlateModeText.quantityCheckMessage(p.calculation?.quantityCheck);
@@ -680,10 +682,7 @@ function renderPlatesSection(p) {
 /*  Cost breakdown cards                                               */
 /* ================================================================== */
 /** Row total = sum of the four cent-rounded columns shown beside it (same rule as calc.js scaleContribution). */
-function plateRowTotal(pb) {
-  const cents = v => Math.round(((Number(v) || 0) + Number.EPSILON) * 100) / 100;
-  return cents(['materialCost', 'processingCost', 'electricityCost', 'printerUsageCost'].reduce((s, k) => s + cents(pb[k]), 0));
-}
+function plateRowTotal(pb) { return PlateModeText.rowTotal(pb); }
 
 function renderCostSection(p) {
   const c = p.calculation;
@@ -727,8 +726,8 @@ function renderCalcExplanation(p) {
     return `<tr>
       <td>${esc(b.plateName || `Plate ${b.plateId}`)}</td>
       <td${cls}>${esc(T.countLabel(b.count))}</td>
-      <td>${fmtTime(k.minutes)}</td><td>${fmt(k.materialCost)}</td><td>${fmt(k.processingCost)}</td>
-      <td>${fmt(k.electricityCost)}</td><td>${fmt(k.printerUsageCost)}</td><td>${fmt(k.totalCost)}</td>
+      <td>${fmtTime(k.minutes)}</td><td>${fmtCents(k.materialCost)}</td><td>${fmtCents(k.processingCost)}</td>
+      <td>${fmtCents(k.electricityCost)}</td><td>${fmtCents(k.printerUsageCost)}</td><td>${fmtCents(k.totalCost)}</td>
     </tr>`;
   }).join('');
   const overrideUsed = bds.some(b => b.count.mode === 'share');
@@ -738,9 +737,9 @@ function renderCalcExplanation(p) {
     <div class="plates-table-wrap"><table>
       <thead><tr><th>Plate</th><th>How it counts</th><th>Time</th><th>Material</th><th>Processing</th><th>Electricity</th><th>Printer</th><th>Total</th></tr></thead>
       <tbody>${rows}
-        <tr class="calc-explain-total"><td>Project total</td><td>${mode === 'batch' ? `\u00f7 ${set} = ${fmt(t.totalCost / set)} per item` : ''}</td>
-          <td>${fmtTime(t.minutes)}</td><td>${fmt(t.materialCost)}</td><td>${fmt(t.processingCost)}</td>
-          <td>${fmt(t.electricityCost)}</td><td>${fmt(t.printerUsageCost)}</td><td>${fmt(t.totalCost)}</td></tr>
+        <tr class="calc-explain-total"><td>Project total</td><td>${mode === 'batch' ? `\u00f7 ${set} = ${fmtCents(t.totalCost / set)} per item` : ''}</td>
+          <td>${fmtTime(t.minutes)}</td><td>${fmtCents(t.materialCost)}</td><td>${fmtCents(t.processingCost)}</td>
+          <td>${fmtCents(t.electricityCost)}</td><td>${fmtCents(t.printerUsageCost)}</td><td>${fmtCents(t.totalCost)}</td></tr>
       </tbody>
     </table></div>
     ${overrideUsed ? `<p class="calc-explain-override">${esc(T.SHARE_LABEL)} is on for the highlighted plate(s): they are charged only the share this set uses, not whole print runs. Switch it off per plate in the plate editor.</p>` : ''}
@@ -2877,17 +2876,19 @@ function openPlateModal(projectId, plateId = null) {
     matSel.value = last?.material_id || '';
     document.getElementById('plate-colors-editor').innerHTML = renderColorEditor([], 'plate-colors');
   }
-  plateCostBaseline = plate ? readPlateCostFields() : null;
+  plateCostBaseline = plate ? PlateModeText.savedCostFields(plate) : null;
   updateShareHelp();
   openModal('plate-modal');
   document.getElementById('plate-name').focus();
 }
 
-let plateCostBaseline = null; // cost-driving form values as saved (null for a new plate)
+let plateCostBaseline = null; // cost-driving values from the raw saved plate row (null for a new plate)
 function readPlateCostFields() {
   const v = {};
-  for (const k of PlateModeText.COST_FIELDS) v[k] = document.getElementById('plate-' + k).value;
-  return v;
+  for (const k of ['hours', 'minutes', 'plastic', 'items', 'risk', 'waste', 'pre', 'post', 'printer', 'material']) {
+    v[k] = document.getElementById('plate-' + k).value;
+  }
+  return PlateModeText.formCostFields(v);
 }
 
 /** Live help under the override checkbox, with THIS plate's numbers. */
@@ -2899,14 +2900,14 @@ function updateShareHelp() {
   const ipp = parseInt(document.getElementById('plate-items').value) || 1;
   const pb = editingPlateId
     ? (p.calculation?.plateBreakdowns || []).find(b => b.plateId === editingPlateId) : null;
-  const o = { setSize, ipp, fmt };
+  const o = { setSize, ipp, fmt: fmtCents };
   // Euro figures describe the SAVED plate: show them only while every cost-driving
   // field in the dialog still equals the saved value (time, plastic, #/plate, risk,
   // waste, processing, printer, material). Any edit -> no stale amounts.
   if (pb && plateCostBaseline && !PlateModeText.costFieldsChanged(plateCostBaseline, readPlateCostFields())) {
     // Same cents rule as calc.js scaleContribution, so the example equals the
     // plate's row in "How these numbers are built".
-    const cents = v => Math.round((v + Number.EPSILON) * 100) / 100;
+    const cents = PlateModeText.cents;
     const keys = ['materialCost', 'processingCost', 'electricityCost', 'printerUsageCost'];
     o.shareCost = cents(keys.reduce((s, k) => s + cents(pb[k] * setSize / ipp), 0));
     o.wholeCost = cents(keys.reduce((s, k) => s + cents(cents(pb[k]) * Math.ceil(setSize / ipp)), 0));

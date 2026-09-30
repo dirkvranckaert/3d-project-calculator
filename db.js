@@ -3,7 +3,8 @@
 const path = require('path');
 const Database = require('better-sqlite3');
 // Single source of truth for the margin cap — see calc.js `MAX_MARGIN_PCT`.
-const MAX_TARGET_MARGIN_PCT = require('./calc').maxReachableMarginPct();
+const calc = require('./calc');
+const MAX_TARGET_MARGIN_PCT = calc.maxReachableMarginPct();
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data', 'calculator.db');
 
@@ -231,18 +232,28 @@ function migrate(db) {
   addCol('projects', 'plate_mode', "TEXT NOT NULL DEFAULT 'parts'");
   // Per-plate override (parts mode only): charge only the share this set uses
   // instead of whole runs. Default off.
-  if (addCol('project_plates', 'charge_share_only', 'INTEGER NOT NULL DEFAULT 0')) {
+  // ONE transaction: the ALTER TABLE and the backfill commit together or not at
+  // all (SQLite DDL is transactional). Column existence is the completion marker,
+  // so a failed UPDATE must roll the column back too, else the backfill would be
+  // skipped forever on every later boot.
+  db.transaction(() => {
+    if (!addCol('project_plates', 'charge_share_only', 'INTEGER NOT NULL DEFAULT 0')) return;
     // One-time money-preserving backfill. Whole runs would raise the cost of every
     // existing plate whose #/plate does not divide its project's items per set;
     // switching the share override ON for exactly those plates keeps today's
-    // proportional money. Runs only in the call that ADDS the column, so it never
-    // re-applies after a plate's override is turned off, and plates created later
-    // keep the default (off = whole runs). Disabled plates are included, so
+    // proportional money. Runs only in the transaction that ADDS the column, so it
+    // never re-applies after a plate's override is turned off, and plates created
+    // later keep the default (off = whole runs). Disabled plates are included, so
     // re-enabling one later changes nothing. Project mode stays 'parts'.
-    db.exec(`UPDATE project_plates SET charge_share_only = 1
-      WHERE items_per_plate > 0
-        AND (SELECT items_per_set FROM projects WHERE projects.id = project_plates.project_id) % items_per_plate != 0`);
-  }
+    // The predicate is calc.wholeRunsDifferFromShare (real quotient, same rule as
+    // the runtime run count); SQL `%` would coerce REAL operands to integers.
+    const rows = db.prepare(`SELECT pp.id, pp.items_per_plate, p.items_per_set
+      FROM project_plates pp JOIN projects p ON p.id = pp.project_id`).all();
+    const on = db.prepare('UPDATE project_plates SET charge_share_only = 1 WHERE id = ?');
+    for (const r of rows) {
+      if (calc.wholeRunsDifferFromShare(r.items_per_set, r.items_per_plate)) on.run(r.id);
+    }
+  })();
   // Manual image ordering — drag & drop in the Images section (2026-07-22)
   if (addCol('project_images', 'sort_order', 'INTEGER NOT NULL DEFAULT 0')) {
     // Backfill: seed the order every project already sees (primary first, then
