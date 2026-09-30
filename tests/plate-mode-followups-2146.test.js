@@ -412,6 +412,107 @@ describe('items_per_set / items_per_plate validation', () => {
     expect(db.prepare('SELECT items_per_plate FROM project_plates WHERE project_id=? ORDER BY id').all(p.id).map(x => x.items_per_plate)).toEqual([2, 1]);
   });
 
+  /* -------- atomic multi-statement writes + identifier quoting (#2146 round 4) -------- */
+  const counts = () => Object.fromEntries(['projects', 'project_plates', 'project_extra_costs', 'project_extra_hours', 'project_design_extras', 'project_test_prints']
+    .map(t => [t, db.prepare(`SELECT COUNT(*) c FROM ${t}`).get().c]));
+  const withTrigger = async (sql, fn) => {
+    db.exec(sql);
+    try { await fn(); } finally { db.exec('DROP TRIGGER IF EXISTS t_fail_2146'); }
+  };
+
+  async function seedFullProject(name, plateNames) {
+    const p = (await api('post', '/api/projects', { name })).body;
+    for (const n of plateNames) await api('post', `/api/projects/${p.id}/plates`, { name: n });
+    const ec = db.prepare("INSERT INTO extra_cost_items (name, price_excl_vat) VALUES (?, 1)").run(`ec ${name}`).lastInsertRowid;
+    db.prepare('INSERT INTO project_extra_costs (project_id, extra_cost_id, quantity) VALUES (?,?,1)').run(p.id, ec);
+    db.prepare("INSERT INTO project_extra_hours (project_id, description, hours, hourly_rate, is_design_cost) VALUES (?, 'dh', 1, 10, 1)").run(p.id);
+    db.prepare("INSERT INTO project_design_extras (project_id, description, amount) VALUES (?, 'de', 5)").run(p.id);
+    await api('post', `/api/projects/${p.id}/test-prints`, { description: 'tp-boom' });
+    return p;
+  }
+
+  test('project duplicate is atomic: a plate insert failing midway leaves nothing of the new project', async () => {
+    const p = await seedFullProject('Atomic A', ['first', 'boom-plate']);
+    const before = counts();
+    await withTrigger(`CREATE TRIGGER t_fail_2146 BEFORE INSERT ON project_plates WHEN NEW.name = 'boom-plate'
+      BEGIN SELECT RAISE(ABORT, 'forced plate failure'); END`, async () => {
+      expect((await api('post', `/api/projects/${p.id}/duplicate`)).status).toBe(500);
+    });
+    expect(counts()).toEqual(before);
+    expect(db.prepare("SELECT COUNT(*) c FROM projects WHERE name = 'Atomic A (copy)'").get().c).toBe(0);
+    expect((await api('post', `/api/projects/${p.id}/duplicate`)).status).toBe(201); // trigger gone: copy works
+  });
+
+  test('project duplicate is atomic: a test-print insert failing after plates/extras/hours were copied leaves nothing', async () => {
+    const p = await seedFullProject('Atomic B', ['only']);
+    const before = counts();
+    await withTrigger(`CREATE TRIGGER t_fail_2146 BEFORE INSERT ON project_test_prints WHEN NEW.description = 'tp-boom'
+      BEGIN SELECT RAISE(ABORT, 'forced test-print failure'); END`, async () => {
+      expect((await api('post', `/api/projects/${p.id}/duplicate`)).status).toBe(500);
+    });
+    expect(counts()).toEqual(before);
+  });
+
+  test('plate duplicate is atomic: copy + project touch roll back together', async () => {
+    const p = (await api('post', '/api/projects', { name: 'Atomic C' })).body;
+    const pl = (await api('post', `/api/projects/${p.id}/plates`, { name: 'c' })).body.plates[0];
+    const before = counts();
+    await withTrigger(`CREATE TRIGGER t_fail_2146 BEFORE UPDATE ON projects WHEN NEW.id = ${p.id}
+      BEGIN SELECT RAISE(ABORT, 'forced touch failure'); END`, async () => {
+      expect((await api('post', `/api/projects/${p.id}/plates/${pl.id}/duplicate`)).status).toBe(500);
+    });
+    expect(counts()).toEqual(before);
+  });
+
+  test('3MF import is all-or-nothing on a database failure too, not only on validation', async () => {
+    const p = (await api('post', '/api/projects', { name: 'Atomic D' })).body;
+    const before = counts();
+    await withTrigger(`CREATE TRIGGER t_fail_2146 BEFORE INSERT ON project_plates WHEN NEW.name = 'boom-import'
+      BEGIN SELECT RAISE(ABORT, 'forced import failure'); END`, async () => {
+      const r = await api('post', `/api/projects/${p.id}/import-3mf`, { plates: [{ name: 'fine' }, { name: 'boom-import' }] });
+      expect(r.status).toBe(500);
+    });
+    expect(counts()).toEqual(before);
+  });
+
+  test('plate create / PUT / PATCH: plate write + project touch roll back together', async () => {
+    const p = (await api('post', '/api/projects', { name: 'Atomic E' })).body;
+    const pl = (await api('post', `/api/projects/${p.id}/plates`, { name: 'e' })).body.plates[0];
+    const before = counts();
+    const plateRow = () => db.prepare('SELECT name, items_per_plate FROM project_plates WHERE id=?').get(pl.id);
+    await withTrigger(`CREATE TRIGGER t_fail_2146 BEFORE UPDATE ON projects WHEN NEW.id = ${p.id}
+      BEGIN SELECT RAISE(ABORT, 'forced touch failure'); END`, async () => {
+      expect((await api('post', `/api/projects/${p.id}/plates`, { name: 'new' })).status).toBe(500);
+      expect((await api('put', `/api/projects/${p.id}/plates/${pl.id}`, { ...pl, name: 'renamed' })).status).toBe(500);
+      expect((await api('patch', `/api/projects/${p.id}/plates/${pl.id}`, { name: 'patched' })).status).toBe(500);
+    });
+    expect(counts()).toEqual(before);
+    expect(plateRow().name).toBe('e');
+  });
+
+  test('quoteIdent double-quotes and escapes embedded quotes', () => {
+    const { quoteIdent } = require('../server');
+    expect(quoteIdent('name')).toBe('"name"');
+    expect(quoteIdent('order')).toBe('"order"');
+    expect(quoteIdent('odd col')).toBe('"odd col"');
+    expect(quoteIdent('a"b')).toBe('"a""b"');
+  });
+
+  test('plate duplicate copies a future column whose name needs quoting (reserved word, space, embedded quote)', async () => {
+    const p = (await api('post', '/api/projects', { name: 'Quoting' })).body;
+    const pl = (await api('post', `/api/projects/${p.id}/plates`, { name: 'q' })).body.plates[0];
+    db.exec('ALTER TABLE project_plates ADD COLUMN "order" TEXT; ALTER TABLE project_plates ADD COLUMN "odd col" TEXT; ALTER TABLE project_plates ADD COLUMN "q""x" TEXT');
+    try {
+      db.prepare('UPDATE project_plates SET "order"=?, "odd col"=?, "q""x"=? WHERE id=?').run('o', 'sp', 'qq', pl.id);
+      expect((await api('post', `/api/projects/${p.id}/plates/${pl.id}/duplicate`)).status).toBe(201);
+      const copy = db.prepare('SELECT * FROM project_plates WHERE project_id=? AND id<>?').get(p.id, pl.id);
+      expect([copy.order, copy['odd col'], copy['q"x']]).toEqual(['o', 'sp', 'qq']);
+      expect((await api('post', `/api/projects/${p.id}/duplicate`)).status).toBe(201);
+    } finally {
+      db.exec('ALTER TABLE project_plates DROP COLUMN "order"; ALTER TABLE project_plates DROP COLUMN "odd col"; ALTER TABLE project_plates DROP COLUMN "q""x"');
+    }
+  });
+
   test('legacy REAL row: saving an unrelated field still works, changing the count to another bad value does not', async () => {
     const p = (await api('post', '/api/projects', { name: 'Legacy', items_per_set: 2 })).body;
     const pl = (await api('post', `/api/projects/${p.id}/plates`, { name: 'a', items_per_plate: 2 })).body.plates[0];

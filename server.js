@@ -318,6 +318,11 @@ function parseRunCount(raw, label, stored) {
   return { error: `${label} must be a whole number between 1 and ${MAX_RUN_COUNT}` };
 }
 
+// SQLite identifier quoting: wrap in double quotes, double any embedded quote.
+function quoteIdent(name) {
+  return '"' + String(name).replace(/"/g, '""') + '"';
+}
+
 /**
  * Copy a project_plates row (#2146). The column list comes from the table itself
  * (PRAGMA table_info), so a column added later is copied automatically and can
@@ -337,7 +342,7 @@ function parseRunCount(raw, label, stored) {
 function copyPlateRow(db, src, overrides) {
   const cols = db.prepare('PRAGMA table_info(project_plates)').all().map(c => c.name).filter(n => n !== 'id');
   const vals = cols.map(n => (Object.prototype.hasOwnProperty.call(overrides, n) ? overrides[n] : src[n]));
-  return db.prepare(`INSERT INTO project_plates (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`)
+  return db.prepare(`INSERT INTO project_plates (${cols.map(quoteIdent).join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`)
     .run(...vals).lastInsertRowid;
 }
 
@@ -843,62 +848,67 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
   // (a recorded sale), archived (a copy starts active). Every other projects column
   // is listed below; tests/plate-mode-followups-2146.test.js fails if a column is
   // added to the table without being copied or excluded here.
-  const r = db.prepare(`INSERT INTO projects
-    (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, margin_locked, target_margin_pct, locked_margin_pct, design_invoiced_separately, plate_mode)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(`${src.name} (copy)`, src.customer_name, src.items_per_set, src.tags || '', src.notes, src.is_custom || 0,
-      src.design_notes || null, src.margin_locked || 0,
-      src.target_margin_pct ?? defaultTargetMargin(db),
-      src.locked_margin_pct ?? null,
-      src.design_invoiced_separately || 0,
-      src.plate_mode || 'parts');
-  const newId = r.lastInsertRowid;
+  // One transaction: a failure anywhere (project row, plates, dependent rows, test
+  // prints, re-wiring) rolls the whole copy back, never a partial duplicate.
+  const newId = db.transaction(() => {
+    const r = db.prepare(`INSERT INTO projects
+      (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, margin_locked, target_margin_pct, locked_margin_pct, design_invoiced_separately, plate_mode)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(`${src.name} (copy)`, src.customer_name, src.items_per_set, src.tags || '', src.notes, src.is_custom || 0,
+        src.design_notes || null, src.margin_locked || 0,
+        src.target_margin_pct ?? defaultTargetMargin(db),
+        src.locked_margin_pct ?? null,
+        src.design_invoiced_separately || 0,
+        src.plate_mode || 'parts');
+    const newId = r.lastInsertRowid;
 
-  // Copy plates (including test-print plates — orphan plates copied as orphans with test_print_id=null)
-  const plates = db.prepare('SELECT * FROM project_plates WHERE project_id = ? ORDER BY sort_order').all(src.id);
-  // Map old plate id -> new plate id for test_print_id linkage
-  const plateIdMap = {};
-  for (const pl of plates) {
-    // Every stored column is copied (copyPlateRow); overrides: project_id, and
-    // test_print_id (re-wired below once the new test prints exist).
-    plateIdMap[pl.id] = copyPlateRow(db, pl, { project_id: newId, test_print_id: null });
-  }
+    // Copy plates (including test-print plates — orphan plates copied as orphans with test_print_id=null)
+    const plates = db.prepare('SELECT * FROM project_plates WHERE project_id = ? ORDER BY sort_order').all(src.id);
+    // Map old plate id -> new plate id for test_print_id linkage
+    const plateIdMap = {};
+    for (const pl of plates) {
+      // Every stored column is copied (copyPlateRow); overrides: project_id, and
+      // test_print_id (re-wired below once the new test prints exist).
+      plateIdMap[pl.id] = copyPlateRow(db, pl, { project_id: newId, test_print_id: null });
+    }
 
-  // Copy extras
-  const extras = db.prepare('SELECT extra_cost_id, quantity FROM project_extra_costs WHERE project_id = ?').all(src.id);
-  const insEC = db.prepare('INSERT INTO project_extra_costs (project_id, extra_cost_id, quantity) VALUES (?,?,?)');
-  for (const e of extras) insEC.run(newId, e.extra_cost_id, e.quantity);
+    // Copy extras
+    const extras = db.prepare('SELECT extra_cost_id, quantity FROM project_extra_costs WHERE project_id = ?').all(src.id);
+    const insEC = db.prepare('INSERT INTO project_extra_costs (project_id, extra_cost_id, quantity) VALUES (?,?,?)');
+    for (const e of extras) insEC.run(newId, e.extra_cost_id, e.quantity);
 
-  // Copy design hours (is_design_cost=1)
-  const designHours = db.prepare('SELECT * FROM project_extra_hours WHERE project_id = ? AND is_design_cost = 1 ORDER BY sort_order, id').all(src.id);
-  const insDesignHour = db.prepare(
-    'INSERT INTO project_extra_hours (project_id, description, hours, hourly_rate, actual_hours, sort_order, is_design_cost) VALUES (?,?,?,?,?,?,1)'
-  );
-  for (const dh of designHours) {
-    insDesignHour.run(newId, dh.description, dh.hours, dh.hourly_rate, dh.actual_hours ?? null, dh.sort_order);
-  }
+    // Copy design hours (is_design_cost=1)
+    const designHours = db.prepare('SELECT * FROM project_extra_hours WHERE project_id = ? AND is_design_cost = 1 ORDER BY sort_order, id').all(src.id);
+    const insDesignHour = db.prepare(
+      'INSERT INTO project_extra_hours (project_id, description, hours, hourly_rate, actual_hours, sort_order, is_design_cost) VALUES (?,?,?,?,?,?,1)'
+    );
+    for (const dh of designHours) {
+      insDesignHour.run(newId, dh.description, dh.hours, dh.hourly_rate, dh.actual_hours ?? null, dh.sort_order);
+    }
 
-  // Copy design extras
-  const designExtras = db.prepare('SELECT * FROM project_design_extras WHERE project_id = ? ORDER BY sort_order, id').all(src.id);
-  const insDE = db.prepare('INSERT INTO project_design_extras (project_id, description, amount, sort_order) VALUES (?,?,?,?)');
-  for (const de of designExtras) {
-    insDE.run(newId, de.description, de.amount, de.sort_order);
-  }
+    // Copy design extras
+    const designExtras = db.prepare('SELECT * FROM project_design_extras WHERE project_id = ? ORDER BY sort_order, id').all(src.id);
+    const insDE = db.prepare('INSERT INTO project_design_extras (project_id, description, amount, sort_order) VALUES (?,?,?,?)');
+    for (const de of designExtras) {
+      insDE.run(newId, de.description, de.amount, de.sort_order);
+    }
 
-  // Copy test prints and their attached plates
-  const testPrints = db.prepare('SELECT * FROM project_test_prints WHERE project_id = ? ORDER BY sort_order, id').all(src.id);
-  const insTP = db.prepare('INSERT INTO project_test_prints (project_id, description, estimated_cost, sort_order) VALUES (?,?,?,?)');
-  for (const tp of testPrints) {
-    const tpr = insTP.run(newId, tp.description, tp.estimated_cost, tp.sort_order);
-    const newTpId = tpr.lastInsertRowid;
-    // Wire attached plates to new test_print_id
-    const attachedPlates = db.prepare('SELECT * FROM project_plates WHERE project_id = ? AND test_print_id = ?').all(src.id, tp.id);
-    for (const ap of attachedPlates) {
-      if (plateIdMap[ap.id]) {
-        db.prepare('UPDATE project_plates SET test_print_id = ? WHERE id = ?').run(newTpId, plateIdMap[ap.id]);
+    // Copy test prints and their attached plates
+    const testPrints = db.prepare('SELECT * FROM project_test_prints WHERE project_id = ? ORDER BY sort_order, id').all(src.id);
+    const insTP = db.prepare('INSERT INTO project_test_prints (project_id, description, estimated_cost, sort_order) VALUES (?,?,?,?)');
+    for (const tp of testPrints) {
+      const tpr = insTP.run(newId, tp.description, tp.estimated_cost, tp.sort_order);
+      const newTpId = tpr.lastInsertRowid;
+      // Wire attached plates to new test_print_id
+      const attachedPlates = db.prepare('SELECT * FROM project_plates WHERE project_id = ? AND test_print_id = ?').all(src.id, tp.id);
+      for (const ap of attachedPlates) {
+        if (plateIdMap[ap.id]) {
+          db.prepare('UPDATE project_plates SET test_print_id = ? WHERE id = ?').run(newTpId, plateIdMap[ap.id]);
+        }
       }
     }
-  }
+    return newId;
+  })();
 
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(newId);
   res.status(201).json(enrichProject(db, project));
@@ -971,17 +981,19 @@ app.post('/api/projects/:projectId/plates', (req, res) => {
   const enabled = req.body.enabled !== undefined ? (req.body.enabled ? 1 : 0) : 1;
   const colors = req.body.colors ? JSON.stringify(req.body.colors) : null;
 
-  const r = db.prepare(`INSERT INTO project_plates
-    (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
-     risk_multiplier, pre_processing_minutes, post_processing_minutes,
-     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order, charge_share_only)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(pid, name, print_time_minutes, plastic_grams, perPlate.value,
-      risk_multiplier, pre_processing_minutes, post_processing_minutes,
-      printer_id, material_id, material_waste_grams, notes, colors, enabled, maxOrder + 1,
-      req.body.charge_share_only ? 1 : 0);
+  db.transaction(() => {
+    db.prepare(`INSERT INTO project_plates
+      (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
+       risk_multiplier, pre_processing_minutes, post_processing_minutes,
+       printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order, charge_share_only)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(pid, name, print_time_minutes, plastic_grams, perPlate.value,
+        risk_multiplier, pre_processing_minutes, post_processing_minutes,
+        printer_id, material_id, material_waste_grams, notes, colors, enabled, maxOrder + 1,
+        req.body.charge_share_only ? 1 : 0);
 
-  db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
+    db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
+  })();
   const updatedProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
   res.status(201).json(enrichProject(db, updatedProject));
 });
@@ -1001,8 +1013,11 @@ app.post('/api/projects/:projectId/plates/:plateId/duplicate', (req, res) => {
   if (src.is_test_print) return res.status(400).json({ error: 'Test-print plates cannot be duplicated' });
   const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order),0) as m FROM project_plates WHERE project_id = ?').get(pid).m;
   // All other columns copied from the source (copyPlateRow); overrides: name, sort_order.
-  copyPlateRow(db, src, { name: src.name ? `${src.name} (copy)` : null, sort_order: maxOrder + 1 });
-  db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
+  // Copy + project touch in one transaction (all-or-nothing).
+  db.transaction(() => {
+    copyPlateRow(db, src, { name: src.name ? `${src.name} (copy)` : null, sort_order: maxOrder + 1 });
+    db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
+  })();
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
   res.status(201).json(enrichProject(db, project));
 });
@@ -1030,20 +1045,22 @@ app.put('/api/projects/:projectId/plates/:plateId', (req, res) => {
     : (db.prepare('SELECT charge_share_only FROM project_plates WHERE id=? AND project_id=?')
       .get(req.params.plateId, req.params.projectId)?.charge_share_only ?? 0);
 
-  db.prepare(`UPDATE project_plates SET
-    name=?, print_time_minutes=?, plastic_grams=?, items_per_plate=?,
-    risk_multiplier=?, pre_processing_minutes=?, post_processing_minutes=?,
-    printer_id=?, material_id=?, material_waste_grams=?, notes=?, colors=?, enabled=?, sort_order=?,
-    charge_share_only=?
-    WHERE id=? AND project_id=?`)
-    .run(name, print_time_minutes, plastic_grams, perPlateVal,
-      risk_multiplier, pre_processing_minutes, post_processing_minutes,
-      printer_id, material_id, material_waste_grams, notes || null,
-      colors ? JSON.stringify(colors) : null,
-      enabled !== undefined ? (enabled ? 1 : 0) : 1,
-      sort_order || 0, shareOnly, req.params.plateId, req.params.projectId);
+  db.transaction(() => {
+    db.prepare(`UPDATE project_plates SET
+      name=?, print_time_minutes=?, plastic_grams=?, items_per_plate=?,
+      risk_multiplier=?, pre_processing_minutes=?, post_processing_minutes=?,
+      printer_id=?, material_id=?, material_waste_grams=?, notes=?, colors=?, enabled=?, sort_order=?,
+      charge_share_only=?
+      WHERE id=? AND project_id=?`)
+      .run(name, print_time_minutes, plastic_grams, perPlateVal,
+        risk_multiplier, pre_processing_minutes, post_processing_minutes,
+        printer_id, material_id, material_waste_grams, notes || null,
+        colors ? JSON.stringify(colors) : null,
+        enabled !== undefined ? (enabled ? 1 : 0) : 1,
+        sort_order || 0, shareOnly, req.params.plateId, req.params.projectId);
 
-  db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(req.params.projectId);
+    db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(req.params.projectId);
+  })();
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.projectId);
   if (!project) return res.status(404).json({ error: 'Not found' });
   res.json(enrichProject(db, project));
@@ -1073,8 +1090,10 @@ app.patch('/api/projects/:projectId/plates/:plateId', (req, res) => {
   }
   if (updates.length === 0) return res.status(400).json({ error: 'No valid fields' });
   values.push(req.params.plateId);
-  db.prepare(`UPDATE project_plates SET ${updates.join(', ')} WHERE id=?`).run(...values);
-  db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(req.params.projectId);
+  db.transaction(() => {
+    db.prepare(`UPDATE project_plates SET ${updates.join(', ')} WHERE id=?`).run(...values);
+    db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(req.params.projectId);
+  })();
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.projectId);
   res.json(enrichProject(db, project));
 });
@@ -1692,19 +1711,21 @@ app.post('/api/projects/:projectId/import-3mf', (req, res) => {
      printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order, source_plate_index, source_file_id)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
 
-  for (let i = 0; i < plates.length; i++) {
-    const pl = plates[i];
-    ins.run(pid, pl.name || `Plate ${maxOrder + i + 1}`,
-      pl.print_time_minutes || 0, pl.plastic_grams || 0,
-      perPlateCounts[i], pl.risk_multiplier || 1,
-      pl.pre_processing_minutes || 0, pl.post_processing_minutes || 2,
-      pl.printer_id || null, pl.material_id || null,
-      pl.material_waste_grams || 0, pl.notes || null,
-      pl.colors ? JSON.stringify(pl.colors) : null, 1, maxOrder + i + 1,
-      pl.source_plate_index || null, pl.source_file_id || null);
-  }
+  db.transaction(() => {
+    for (let i = 0; i < plates.length; i++) {
+      const pl = plates[i];
+      ins.run(pid, pl.name || `Plate ${maxOrder + i + 1}`,
+        pl.print_time_minutes || 0, pl.plastic_grams || 0,
+        perPlateCounts[i], pl.risk_multiplier || 1,
+        pl.pre_processing_minutes || 0, pl.post_processing_minutes || 2,
+        pl.printer_id || null, pl.material_id || null,
+        pl.material_waste_grams || 0, pl.notes || null,
+        pl.colors ? JSON.stringify(pl.colors) : null, 1, maxOrder + i + 1,
+        pl.source_plate_index || null, pl.source_file_id || null);
+    }
 
-  db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
+    db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
+  })();
   const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
   res.status(201).json(enrichProject(db, updated));
 });
@@ -2005,4 +2026,4 @@ if (process.env.NODE_ENV !== 'test') {
   });
 }
 
-module.exports = { app, getDb };
+module.exports = { app, getDb, quoteIdent };
