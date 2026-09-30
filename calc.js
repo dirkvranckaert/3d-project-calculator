@@ -578,7 +578,8 @@ function calculateDesignCosts(opts) {
  * Grams per plate are scaled identically to the Material Cost figure:
  * (totalPlasticGrams / items_per_plate) × itemsPerSet — i.e. per-item plastic ×
  * project item count. This authoritative plate figure ALWAYS drives the total,
- * keeping Σ(grams × price_per_kg) consistent with materialCost × itemsPerSet.
+ * keeping Σ(grams × price_per_kg) consistent with the material cost total (grams
+ * are exact; the money total is cents-rounded per plate, see scaleContribution).
  *
  * Two shapes are supported and may co-exist in one project (mixed DB state):
  *   - Plate WITH per-filament grams (`colors[].grams`, captured from the 3MF at
@@ -748,11 +749,23 @@ function emptyTotals() {
     totalCost: 0, plasticGrams: 0, minutes: 0 };
 }
 
-/** What one plate contributes when charged `factor` runs. */
+/**
+ * What one plate contributes when charged `factor` runs. Money is cents-exact:
+ *   - whole runs / once (integer factor): the plate's per-run cost is rounded to
+ *     cents FIRST, then multiplied by the run count, so the total is what a
+ *     hand calculation with the per-plate figures on screen gives
+ *     (#29: 25 x (8.09 + 1.62) = 242.75, not 25 x 9.7107 = 242.63).
+ *   - share (fractional factor): the share is rounded once, from the raw
+ *     per-run cost (0.4024 x 1/3 -> 0.13), never from an already rounded cost.
+ * `pb` holds the plate's raw per-run costs (calculatePlateCosts output, left
+ * unrounded on purpose: test-print costs must equal plateBreakdowns exactly).
+ */
 function scaleContribution(pb, rawMinutes, factor) {
   const c = {};
-  for (const k of COST_KEYS) c[k] = pb[k] * factor;
-  c.totalCost = COST_KEYS.reduce((sum, k) => sum + c[k], 0);
+  const src = pb;
+  const whole = Number.isInteger(factor);
+  for (const k of COST_KEYS) c[k] = whole ? roundToCents(roundToCents(src[k]) * factor) : roundToCents(src[k] * factor);
+  c.totalCost = roundToCents(COST_KEYS.reduce((sum, k) => sum + c[k], 0));
   c.plasticGrams = pb.totalPlasticGrams * factor;
   c.minutes = rawMinutes * factor;
   return c;
@@ -760,6 +773,8 @@ function scaleContribution(pb, rawMinutes, factor) {
 
 function addTotals(acc, c) {
   for (const k of Object.keys(acc)) acc[k] += c[k];
+  // Money stays whole cents (a sum of cents carries float noise otherwise).
+  for (const k of [...COST_KEYS, 'totalCost']) acc[k] = roundToCents(acc[k]);
 }
 
 /**

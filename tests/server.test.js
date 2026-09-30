@@ -1989,7 +1989,7 @@ describe('Plate mode API', () => {
 
     r = await api().patch(`/api/projects/${pid}/plates/${plateId}`, { charge_share_only: true });
     expect(r.body.plates[0].charge_share_only).toBe(1);
-    expect(r.body.calculation.totals.totalCost).toBeCloseTo(whole / 3, 8);
+    expect(r.body.calculation.totals.totalCost).toBeCloseTo(whole / 3, 2); // share is cents-rounded per component
     expect(r.body.calculation.plateBreakdowns[0].count.mode).toBe('share');
 
     // full-row PUT without the field keeps the override

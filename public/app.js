@@ -636,7 +636,7 @@ function renderPlatesSection(p) {
       <td class="num col-hide-mobile" data-label="Proc. cost">${fmt(pb?.processingCost)}</td>
       <td class="num col-hide-mobile" data-label="Elec. cost">${fmt(pb?.electricityCost)}</td>
       <td class="num col-hide-mobile" data-label="Print. cost">${fmt(pb?.printerUsageCost)}</td>
-      <td class="num" data-label="Total" style="font-weight:600">${fmt(pb?.totalPlateCost)}</td>
+      <td class="num" data-label="Total" style="font-weight:600">${pb ? fmt(plateRowTotal(pb)) : fmt(undefined)}</td>
       <td><div class="plate-actions">
         <button class="btn-icon" title="${toggleTitle}" onclick="togglePlate(${p.id}, ${pl.id})">${toggleIcon}</button>
         <button class="btn-icon" title="Duplicate" onclick="duplicatePlate(${p.id}, ${pl.id})"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>
@@ -679,6 +679,12 @@ function renderPlatesSection(p) {
 /* ================================================================== */
 /*  Cost breakdown cards                                               */
 /* ================================================================== */
+/** Row total = sum of the four cent-rounded columns shown beside it (same rule as calc.js scaleContribution). */
+function plateRowTotal(pb) {
+  const cents = v => Math.round(((Number(v) || 0) + Number.EPSILON) * 100) / 100;
+  return cents(['materialCost', 'processingCost', 'electricityCost', 'printerUsageCost'].reduce((s, k) => s + cents(pb[k]), 0));
+}
+
 function renderCostSection(p) {
   const c = p.calculation;
   if (!c || !(p.plates || []).some(pl => !pl.is_test_print)) return '';
@@ -2871,9 +2877,17 @@ function openPlateModal(projectId, plateId = null) {
     matSel.value = last?.material_id || '';
     document.getElementById('plate-colors-editor').innerHTML = renderColorEditor([], 'plate-colors');
   }
+  plateCostBaseline = plate ? readPlateCostFields() : null;
   updateShareHelp();
   openModal('plate-modal');
   document.getElementById('plate-name').focus();
+}
+
+let plateCostBaseline = null; // cost-driving form values as saved (null for a new plate)
+function readPlateCostFields() {
+  const v = {};
+  for (const k of PlateModeText.COST_FIELDS) v[k] = document.getElementById('plate-' + k).value;
+  return v;
 }
 
 /** Live help under the override checkbox, with THIS plate's numbers. */
@@ -2886,16 +2900,26 @@ function updateShareHelp() {
   const pb = editingPlateId
     ? (p.calculation?.plateBreakdowns || []).find(b => b.plateId === editingPlateId) : null;
   const o = { setSize, ipp, fmt };
-  // Euro figures come from the saved plate; skip them when the plate is new or
-  // #/plate was edited in this dialog (they would describe another plate).
-  if (pb && ipp === pb.itemsPerPlate) {
-    o.shareCost = pb.totalPlateCost * setSize / ipp;
-    o.wholeCost = pb.totalPlateCost * Math.ceil(setSize / ipp);
+  // Euro figures describe the SAVED plate: show them only while every cost-driving
+  // field in the dialog still equals the saved value (time, plastic, #/plate, risk,
+  // waste, processing, printer, material). Any edit -> no stale amounts.
+  if (pb && plateCostBaseline && !PlateModeText.costFieldsChanged(plateCostBaseline, readPlateCostFields())) {
+    // Same cents rule as calc.js scaleContribution, so the example equals the
+    // plate's row in "How these numbers are built".
+    const cents = v => Math.round((v + Number.EPSILON) * 100) / 100;
+    const keys = ['materialCost', 'processingCost', 'electricityCost', 'printerUsageCost'];
+    o.shareCost = cents(keys.reduce((s, k) => s + cents(pb[k] * setSize / ipp), 0));
+    o.wholeCost = cents(keys.reduce((s, k) => s + cents(cents(pb[k]) * Math.ceil(setSize / ipp)), 0));
   }
   el.className = 'field-hint field-hint--info';
   el.textContent = PlateModeText.shareHelp(o);
 }
-document.getElementById('plate-items').addEventListener('input', updateShareHelp);
+['plate-hours', 'plate-minutes', 'plate-plastic', 'plate-items', 'plate-risk', 'plate-waste',
+  'plate-pre', 'plate-post', 'plate-printer', 'plate-material'].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener('input', updateShareHelp);
+  el.addEventListener('change', updateShareHelp);
+});
 
 document.getElementById('btn-save-plate').addEventListener('click', async () => {
   const hours = parseInt(document.getElementById('plate-hours').value) || 0;

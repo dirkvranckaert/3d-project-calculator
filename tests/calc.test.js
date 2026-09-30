@@ -2254,9 +2254,12 @@ describe('margin lock', () => {
       // A costly plate, so the price ending is a rounding detail rather than a
       // distortion — see the overshoot test below.
       const bigPlate = { ...lockPlate, plastic_grams: 3000, print_time_minutes: 6000 };
+      // Target one point under the pin: the locked price is rounded to the cent, so
+      // the margin can land a hair (59.9998) under the pin itself, and an indicator
+      // at exactly-the-pin would flip on a cost that moved by a cent (#2135 cents rounding).
       const green = calc.calculateProject({
         plates: [bigPlate], settings: defaultSettings, itemsPerSet: 1,
-        marginLocked: true, targetMarginPct: 60, lockedMarginPct: 60,
+        marginLocked: true, targetMarginPct: 59, lockedMarginPct: 60,
       });
       const red = calc.calculateProject({
         plates: [bigPlate], settings: defaultSettings, itemsPerSet: 1,

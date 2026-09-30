@@ -231,7 +231,18 @@ function migrate(db) {
   addCol('projects', 'plate_mode', "TEXT NOT NULL DEFAULT 'parts'");
   // Per-plate override (parts mode only): charge only the share this set uses
   // instead of whole runs. Default off.
-  addCol('project_plates', 'charge_share_only', 'INTEGER NOT NULL DEFAULT 0');
+  if (addCol('project_plates', 'charge_share_only', 'INTEGER NOT NULL DEFAULT 0')) {
+    // One-time money-preserving backfill. Whole runs would raise the cost of every
+    // existing plate whose #/plate does not divide its project's items per set;
+    // switching the share override ON for exactly those plates keeps today's
+    // proportional money. Runs only in the call that ADDS the column, so it never
+    // re-applies after a plate's override is turned off, and plates created later
+    // keep the default (off = whole runs). Disabled plates are included, so
+    // re-enabling one later changes nothing. Project mode stays 'parts'.
+    db.exec(`UPDATE project_plates SET charge_share_only = 1
+      WHERE items_per_plate > 0
+        AND (SELECT items_per_set FROM projects WHERE projects.id = project_plates.project_id) % items_per_plate != 0`);
+  }
   // Manual image ordering — drag & drop in the Images section (2026-07-22)
   if (addCol('project_images', 'sort_order', 'INTEGER NOT NULL DEFAULT 0')) {
     // Backfill: seed the order every project already sees (primary first, then

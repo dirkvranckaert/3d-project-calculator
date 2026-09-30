@@ -31,25 +31,69 @@ afterEach(() => {
   if (originalDbPath === undefined) delete process.env.DB_PATH; else process.env.DB_PATH = originalDbPath;
 });
 
-test('pre-existing projects and plates migrate to parts / override off', () => {
-  // Rewind to the pre-#2135 schema, with projects of several shapes.
+// Rewind to the pre-#2135 schema. Set 91: plate 38 (not a divisor) + plate 7 (divides);
+// set 1: plate of 3 (not a divisor) and a disabled plate of 3; set 100 plate of 4 (divides).
+function seedLegacy() {
   const raw = new Database(dbPath);
   raw.exec('ALTER TABLE projects DROP COLUMN plate_mode');
   raw.exec('ALTER TABLE project_plates DROP COLUMN charge_share_only');
-  raw.prepare('INSERT INTO projects (name, items_per_set, archived) VALUES (?,?,?)').run('a', 91, 0);
-  raw.prepare('INSERT INTO projects (name, items_per_set, archived) VALUES (?,?,?)').run('b', 1, 1);
-  raw.prepare('INSERT INTO project_plates (project_id, name, items_per_plate) VALUES (1, ?, 38)').run('p');
+  const proj = raw.prepare('INSERT INTO projects (name, items_per_set, archived) VALUES (?,?,?)');
+  proj.run('a', 91, 0); proj.run('b', 1, 1); proj.run('c', 100, 0);
+  const pl = raw.prepare('INSERT INTO project_plates (project_id, name, items_per_plate, enabled) VALUES (?,?,?,?)');
+  pl.run(1, 'a-38', 38, 1); pl.run(1, 'a-7', 7, 1);
+  pl.run(2, 'b-3', 3, 1); pl.run(2, 'b-3-disabled', 3, 0); pl.run(2, 'b-1', 1, 1);
+  pl.run(3, 'c-4', 4, 1);
   raw.close();
+}
+const overrides = () => {
+  const d = new Database(dbPath);
+  const r = Object.fromEntries(d.prepare('SELECT name, charge_share_only AS o FROM project_plates').all().map(x => [x.name, x.o]));
+  d.close();
+  return r;
+};
 
+test('existing projects stay parts; override ON exactly where whole runs would change the cost', () => {
+  seedLegacy();
   bootDb(); // migrate() runs
 
   const after = new Database(dbPath);
   const projects = after.prepare('SELECT plate_mode FROM projects').all();
-  const plates = after.prepare('SELECT charge_share_only FROM project_plates').all();
   after.close();
-  expect(projects).toHaveLength(2);
+  expect(projects).toHaveLength(3);
   expect(projects.every(p => p.plate_mode === 'parts')).toBe(true);
-  expect(plates.every(p => p.charge_share_only === 0)).toBe(true);
+  expect(overrides()).toEqual({
+    'a-38': 1,            // 91 % 38 != 0
+    'a-7': 0,             // 91 % 7 == 0 (13 whole runs = proportional)
+    'b-3': 1,             // 1 % 3 != 0
+    'b-3-disabled': 1,    // disabled plates included
+    'b-1': 0,             // 1 % 1 == 0
+    'c-4': 0,             // 100 % 4 == 0
+  });
+});
+
+test('backfill runs once: a later manual OFF survives every further boot', () => {
+  seedLegacy();
+  bootDb();
+  const d = new Database(dbPath);
+  d.prepare("UPDATE project_plates SET charge_share_only = 0 WHERE name = 'a-38'").run();
+  d.close();
+  bootDb();
+  bootDb();
+  expect(overrides()['a-38']).toBe(0);
+  expect(overrides()['b-3']).toBe(1);
+});
+
+test('plates created after the migration default to override OFF (whole runs)', () => {
+  seedLegacy();
+  bootDb();
+  const d = new Database(dbPath);
+  d.prepare("INSERT INTO project_plates (project_id, name, items_per_plate) VALUES (1, 'new', 38)").run();
+  d.prepare("INSERT INTO projects (name, items_per_set) VALUES ('fresh', 5)").run();
+  d.prepare("INSERT INTO project_plates (project_id, name, items_per_plate) VALUES (4, 'fresh-3', 3)").run();
+  d.close();
+  bootDb();
+  expect(overrides().new).toBe(0);
+  expect(overrides()['fresh-3']).toBe(0);
 });
 
 test('migration is idempotent and never overwrites a chosen mode', () => {

@@ -83,6 +83,18 @@
       + `Leave it off when leftovers are waste or spares — then whole runs are charged.`;
   }
 
+  /**
+   * Every plate form field that moves the plate's cost. The euro example in the
+   * help is only true for the SAVED plate, so it is shown only while all of these
+   * still equal the saved values.
+   */
+  const COST_FIELDS = ['hours', 'minutes', 'plastic', 'items', 'risk', 'waste', 'pre', 'post', 'printer', 'material'];
+
+  /** True when any cost-driving field differs between two snapshots ({field: value}). */
+  function costFieldsChanged(saved, current) {
+    return COST_FIELDS.some(k => Number(saved[k] || 0) !== Number(current[k] || 0));
+  }
+
   /** Tooltip for the row badge: the same explanation, addressed to that row. */
   function shareTooltip(o) {
     return `Override on: this plate is charged only ${shareBadge(o.setSize, o.ipp)} — the share this set uses `
@@ -119,6 +131,6 @@
   const RISK_NOTE = 'The Risk column multiplies each run\'s print time (electricity, printer usage) and plastic (material) '
     + 'by the plate\'s risk factor. It does not multiply processing time, and the Time column shows the raw print time.';
 
-  return { MODES, SHARE_LABEL, RISK_NOTE, fraction, modeLabel, modeHelp, modeExplanation,
+  return { MODES, SHARE_LABEL, COST_FIELDS, costFieldsChanged, RISK_NOTE, fraction, modeLabel, modeHelp, modeExplanation,
     shareBadge, shareHelp, shareTooltip, countLabel, quantityCheckMessage };
 }));

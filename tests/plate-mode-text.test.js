@@ -65,3 +65,25 @@ describe('mode + quantity wording', () => {
     expect(css).toMatch(/\.field-hint\.field-hint--info\s*\{/);
   });
 });
+
+describe('stale euro example guard (review round 1, finding 2)', () => {
+  const saved = { hours: '7', minutes: '43', plastic: '238.36', items: '3', risk: '1', waste: '0',
+    pre: '0', post: '2', printer: '1', material: '4' };
+
+  test('every cost-driving form field is covered', () => {
+    expect([...T.COST_FIELDS].sort()).toEqual(Object.keys(saved).sort());
+  });
+
+  test('unchanged form -> not changed (numeric strings compare as numbers)', () => {
+    expect(T.costFieldsChanged(saved, { ...saved, plastic: '238.360', post: '2.0' })).toBe(false);
+  });
+
+  test.each(Object.keys(saved))('editing %s -> changed, so the euro example is dropped', (k) => {
+    const cur = { ...saved, [k]: String(Number(saved[k]) + 1) };
+    expect(T.costFieldsChanged(saved, cur)).toBe(true);
+  });
+
+  test('clearing printer/material (empty select) counts as a change', () => {
+    expect(T.costFieldsChanged(saved, { ...saved, printer: '' })).toBe(true);
+  });
+});
