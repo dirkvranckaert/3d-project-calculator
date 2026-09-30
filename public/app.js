@@ -2899,8 +2899,9 @@ function updateShareHelp() {
   const p = findProject(editingPlateProjectId);
   const el = document.getElementById('plate-share-help');
   if (!p || !el) return;
-  const setSize = Number(p.items_per_set) || 1;
-  const ipp = parseInt(document.getElementById('plate-items').value) || 1;
+  // Same normalisation as calc.js effectiveRunInputs (no parseInt: a legacy REAL
+  // #/plate must give the same run count here as at runtime).
+  const { set: setSize, ipp } = PlateModeText.runInputs(p.items_per_set, document.getElementById('plate-items').value);
   const pb = editingPlateId
     ? (p.calculation?.plateBreakdowns || []).find(b => b.plateId === editingPlateId) : null;
   const o = { setSize, ipp, fmt: fmtCents };

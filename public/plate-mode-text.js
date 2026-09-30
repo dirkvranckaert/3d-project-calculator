@@ -23,14 +23,38 @@
 
   function gcd(a, b) { return b ? gcd(b, a % b) : a; }
 
-  /** "1/3", "2/3", "4/3", or "1" — reduced. */
+  /**
+   * Run inputs exactly as calc.js effectiveRunInputs reads them: a missing/0 value
+   * counts as 1, nothing is rounded or truncated (a legacy REAL #/plate must give
+   * the same run count in the help as at runtime; tests compare the two).
+   */
+  function runInputs(setSize, ipp) {
+    return { set: Number(setSize) || 1, ipp: Number(ipp) || 1 };
+  }
+
+  /** "1/3", "2/3", "4/3", or "1" — reduced. Non-whole inputs (legacy data) show the decimal quotient. */
   function fraction(num, den) {
-    const n = Math.max(1, Math.round(num));
-    const d = Math.max(1, Math.round(den));
+    if (!Number.isInteger(num) || !Number.isInteger(den)) return String(Math.round(num / den * 100) / 100);
+    const n = Math.max(1, num);
+    const d = Math.max(1, den);
     const g = gcd(n, d);
     const rn = n / g;
     const rd = d / g;
     return rd === 1 ? String(rn) : `${rn}/${rd}`;
+  }
+
+  /**
+   * The quotient as words, from ONE rounded value so the number, the plural and
+   * the qualifier can never contradict each other: exact -> "2.5"; rounds to a
+   * whole number while the quotient is not -> "just under 2" / "just over 2"
+   * (never "about 2 ... not 2"); otherwise "about 2.33". `num` is the rendered
+   * number, `one` is true when it reads as 1 (drives "run" vs "runs").
+   */
+  function runsQuantity(q) {
+    const r = Math.round(q * 100) / 100;
+    if (Math.abs(q - r) < 1e-9) return { qual: '', num: String(r), one: r === 1 };
+    if (Number.isInteger(r)) return { qual: q < r ? 'just under ' : 'just over ', num: String(r), one: r === 1 };
+    return { qual: 'about ', num: String(r), one: false };
   }
 
   function modeLabel(mode) { return MODES[mode] || MODES.parts; }
@@ -62,20 +86,20 @@
    * Same "real quotient" rule as calc.js wholeRunsDifferFromShare.
    */
   function shareCase(setSize, ipp) {
-    const set = Math.max(1, Math.round(Number(setSize) || 1));
-    const per = Math.max(1, Math.round(Number(ipp) || 1));
-    const whole = Math.ceil(set / per);
-    const kind = whole === set / per ? 'none' : (set < per ? 'fraction' : 'multi');
+    const { set, ipp: per } = runInputs(setSize, ipp);
     const q = set / per;
-    const rounded = Math.round(q * 100) / 100;
-    const exact = Math.abs(q - rounded) < 1e-9;
-    const runsText = `${exact ? '' : 'about '}${rounded}`;
+    const whole = Math.ceil(q);
+    const kind = whole === q ? 'none' : (set < per ? 'fraction' : 'multi');
+    const qty = runsQuantity(q);
+    const runsText = `${qty.qual}${qty.num} run${qty.one ? '' : 's'}`;
+    // "just under 2 runs, not 2 whole runs": name the whole runs when the number repeats.
+    const notText = qty.num === String(whole) ? `${whole} whole run${whole === 1 ? '' : 's'}` : String(whole);
     return { kind, set, per, whole, wholeText: `${whole} whole run${whole === 1 ? '' : 's'}`,
       // "1/3 of one run" or "2.5 runs"
-      shareText: kind === 'fraction' ? `${fraction(set, per)} of one run` : `${runsText} run${q === 1 ? '' : 's'}`,
+      shareText: kind === 'fraction' ? `${fraction(set, per)} of one run` : runsText,
       // badge-length: "1/3 of a run, not 1" / "2.5 runs, not 3"
       badgeText: kind === 'fraction' ? `${fraction(set, per)} of a run, not ${whole}`
-        : (kind === 'multi' ? `${runsText} runs, not ${whole}` : `${whole} run${whole === 1 ? '' : 's'}, same as whole`) };
+        : (kind === 'multi' ? `${runsText}, not ${notText}` : `${whole} run${whole === 1 ? '' : 's'}, same as whole`) };
   }
 
   /** Short badge on the plate row: "1/3 of a run, not 1", "2.5 runs, not 3", "2 runs, same as whole". */
@@ -120,8 +144,16 @@
    */
   function shareCosts(pb, setSize, ipp) {
     const c = shareCase(setSize, ipp);
+    // Same split as calc.js scaleContribution: an integer share is charged like
+    // whole runs (per-run cost rounded to cents FIRST), only a fractional share
+    // rounds the raw share once. Otherwise the help euros drift by a cent from
+    // the explanation block.
+    const factor = c.set / c.per;
+    const share = Number.isInteger(factor)
+      ? k => cents(cents(pb[k]) * factor)
+      : k => cents(pb[k] * factor);
     return {
-      shareCost: cents(MONEY_KEYS.reduce((s, k) => s + cents(pb[k] * c.set / c.per), 0)),
+      shareCost: cents(MONEY_KEYS.reduce((s, k) => s + share(k), 0)),
       wholeCost: cents(MONEY_KEYS.reduce((s, k) => s + cents(cents(pb[k]) * c.whole), 0)),
     };
   }
@@ -196,8 +228,8 @@
         : `${c.shareText} instead of ${c.wholeText} (override on: ${why})`;
     }
     const r = count.runs;
-    return `${r} run${r === 1 ? '' : 's'} (${count.shareNum} ÷ ${count.shareDen} = ${
-      Math.round(count.shareNum / count.shareDen * 100) / 100}, rounded up)`;
+    const qty = runsQuantity(count.shareNum / count.shareDen);
+    return `${r} run${r === 1 ? '' : 's'} (${count.shareNum} ÷ ${count.shareDen} = ${qty.qual}${qty.num}, rounded up)`;
   }
 
   /**
@@ -232,5 +264,5 @@
     + 'by the plate\'s risk factor. It does not multiply processing time, and the Time column shows the raw print time.';
 
   return { MODES, SHARE_LABEL, COST_FIELDS, savedCostFields, formCostFields, costFieldsChanged, cents, rowTotal, RISK_NOTE, fraction, modeLabel, modeHelp, modeExplanation,
-    shareBadge, shareHelp, shareTooltip, shareCase, shareStatement, shareCosts, overrideParagraph, countLabel, quantityCheckMessage };
+    runInputs, runsQuantity, shareBadge, shareHelp, shareTooltip, shareCase, shareStatement, shareCosts, overrideParagraph, countLabel, quantityCheckMessage };
 }));

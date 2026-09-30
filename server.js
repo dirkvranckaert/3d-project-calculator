@@ -287,6 +287,24 @@ function backfillSliced(db, files) {
 /** Valid `projects.plate_mode` values (#2135). */
 const PLATE_MODES = ['parts', 'batch'];
 
+/**
+ * Validate a run-count input (items_per_set / items_per_plate, #2146): a finite
+ * whole number >= 1, JSON number or numeric string. The run maths divides by it,
+ * so a fraction, 0, negative or non-numeric value silently corrupts every cost.
+ * `stored` = the value already in the row: an UNCHANGED legacy value (e.g. an old
+ * REAL 2.5) is passed through so saving an unrelated field never gets blocked.
+ * Returns { value } or { error }. No DB CHECK constraint on purpose (needs a
+ * SQLite table rebuild on live data).
+ */
+function parseRunCount(raw, label, stored) {
+  const n = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw;
+  if (typeof n === 'number' && Number.isFinite(n)) {
+    if (Number.isInteger(n) && n >= 1) return { value: n };
+    if (stored !== undefined && stored !== null && Number(stored) === n) return { value: n };
+  }
+  return { error: `${label} must be a whole number of at least 1` };
+}
+
 function defaultTargetMargin(db) {
   const raw = getSetting(db, 'default_target_margin_pct');
   const n = Number(raw);
@@ -632,6 +650,8 @@ app.post('/api/projects', (req, res) => {
   const db = getDb();
   const { name, customer_name = null, items_per_set = 1, tags = '', notes = null, is_custom = 0, design_notes = null } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
+  const setCount = parseRunCount(items_per_set, 'Items per set');
+  if (setCount.error) return res.status(400).json({ error: setCount.error });
   const plateMode = req.body.plate_mode === undefined ? 'parts' : req.body.plate_mode;
   if (!PLATE_MODES.includes(plateMode)) return res.status(400).json({ error: "plate_mode must be 'parts' or 'batch'" });
 
@@ -641,7 +661,7 @@ app.post('/api/projects', (req, res) => {
   const seededTarget = defaultTargetMargin(db);
 
   const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, target_margin_pct, plate_mode) VALUES (?,?,?,?,?,?,?,?,?)')
-    .run(name, customer_name, items_per_set, tags, notes, is_custom ? 1 : 0, design_notes, seededTarget, plateMode);
+    .run(name, customer_name, setCount.value, tags, notes, is_custom ? 1 : 0, design_notes, seededTarget, plateMode);
   const projectId = r.lastInsertRowid;
 
   // Auto-add default extra cost items
@@ -660,7 +680,13 @@ app.put('/api/projects/:id', (req, res) => {
   const { name, customer_name, items_per_set, actual_sales_price, tags, notes, is_custom, design_notes,
     margin_locked, target_margin_pct } = req.body;
   // Read current is_custom / margin lock if not supplied in body, to avoid resetting them on ordinary edits
-  const existing = db.prepare('SELECT is_custom, margin_locked, target_margin_pct, plate_mode FROM projects WHERE id = ?').get(req.params.id);
+  const existing = db.prepare('SELECT is_custom, margin_locked, target_margin_pct, plate_mode, items_per_set FROM projects WHERE id = ?').get(req.params.id);
+  let setVal = items_per_set;
+  if (items_per_set !== undefined) {
+    const setCount = parseRunCount(items_per_set, 'Items per set', existing?.items_per_set);
+    if (setCount.error) return res.status(400).json({ error: setCount.error });
+    setVal = setCount.value;
+  }
   // Absent = keep what is stored, so ordinary edits from older clients never flip the mode.
   const plateModeVal = req.body.plate_mode !== undefined ? req.body.plate_mode : (existing?.plate_mode ?? 'parts');
   if (!PLATE_MODES.includes(plateModeVal)) return res.status(400).json({ error: "plate_mode must be 'parts' or 'batch'" });
@@ -689,7 +715,7 @@ app.put('/api/projects/:id', (req, res) => {
     : (existing?.target_margin_pct ?? defaultTargetMargin(db));
   db.prepare(`UPDATE projects SET name=?, customer_name=?, items_per_set=?, actual_sales_price=?, tags=?, notes=?,
     is_custom=?, design_notes=?, margin_locked=?, target_margin_pct=?, plate_mode=?, updated_at=datetime('now') WHERE id=?`)
-    .run(name, customer_name, items_per_set, actual_sales_price ?? null, tags ?? '', notes ?? null,
+    .run(name, customer_name, setVal, actual_sales_price ?? null, tags ?? '', notes ?? null,
       isCustomVal, design_notes ?? null, marginLockedVal, targetMarginVal, plateModeVal, req.params.id);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Not found' });
@@ -901,6 +927,9 @@ app.post('/api/projects/:projectId/plates', (req, res) => {
     material_waste_grams = lastPlate ? lastPlate.material_waste_grams : 0,
   } = req.body;
 
+  const perPlate = parseRunCount(items_per_plate, 'Items per plate');
+  if (perPlate.error) return res.status(400).json({ error: perPlate.error });
+
   const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order),0) as m FROM project_plates WHERE project_id = ?').get(pid).m;
 
   const notes = req.body.notes || null;
@@ -912,7 +941,7 @@ app.post('/api/projects/:projectId/plates', (req, res) => {
      risk_multiplier, pre_processing_minutes, post_processing_minutes,
      printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order, charge_share_only)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(pid, name, print_time_minutes, plastic_grams, items_per_plate,
+    .run(pid, name, print_time_minutes, plastic_grams, perPlate.value,
       risk_multiplier, pre_processing_minutes, post_processing_minutes,
       printer_id, material_id, material_waste_grams, notes, colors, enabled, maxOrder + 1,
       req.body.charge_share_only ? 1 : 0);
@@ -928,6 +957,15 @@ app.put('/api/projects/:projectId/plates/:plateId', (req, res) => {
     risk_multiplier, pre_processing_minutes, post_processing_minutes,
     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order } = req.body;
 
+  let perPlateVal = items_per_plate;
+  if (items_per_plate !== undefined) {
+    const storedPlate = db.prepare('SELECT items_per_plate FROM project_plates WHERE id=? AND project_id=?')
+      .get(req.params.plateId, req.params.projectId);
+    const perPlate = parseRunCount(items_per_plate, 'Items per plate', storedPlate?.items_per_plate);
+    if (perPlate.error) return res.status(400).json({ error: perPlate.error });
+    perPlateVal = perPlate.value;
+  }
+
   // Absent = keep the stored per-plate override (this route replaces the whole row).
   const shareOnly = req.body.charge_share_only !== undefined
     ? (req.body.charge_share_only ? 1 : 0)
@@ -940,7 +978,7 @@ app.put('/api/projects/:projectId/plates/:plateId', (req, res) => {
     printer_id=?, material_id=?, material_waste_grams=?, notes=?, colors=?, enabled=?, sort_order=?,
     charge_share_only=?
     WHERE id=? AND project_id=?`)
-    .run(name, print_time_minutes, plastic_grams, items_per_plate,
+    .run(name, print_time_minutes, plastic_grams, perPlateVal,
       risk_multiplier, pre_processing_minutes, post_processing_minutes,
       printer_id, material_id, material_waste_grams, notes || null,
       colors ? JSON.stringify(colors) : null,
@@ -963,6 +1001,11 @@ app.patch('/api/projects/:projectId/plates/:plateId', (req, res) => {
     'risk_multiplier', 'pre_processing_minutes', 'post_processing_minutes',
     'printer_id', 'material_id', 'material_waste_grams', 'notes', 'colors', 'enabled',
     'source_plate_index', 'source_file_id', 'charge_share_only'];
+  if (req.body.items_per_plate !== undefined) {
+    const perPlate = parseRunCount(req.body.items_per_plate, 'Items per plate', plate.items_per_plate);
+    if (perPlate.error) return res.status(400).json({ error: perPlate.error });
+    req.body.items_per_plate = perPlate.value;
+  }
   const updates = [];
   const values = [];
   for (const [k, v] of Object.entries(req.body)) {
@@ -1575,6 +1618,15 @@ app.post('/api/projects/:projectId/import-3mf', (req, res) => {
   const { plates = [] } = req.body;
   // plates is an array of: { name, print_time_minutes, plastic_grams, items_per_plate, printer_id, material_id }
 
+  // Validate every plate before inserting any (all-or-nothing). Absent/null = 1.
+  const perPlateCounts = [];
+  for (const pl of plates) {
+    const raw = pl.items_per_plate === undefined || pl.items_per_plate === null ? 1 : pl.items_per_plate;
+    const c = parseRunCount(raw, 'Items per plate');
+    if (c.error) return res.status(400).json({ error: c.error });
+    perPlateCounts.push(c.value);
+  }
+
   const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order),0) as m FROM project_plates WHERE project_id = ?').get(pid).m;
   const ins = db.prepare(`INSERT INTO project_plates
     (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
@@ -1586,7 +1638,7 @@ app.post('/api/projects/:projectId/import-3mf', (req, res) => {
     const pl = plates[i];
     ins.run(pid, pl.name || `Plate ${maxOrder + i + 1}`,
       pl.print_time_minutes || 0, pl.plastic_grams || 0,
-      pl.items_per_plate || 1, pl.risk_multiplier || 1,
+      perPlateCounts[i], pl.risk_multiplier || 1,
       pl.pre_processing_minutes || 0, pl.post_processing_minutes || 2,
       pl.printer_id || null, pl.material_id || null,
       pl.material_waste_grams || 0, pl.notes || null,
