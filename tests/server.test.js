@@ -1,6 +1,7 @@
 'use strict';
 
 const request = require('supertest');
+const http = require('http');
 const path = require('path');
 const fs = require('fs');
 
@@ -27,7 +28,15 @@ beforeAll(() => {
   removeDbFiles(testDbPath);
 });
 
-const { app } = require('../server');
+const { app: expressApp } = require('../server');
+
+// One shared, already-listening server for the whole file. `request(<express app>)`
+// makes supertest open and close a fresh ephemeral-port server per request, which
+// flaked on Node 26 (socket hang up / "Parse Error: Expected HTTP/" / login cascades).
+// `app` deliberately keeps its name so `request(app)` call sites are unchanged.
+const app = http.createServer(expressApp).listen(0);
+afterAll(() => new Promise((resolve) => app.close(resolve)));
+
 const calc = require('../calc');
 
 let cookie;
