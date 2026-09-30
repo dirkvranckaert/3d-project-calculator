@@ -468,7 +468,7 @@ body {
   cursor: help;
   white-space: nowrap;
 }
-.plate-share-check { display: flex; gap: 8px; align-items: flex-start; font-weight: 600; cursor: pointer; }
+.plate-share-check { display: flex; gap: 8px; align-items: flex-start; font-weight: 600; cursor: pointer; margin-bottom: 0; }
 .plate-share-check input { width: auto; margin-top: 3px; }
 .plates-table tr.plates-sum-row td {
   font-weight: 600;
@@ -507,6 +507,9 @@ body {
 .calc-explain th, .calc-explain td { padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: right; font-variant-numeric: tabular-nums; }
 .calc-explain th:first-child, .calc-explain td:first-child,
 .calc-explain th:nth-child(2), .calc-explain td:nth-child(2) { text-align: left; }
+/* Narrow screens: the wrapper scrolls, the text columns must not collapse into tall slivers. */
+.calc-explain th:first-child, .calc-explain td:first-child { min-width: 110px; }
+.calc-explain th:nth-child(2), .calc-explain td:nth-child(2) { min-width: 200px; }
 .calc-explain tr.calc-explain-total td { font-weight: 700; border-top: 2px solid var(--border); }
 .calc-explain .calc-explain-override { color: var(--warning); font-weight: 600; }
 .calc-explain .calc-explain-note { color: var(--text-muted); }
@@ -1037,9 +1040,9 @@ input:focus, select:focus, textarea:focus {
 
 /* Non-blocking field warning (e.g. target margin below the global floor). */
 .field-hint {
-  margin: -4px 0 10px;
+  margin: 6px 0 10px;
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.5;
   color: var(--warning);
 }
 

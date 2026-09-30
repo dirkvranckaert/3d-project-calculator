@@ -2899,8 +2899,9 @@ function updateShareHelp() {
   const p = findProject(editingPlateProjectId);
   const el = document.getElementById('plate-share-help');
   if (!p || !el) return;
-  const setSize = Number(p.items_per_set) || 1;
-  const ipp = parseInt(document.getElementById('plate-items').value) || 1;
+  // Same normalisation as calc.js effectiveRunInputs (no parseInt: a legacy REAL
+  // #/plate must give the same run count here as at runtime).
+  const { set: setSize, ipp } = PlateModeText.runInputs(p.items_per_set, document.getElementById('plate-items').value);
   const pb = editingPlateId
     ? (p.calculation?.plateBreakdowns || []).find(b => b.plateId === editingPlateId) : null;
   const o = { setSize, ipp, fmt: fmtCents };
@@ -2948,25 +2949,8 @@ document.getElementById('btn-save-plate').addEventListener('click', async () => 
 });
 
 async function duplicatePlate(projectId, plateId) {
-  const p = findProject(projectId);
-  const plate = p?.plates?.find(x => x.id === plateId);
-  if (!plate) return;
-  await POST(`/api/projects/${projectId}/plates`, {
-    name: plate.name ? `${plate.name} (copy)` : null,
-    print_time_minutes: plate.print_time_minutes,
-    plastic_grams: plate.plastic_grams,
-    items_per_plate: plate.items_per_plate,
-    risk_multiplier: plate.risk_multiplier,
-    pre_processing_minutes: plate.pre_processing_minutes,
-    post_processing_minutes: plate.post_processing_minutes,
-    printer_id: plate.printer_id,
-    material_id: plate.material_id,
-    material_waste_grams: plate.material_waste_grams,
-    notes: plate.notes,
-    colors: plate.colors || [],
-    enabled: plate.enabled,
-    charge_share_only: plate.charge_share_only ? 1 : 0,
-  });
+  // Server-side copy by plate id: the stored row is copied verbatim (#2146).
+  await POST(`/api/projects/${projectId}/plates/${plateId}/duplicate`);
   await reloadSingleProject(projectId);
 }
 

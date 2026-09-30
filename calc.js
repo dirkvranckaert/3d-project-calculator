@@ -1226,6 +1226,7 @@ module.exports = {
   calculateTotalPrintTime,
   resolvePlateCount,
   wholeRunsDifferFromShare,
+  effectiveRunInputs,
   roundToCents,
   calculateQuantityCheck,
   applyProfitMargins,
