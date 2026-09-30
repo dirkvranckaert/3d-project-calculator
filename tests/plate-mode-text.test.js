@@ -11,38 +11,77 @@ describe('share override wording', () => {
     expect(T.SHARE_LABEL).not.toMatch(/proportional/i);
   });
 
-  test('help text carries the plate numbers and the impact (Legs: makes 3, set needs 1)', () => {
-    const t = T.shareHelp({ setSize: 1, ipp: 3, shareCost: 0.133, wholeCost: 0.40, fmt: eur });
-    expect(t).toContain('This plate makes 3 per run and this set needs 1');
-    expect(t).toContain('counts 1/3 of the plate');
-    expect(t).toContain('€0.13 instead of €0.40 for whole runs');
-    expect(t).toMatch(/Leave it off when leftovers are waste or spares/);
+  // Three cases: fewer than a run (needs 1, makes 3), more + not multiple (needs 10, makes 4), exact multiple (needs 6, makes 3).
+  const money = { shareCost: 0.133, wholeCost: 0.40, fmt: eur };
+
+  test('fraction case: help, no euro, tooltip, badge, count label', () => {
+    const t = T.shareHelp({ setSize: 1, ipp: 3, ...money });
+    expect(t).toBe('This plate makes 3 per run and this set needs 1, so the set uses 1/3 of one run. '
+      + 'With the override on, 1/3 of one run is charged instead of 1 whole run (€0.13 instead of €0.40). '
+      + 'Turn it on when the leftover pieces will be used in later sets. '
+      + 'Leave it off when leftovers are waste or spares, then whole runs are charged.');
+    expect(T.shareHelp({ setSize: 1, ipp: 3 })).not.toContain('instead of €');
+    expect(T.shareTooltip({ setSize: 1, ipp: 3, ...money })).toBe('Override on. This plate makes 3 per run and this set needs 1, '
+      + 'so the set uses 1/3 of one run. With the override on, 1/3 of one run is charged instead of 1 whole run (€0.13 instead of €0.40). '
+      + 'Edit the plate to switch it off.');
+    expect(T.shareBadge(1, 3)).toBe('1/3 of a run, not 1');
+    expect(T.shareBadge(2, 4)).toBe('1/2 of a run, not 1');
+    expect(T.countLabel({ mode: 'share', shareNum: 1, shareDen: 3 }))
+      .toBe('1/3 of one run instead of 1 whole run (override on: set needs 1, plate makes 3 per run)');
   });
 
-  test('help text without saved costs omits the euro clause', () => {
-    const t = T.shareHelp({ setSize: 1, ipp: 3 });
-    expect(t).toContain('counts 1/3 of the plate');
-    expect(t).not.toContain('for whole runs)');
+  test('multi case (needs 10, makes 4): 2.5 runs instead of 3 whole runs, no "10 of the 4" nonsense', () => {
+    const t = T.shareHelp({ setSize: 10, ipp: 4, shareCost: 1.25, wholeCost: 1.5, fmt: eur });
+    expect(t).toContain('This plate makes 4 per run and this set needs 10, so the set uses 2.5 runs. '
+      + 'With the override on, 2.5 runs are charged');
+    expect(t).toContain('2.5 runs are charged instead of 3 whole runs (€1.25 instead of €1.50)');
+    expect(t).not.toMatch(/10 of the 4|5\/2/);
+    expect(T.shareTooltip({ setSize: 10, ipp: 4, shareCost: 1.25, wholeCost: 1.5, fmt: eur })).not.toMatch(/10 of the 4|5\/2/);
+    expect(T.shareBadge(10, 4)).toBe('2.5 runs, not 3');
+    expect(T.shareBadge(7, 3)).toBe('about 2.33 runs, not 3');
+    expect(T.countLabel({ mode: 'share', shareNum: 10, shareDen: 4 }))
+      .toBe('2.5 runs instead of 3 whole runs (override on: set needs 10, plate makes 4 per run)');
   });
 
-  test('fractions are reduced; set larger than plate reads correctly', () => {
+  test('exact multiple (needs 6, makes 3): override has no effect and says so', () => {
+    const t = T.shareHelp({ setSize: 6, ipp: 3, ...money });
+    expect(t).toBe('This plate makes 3 per run and this set needs 6, which is exactly 2 whole runs, '
+      + 'so this override changes nothing for this plate. It only matters if the set size or #/plate changes later.');
+    expect(T.shareTooltip({ setSize: 6, ipp: 3 })).toContain('changes nothing for this plate');
+    expect(T.shareBadge(6, 3)).toBe('2 runs, same as whole');
+    expect(T.shareBadge(3, 3)).toBe('1 run, same as whole');
+    expect(T.countLabel({ mode: 'share', shareNum: 6, shareDen: 3 }))
+      .toBe('2 runs (override on, but it changes nothing: set needs 6, plate makes 3 per run, an exact multiple)');
+  });
+
+  test('fractions reduce', () => {
     expect(T.fraction(2, 4)).toBe('1/2');
     expect(T.fraction(4, 3)).toBe('4/3');
-    expect(T.shareBadge(1, 3)).toBe('1/3 of plate');
-    expect(T.shareBadge(6, 3)).toBe('2 plates');
   });
 
-  test('tooltip repeats the explanation', () => {
-    const t = T.shareTooltip({ setSize: 1, ipp: 3 });
-    expect(t).toContain('1/3 of plate');
-    expect(t).toContain('not a whole print run');
+  test('explanation paragraph: one plain sentence per plate, no repetition', () => {
+    const out = T.overrideParagraph([
+      { name: 'Legs', setSize: 1, ipp: 3, shareCost: 0.133, wholeCost: 0.4 },
+      { name: 'Body', setSize: 10, ipp: 4, shareCost: 1.25, wholeCost: 1.5 },
+      { name: 'Lid', setSize: 6, ipp: 3, shareCost: 1, wholeCost: 1 },
+    ], eur);
+    expect(out).toEqual([
+      'Legs: counts 1/3 of one run instead of 1 whole run (€0.13 instead of €0.40); switch the override off in the plate editor if the leftovers are waste or spares.',
+      'Body: counts 2.5 runs instead of 3 whole runs (€1.25 instead of €1.50); switch the override off in the plate editor if the leftovers are waste or spares.',
+      'Lid: 6 \u00f7 3 is exactly 2 whole runs, so the override changes nothing here.',
+    ]);
+  });
+
+  test('shareCosts: share vs whole-run euro, per-run cost cells', () => {
+    const pb = { materialCost: 0.4, processingCost: 0, electricityCost: 0, printerUsageCost: 0 };
+    expect(T.shareCosts(pb, 1, 3)).toEqual({ shareCost: 0.13, wholeCost: 0.4 });
+    expect(T.shareCosts(pb, 10, 4)).toEqual({ shareCost: 1, wholeCost: 1.2 });
   });
 
   test('count labels', () => {
     expect(T.countLabel({ mode: 'once' })).toBe('printed once');
     expect(T.countLabel({ mode: 'runs', runs: 3, shareNum: 91, shareDen: 38 })).toMatch(/^3 runs \(91 ÷ 38/);
-    expect(T.countLabel({ mode: 'share', shareNum: 1, shareDen: 3 })).toMatch(/share 1\/3 of a run \(override/);
-  });
+      });
 });
 
 describe('mode + quantity wording', () => {

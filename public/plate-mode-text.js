@@ -54,10 +54,49 @@
         + `electricity and printer usage alike.`;
   }
 
-  /** Short badge for a plate charged by share, e.g. "1/3 of plate". */
-  function shareBadge(num, den) {
-    const f = fraction(num, den);
-    return /^\d+$/.test(f) ? `${f} plate${f === '1' ? '' : 's'}` : `${f} of plate`;
+  /**
+   * The ONE place that decides how the override reads. Three cases:
+   *   'none'     set is an exact multiple of #/plate -> override changes nothing
+   *   'fraction' set < #/plate (e.g. needs 1, run makes 3) -> 1/3 of ONE run instead of 1 whole run
+   *   'multi'    set > #/plate, not a multiple (needs 10, makes 4) -> 2.5 runs instead of 3 whole runs
+   * Same "real quotient" rule as calc.js wholeRunsDifferFromShare.
+   */
+  function shareCase(setSize, ipp) {
+    const set = Math.max(1, Math.round(Number(setSize) || 1));
+    const per = Math.max(1, Math.round(Number(ipp) || 1));
+    const whole = Math.ceil(set / per);
+    const kind = whole === set / per ? 'none' : (set < per ? 'fraction' : 'multi');
+    const q = set / per;
+    const rounded = Math.round(q * 100) / 100;
+    const exact = Math.abs(q - rounded) < 1e-9;
+    const runsText = `${exact ? '' : 'about '}${rounded}`;
+    return { kind, set, per, whole, wholeText: `${whole} whole run${whole === 1 ? '' : 's'}`,
+      // "1/3 of one run" or "2.5 runs"
+      shareText: kind === 'fraction' ? `${fraction(set, per)} of one run` : `${runsText} run${q === 1 ? '' : 's'}`,
+      // badge-length: "1/3 of a run, not 1" / "2.5 runs, not 3"
+      badgeText: kind === 'fraction' ? `${fraction(set, per)} of a run, not ${whole}`
+        : (kind === 'multi' ? `${runsText} runs, not ${whole}` : `${whole} run${whole === 1 ? '' : 's'}, same as whole`) };
+  }
+
+  /** Short badge on the plate row: "1/3 of a run, not 1", "2.5 runs, not 3", "2 runs, same as whole". */
+  function shareBadge(num, den) { return shareCase(num, den).badgeText; }
+
+  /** " (€0.13 instead of €0.40)" when both costs are known and differ; else "". */
+  function moneyClause(o) {
+    const f = o.fmt || (v => String(v));
+    return (o.shareCost != null && o.wholeCost != null && f(o.shareCost) !== f(o.wholeCost))
+      ? ` (${f(o.shareCost)} instead of ${f(o.wholeCost)})` : '';
+  }
+
+  /** The plate's own numbers as one plain statement, shared by help text and tooltip. */
+  function shareStatement(o) {
+    const c = shareCase(o.setSize, o.ipp);
+    const lead = `This plate makes ${c.per} per run and this set needs ${c.set}`;
+    if (c.kind === 'none') {
+      return `${lead}, which is exactly ${c.whole} whole run${c.whole === 1 ? '' : 's'}, so this override changes nothing for this plate.`;
+    }
+    return `${lead}, so the set uses ${c.shareText}. With the override on, ${c.shareText} ${c.kind === 'fraction' ? 'is' : 'are'} charged instead of `
+      + `${c.wholeText}${moneyClause(o)}.`;
   }
 
   /**
@@ -67,20 +106,24 @@
    *   runs. Both omitted for a plate that has no saved costs yet.
    */
   function shareHelp(o) {
-    const set = o.setSize || 1;
-    const ipp = o.ipp || 1;
-    const f = o.fmt || (v => String(v));
-    const frac = fraction(set, ipp);
-    const counts = /^\d+$/.test(frac)
-      ? `counts ${frac === '1' ? 'exactly one whole plate' : frac + ' whole plates'}`
-      : `counts ${frac} of the plate`;
-    const money = (o.shareCost != null && o.wholeCost != null)
-      ? ` (${f(o.shareCost)} instead of ${f(o.wholeCost)} for whole runs)`
-      : '';
-    return `Charge only the share this set uses, instead of paying for every whole print run. `
-      + `This plate makes ${ipp} per run and this set needs ${set} → ${counts}${money}. `
-      + `Use it when the leftover pieces will be used in later sets. `
-      + `Leave it off when leftovers are waste or spares — then whole runs are charged.`;
+    const c = shareCase(o.setSize, o.ipp);
+    const advice = c.kind === 'none'
+      ? ' It only matters if the set size or #/plate changes later.'
+      : ' Turn it on when the leftover pieces will be used in later sets. '
+        + 'Leave it off when leftovers are waste or spares, then whole runs are charged.';
+    return `${shareStatement(o)}${advice}`;
+  }
+
+  /**
+   * Costs on a share basis vs whole runs for one plate breakdown `pb` (per-run
+   * cost cells), same cents rule as calc.js scaleContribution.
+   */
+  function shareCosts(pb, setSize, ipp) {
+    const c = shareCase(setSize, ipp);
+    return {
+      shareCost: cents(MONEY_KEYS.reduce((s, k) => s + cents(pb[k] * c.set / c.per), 0)),
+      wholeCost: cents(MONEY_KEYS.reduce((s, k) => s + cents(cents(pb[k]) * c.whole), 0)),
+    };
   }
 
   /**
@@ -136,11 +179,9 @@
     return cents(MONEY_KEYS.reduce((s, k) => s + cents(Number(pb[k]) || 0), 0));
   }
 
-  /** Tooltip for the row badge: the same explanation, addressed to that row. */
+  /** Tooltip for the row badge: the same statement, addressed to that row. */
   function shareTooltip(o) {
-    return `Override on: this plate is charged only ${shareBadge(o.setSize, o.ipp)} — the share this set uses `
-      + `(${o.setSize} of the ${o.ipp} it makes per run), not a whole print run. `
-      + `Edit the plate to switch it off.`;
+    return `Override on. ${shareStatement(o)} Edit the plate to switch it off.`;
   }
 
   /** How one plate counts, for the explanation block. */
@@ -148,12 +189,30 @@
     if (!count) return '';
     if (count.mode === 'once') return 'printed once';
     if (count.mode === 'share') {
-      return `share ${fraction(count.shareNum, count.shareDen)} of a run (override: only what this set uses; `
-        + `it makes ${count.shareDen} per run, the set needs ${count.shareNum})`;
+      const c = shareCase(count.shareNum, count.shareDen);
+      const why = `set needs ${c.set}, plate makes ${c.per} per run`;
+      return c.kind === 'none'
+        ? `${c.whole} run${c.whole === 1 ? '' : 's'} (override on, but it changes nothing: ${why}, an exact multiple)`
+        : `${c.shareText} instead of ${c.wholeText} (override on: ${why})`;
     }
     const r = count.runs;
     return `${r} run${r === 1 ? '' : 's'} (${count.shareNum} ÷ ${count.shareDen} = ${
       Math.round(count.shareNum / count.shareDen * 100) / 100}, rounded up)`;
+  }
+
+  /**
+   * One plain sentence per plate that has the override on (breakdowns already
+   * filtered to count.mode === 'share'). plates: [{name, setSize, ipp, shareCost?, wholeCost?}].
+   */
+  function overrideParagraph(plates, fmt) {
+    return plates.map((p) => {
+      const c = shareCase(p.setSize, p.ipp);
+      if (c.kind === 'none') {
+        return `${p.name}: ${c.set} \u00f7 ${c.per} is exactly ${c.whole} whole run${c.whole === 1 ? '' : 's'}, so the override changes nothing here.`;
+      }
+      return `${p.name}: counts ${c.shareText} instead of ${c.wholeText}${moneyClause({ ...p, fmt })}; `
+        + `switch the override off in the plate editor if the leftovers are waste or spares.`;
+    });
   }
 
   /** Batch-mode quantity check. null when nothing to say. */
@@ -173,5 +232,5 @@
     + 'by the plate\'s risk factor. It does not multiply processing time, and the Time column shows the raw print time.';
 
   return { MODES, SHARE_LABEL, COST_FIELDS, savedCostFields, formCostFields, costFieldsChanged, cents, rowTotal, RISK_NOTE, fraction, modeLabel, modeHelp, modeExplanation,
-    shareBadge, shareHelp, shareTooltip, countLabel, quantityCheckMessage };
+    shareBadge, shareHelp, shareTooltip, shareCase, shareStatement, shareCosts, overrideParagraph, countLabel, quantityCheckMessage };
 }));

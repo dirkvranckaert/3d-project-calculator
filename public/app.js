@@ -620,7 +620,7 @@ function renderPlatesSection(p) {
     // Override badge: only meaningful in parts mode (batch ignores it), so it is
     // driven by the server's resolved count, never by the raw flag alone.
     const shareBadge = pb?.count?.mode === 'share'
-      ? `<span class="plate-share-badge" title="${escAttr(PlateModeText.shareTooltip({ setSize: pb.count.shareNum, ipp: pb.count.shareDen }))}">${esc(PlateModeText.shareBadge(pb.count.shareNum, pb.count.shareDen))}</span>`
+      ? `<span class="plate-share-badge" title="${escAttr(PlateModeText.shareTooltip({ setSize: pb.count.shareNum, ipp: pb.count.shareDen, fmt: fmtCents, ...PlateModeText.shareCosts(pb, pb.count.shareNum, pb.count.shareDen) }))}">${esc(PlateModeText.shareBadge(pb.count.shareNum, pb.count.shareDen))}</span>`
       : '';
     const toggleTitle = disabled ? 'Enable plate' : 'Disable plate';
     const toggleIcon = disabled
@@ -730,7 +730,9 @@ function renderCalcExplanation(p) {
       <td>${fmtCents(k.electricityCost)}</td><td>${fmtCents(k.printerUsageCost)}</td><td>${fmtCents(k.totalCost)}</td>
     </tr>`;
   }).join('');
-  const overrideUsed = bds.some(b => b.count.mode === 'share');
+  const overridePlates = bds.filter(b => b.count.mode === 'share').map(b => ({
+    name: b.plateName || `Plate ${b.plateId}`, setSize: b.count.shareNum, ipp: b.count.shareDen,
+    ...T.shareCosts(b, b.count.shareNum, b.count.shareDen) }));
   return `<details class="calc-explain" open>
     <summary>How these numbers are built</summary>
     <p>${esc(T.modeExplanation(mode, set))}</p>
@@ -742,7 +744,8 @@ function renderCalcExplanation(p) {
           <td>${fmtCents(t.electricityCost)}</td><td>${fmtCents(t.printerUsageCost)}</td><td>${fmtCents(t.totalCost)}</td></tr>
       </tbody>
     </table></div>
-    ${overrideUsed ? `<p class="calc-explain-override">${esc(T.SHARE_LABEL)} is on for the highlighted plate(s): they are charged only the share this set uses, not whole print runs. Switch it off per plate in the plate editor.</p>` : ''}
+    ${overridePlates.length ? `<div class="calc-explain-override"><p>${esc(`Per-plate override "${T.SHARE_LABEL}" is on:`)}</p><ul>${
+      T.overrideParagraph(overridePlates, fmtCents).map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}
     <p class="calc-explain-note">${esc(T.RISK_NOTE)}</p>
   </details>`;
 }
@@ -2905,12 +2908,7 @@ function updateShareHelp() {
   // field in the dialog still equals the saved value (time, plastic, #/plate, risk,
   // waste, processing, printer, material). Any edit -> no stale amounts.
   if (pb && plateCostBaseline && !PlateModeText.costFieldsChanged(plateCostBaseline, readPlateCostFields())) {
-    // Same cents rule as calc.js scaleContribution, so the example equals the
-    // plate's row in "How these numbers are built".
-    const cents = PlateModeText.cents;
-    const keys = ['materialCost', 'processingCost', 'electricityCost', 'printerUsageCost'];
-    o.shareCost = cents(keys.reduce((s, k) => s + cents(pb[k] * setSize / ipp), 0));
-    o.wholeCost = cents(keys.reduce((s, k) => s + cents(cents(pb[k]) * Math.ceil(setSize / ipp)), 0));
+    Object.assign(o, PlateModeText.shareCosts(pb, setSize, ipp));
   }
   el.className = 'field-hint field-hint--info';
   el.textContent = PlateModeText.shareHelp(o);
