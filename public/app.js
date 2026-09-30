@@ -16,6 +16,9 @@ let showArchived = false;
 let archivedCountCache = 0;
 let currentView = 'list'; // 'list' or 'detail'
 let currentProjectId = null;
+// Project whose "How these numbers are built" block the user expanded; the block is
+// collapsed by default and re-renders rebuild the DOM, so this keeps it open meanwhile.
+let calcExplainOpenId = null;
 let currentDetailTab = 'print'; // 'print' | 'design'
 // Project fetched by id but absent from `projects` (e.g. an archived project on a
 // direct load / refresh). Kept out of `projects` so the list stays API-filtered.
@@ -401,6 +404,7 @@ function render() {
 
   if (route.view === 'detail') {
     currentView = 'detail';
+    if (route.projectId !== currentProjectId) calcExplainOpenId = null;
     currentProjectId = route.projectId;
     newBtn.style.display = 'none';
     const p = findProject(route.projectId);
@@ -733,7 +737,7 @@ function renderCalcExplanation(p) {
   const overridePlates = bds.filter(b => b.count.mode === 'share').map(b => ({
     name: b.plateName || `Plate ${b.plateId}`, setSize: b.count.shareNum, ipp: b.count.shareDen,
     ...T.shareCosts(b, b.count.shareNum, b.count.shareDen) }));
-  return `<details class="calc-explain" open>
+  return `<details class="calc-explain"${calcExplainOpenId === p.id ? ' open' : ''} ontoggle="calcExplainOpenId = this.open ? ${Number(p.id)} : null">
     <summary>How these numbers are built</summary>
     <p>${esc(T.modeExplanation(mode, set))}</p>
     <div class="plates-table-wrap"><table>
