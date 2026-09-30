@@ -224,6 +224,14 @@ function migrate(db) {
   // absorbed into the unit price (Dirk's normal case), not billed on top.
   // Drives only the all-in profit/margin figure — see calc.calculateAllInMargin.
   addCol('projects', 'design_invoiced_separately', 'INTEGER NOT NULL DEFAULT 0');
+  // Plate mode (#2135, 2026-09-30). 'parts' = every plate is a component of ONE
+  // item (whole runs); 'batch' = every enabled plate printed exactly once. The
+  // column DEFAULT is the migration: every existing project lands on 'parts',
+  // none is switched to 'batch'.
+  addCol('projects', 'plate_mode', "TEXT NOT NULL DEFAULT 'parts'");
+  // Per-plate override (parts mode only): charge only the share this set uses
+  // instead of whole runs. Default off.
+  addCol('project_plates', 'charge_share_only', 'INTEGER NOT NULL DEFAULT 0');
   // Manual image ordering — drag & drop in the Images section (2026-07-22)
   if (addCol('project_images', 'sort_order', 'INTEGER NOT NULL DEFAULT 0')) {
     // Backfill: seed the order every project already sees (primary first, then

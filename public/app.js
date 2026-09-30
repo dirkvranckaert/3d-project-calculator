@@ -607,17 +607,25 @@ function renderPlatesSection(p) {
       </div>
     </div>`;
   }
+  const plateMode = p.plate_mode === 'batch' ? 'batch' : 'parts';
+  const modeChip = `<span class="plate-mode-chip" title="${escAttr(PlateModeText.modeHelp(plateMode))} Click to change."
+    onclick="openProjectModal(${p.id})">Plate mode: ${esc(PlateModeText.modeLabel(plateMode))}</span>`;
   const rows = productionPlates.map(pl => {
     const pb = (p.calculation?.plateBreakdowns || []).find(b => b.plateId === pl.id);
     const disabled = !pl.enabled;
     const rowCls = disabled ? 'plate-disabled' : '';
     const disabledBadge = disabled ? '<span class="plate-disabled-badge">DISABLED</span>' : '';
+    // Override badge: only meaningful in parts mode (batch ignores it), so it is
+    // driven by the server's resolved count, never by the raw flag alone.
+    const shareBadge = pb?.count?.mode === 'share'
+      ? `<span class="plate-share-badge" title="${escAttr(PlateModeText.shareTooltip({ setSize: pb.count.shareNum, ipp: pb.count.shareDen }))}">${esc(PlateModeText.shareBadge(pb.count.shareNum, pb.count.shareDen))}</span>`
+      : '';
     const toggleTitle = disabled ? 'Enable plate' : 'Disable plate';
     const toggleIcon = disabled
       ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
       : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
     return `<tr class="${rowCls}">
-      <td>${esc(pl.name || `Plate ${pl.id}`)} ${disabledBadge}${renderColorSwatches(pl.colors)}${pl.notes ? `<div style="font-size:11px;color:var(--text-muted);white-space:normal">${esc(pl.notes)}</div>` : ''}</td>
+      <td>${esc(pl.name || `Plate ${pl.id}`)} ${disabledBadge}${shareBadge}${renderColorSwatches(pl.colors)}${pl.notes ? `<div style="font-size:11px;color:var(--text-muted);white-space:normal">${esc(pl.notes)}</div>` : ''}</td>
       <td class="num editable" data-label="Time" onclick="startInlineEdit(${p.id},${pl.id},'print_time_minutes',${pl.print_time_minutes},this,'time')">${fmtTime(pl.print_time_minutes)}</td>
       <td class="num editable" data-label="Plastic" onclick="startInlineEdit(${p.id},${pl.id},'plastic_grams',${pl.plastic_grams},this,'float')">${fmtGrams(pl.plastic_grams)}</td>
       <td class="num editable" data-label="#/Plate" onclick="startInlineEdit(${p.id},${pl.id},'items_per_plate',${pl.items_per_plate},this,'int')">${pl.items_per_plate}</td>
@@ -638,14 +646,31 @@ function renderPlatesSection(p) {
     </tr>`;
   });
 
+  // Raw one-run sum of the enabled plates (cross-check against the cost boxes).
+  const ps = p.calculation?.plateSum;
+  const sumRow = ps ? `<tr class="plates-sum-row">
+      <td>Sum of enabled plates, one run each<span class="plates-sum-note">Raw sum, every plate printed once. The cost boxes below count runs per plate mode.</span></td>
+      <td class="num" data-label="Time">${fmtTime(ps.minutes)}</td>
+      <td class="num" data-label="Plastic" title="Including risk multiplier and material waste">${fmtGrams(ps.plasticGrams)}</td>
+      <td></td><td class="col-hide-mobile"></td><td class="col-hide-mobile"></td><td class="col-hide-mobile"></td>
+      <td class="num col-hide-mobile" data-label="Mat. cost">${fmt(ps.materialCost)}</td>
+      <td class="num col-hide-mobile" data-label="Proc. cost">${fmt(ps.processingCost)}</td>
+      <td class="num col-hide-mobile" data-label="Elec. cost">${fmt(ps.electricityCost)}</td>
+      <td class="num col-hide-mobile" data-label="Print. cost">${fmt(ps.printerUsageCost)}</td>
+      <td class="num" data-label="Total">${fmt(ps.totalCost)}</td>
+      <td></td>
+    </tr>` : '';
+  const qc = PlateModeText.quantityCheckMessage(p.calculation?.quantityCheck);
+  const qcHtml = qc ? `<div class="plate-qty-note${qc.level === 'short' ? ' plate-qty-note--short' : ''}" role="${qc.level === 'short' ? 'alert' : 'note'}">${esc(qc.text)}</div>` : '';
   return `<div class="plates-section">
-    <div class="plates-section-header"><h3>Print Plates</h3>
+    <div class="plates-section-header"><h3>Print Plates${modeChip}</h3>
       <div style="display:flex;gap:6px">${importBtn}<button class="btn btn-sm btn-primary" onclick="openPlateModal(${p.id})">+ Add Plate</button></div></div>
     <div class="drop-zone drop-zone-subtle" data-project-id="${p.id}" data-drop-type="3mf">
       <div class="plates-table-wrap"><table class="plates-table">
         <thead><tr><th>Name</th><th>Time</th><th>Plastic</th><th>#/Plate</th><th class="col-hide-mobile">Risk</th><th class="col-hide-mobile">Printer</th><th class="col-hide-mobile">Material</th><th class="col-hide-mobile">Mat. Cost</th><th class="col-hide-mobile">Process.</th><th class="col-hide-mobile">Electric.</th><th class="col-hide-mobile">Printer</th><th>Total</th><th></th></tr></thead>
-        <tbody>${rows.join('')}</tbody>
+        <tbody>${rows.join('')}${sumRow}</tbody>
       </table></div>
+      ${qcHtml}
       <div class="drop-zone-hint-sm">Drop .3mf to add plates</div>
     </div>
   </div>`;
@@ -674,7 +699,47 @@ function renderCostSection(p) {
       <div class="detail">+ ${fmtPct(settings.printer_cost_profit_pct)} profit: ${fmt(pr.printerCostProfit * p.items_per_set)}</div></div>
     <div class="cost-card"><h4>Total Print Time</h4><div class="value">${fmtTime(c.totalPrintTimeMinutes || 0)}</div>
       <div class="detail" style="opacity:.6">whole project</div></div>
-  </div></div>`;
+  </div></div>${renderCalcExplanation(p)}`;
+}
+
+/**
+ * "How these numbers are built" — below the cost boxes. States the plate mode in
+ * plain words and, per enabled plate, how it counts (runs / share / once) and
+ * what it adds to each total, so the boxes can be checked by hand.
+ */
+function renderCalcExplanation(p) {
+  const c = p.calculation;
+  const T = PlateModeText;
+  const mode = c?.plateMode === 'batch' ? 'batch' : 'parts';
+  const bds = (c?.plateBreakdowns || []).filter(b => b.enabled && !b.isTestPrint);
+  if (!c || bds.length === 0) return '';
+  const set = Number(p.items_per_set) || 1;
+  const t = c.totals;
+  const rows = bds.map(b => {
+    const k = b.contribution;
+    const cls = b.count.mode === 'share' ? ' class="calc-explain-override"' : '';
+    return `<tr>
+      <td>${esc(b.plateName || `Plate ${b.plateId}`)}</td>
+      <td${cls}>${esc(T.countLabel(b.count))}</td>
+      <td>${fmtTime(k.minutes)}</td><td>${fmt(k.materialCost)}</td><td>${fmt(k.processingCost)}</td>
+      <td>${fmt(k.electricityCost)}</td><td>${fmt(k.printerUsageCost)}</td><td>${fmt(k.totalCost)}</td>
+    </tr>`;
+  }).join('');
+  const overrideUsed = bds.some(b => b.count.mode === 'share');
+  return `<details class="calc-explain" open>
+    <summary>How these numbers are built</summary>
+    <p>${esc(T.modeExplanation(mode, set))}</p>
+    <div class="plates-table-wrap"><table>
+      <thead><tr><th>Plate</th><th>How it counts</th><th>Time</th><th>Material</th><th>Processing</th><th>Electricity</th><th>Printer</th><th>Total</th></tr></thead>
+      <tbody>${rows}
+        <tr class="calc-explain-total"><td>Project total</td><td>${mode === 'batch' ? `\u00f7 ${set} = ${fmt(t.totalCost / set)} per item` : ''}</td>
+          <td>${fmtTime(t.minutes)}</td><td>${fmt(t.materialCost)}</td><td>${fmt(t.processingCost)}</td>
+          <td>${fmt(t.electricityCost)}</td><td>${fmt(t.printerUsageCost)}</td><td>${fmt(t.totalCost)}</td></tr>
+      </tbody>
+    </table></div>
+    ${overrideUsed ? `<p class="calc-explain-override">${esc(T.SHARE_LABEL)} is on for the highlighted plate(s): they are charged only the share this set uses, not whole print runs. Switch it off per plate in the plate editor.</p>` : ''}
+    <p class="calc-explain-note">${esc(T.RISK_NOTE)}</p>
+  </details>`;
 }
 
 /* ================================================================== */
@@ -2270,6 +2335,9 @@ function openProjectModal(id = null) {
   document.getElementById('proj-name').value = p?.name || '';
   document.getElementById('proj-customer').value = p?.customer_name || '';
   document.getElementById('proj-items-per-set').value = p?.items_per_set || 1;
+  // New projects default to "Parts of one item"; existing ones show their own stored mode.
+  document.getElementById('proj-plate-mode').value = p?.plate_mode === 'batch' ? 'batch' : 'parts';
+  updatePlateModeHint();
   // A new project starts at the settings default; an existing one always shows
   // its OWN stored target, never the default (changing the default must not
   // move existing projects).
@@ -2291,6 +2359,13 @@ function openProjectModal(id = null) {
   document.getElementById('proj-name').focus();
 }
 
+function updatePlateModeHint() {
+  const mode = document.getElementById('proj-plate-mode').value;
+  const el = document.getElementById('proj-plate-mode-hint');
+  el.className = 'field-hint field-hint--info';
+  el.textContent = PlateModeText.modeHelp(mode);
+}
+
 // The edit modal has no inputs for actual_sales_price or notes, so a PUT has to
 // carry the stored values through untouched. Returns null when the project can't
 // be resolved — the caller must abort, because sending nulls wipes both fields.
@@ -2308,6 +2383,7 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
     name: document.getElementById('proj-name').value.trim(),
     customer_name: document.getElementById('proj-customer').value.trim() || null,
     items_per_set: parseInt(document.getElementById('proj-items-per-set').value) || 1,
+    plate_mode: document.getElementById('proj-plate-mode').value === 'batch' ? 'batch' : 'parts',
     tags: serializePills(tagsWidget.get()),
   };
   const targetRaw = document.getElementById('proj-target-margin')?.value;
@@ -2760,6 +2836,11 @@ function openPlateModal(projectId, plateId = null) {
   matSel.innerHTML = '<option value="">-- Select --</option>' +
     materials.map(m => `<option value="${m.id}">${esc(m.name)}${m.color ? ` (${esc(m.color)})` : ''} - ${fmtWeight(m.roll_weight_g)}</option>`).join('');
 
+  // Override is a parts-mode concept; in batch mode every plate counts once, so hide it.
+  const shareGroup = document.getElementById('plate-share-group');
+  shareGroup.hidden = p?.plate_mode === 'batch';
+  document.getElementById('plate-share-label').textContent = PlateModeText.SHARE_LABEL;
+  document.getElementById('plate-share-only').checked = !!plate?.charge_share_only;
   if (plate) {
     document.getElementById('plate-name').value = plate.name || '';
     document.getElementById('plate-hours').value = Math.floor(plate.print_time_minutes / 60);
@@ -2790,9 +2871,31 @@ function openPlateModal(projectId, plateId = null) {
     matSel.value = last?.material_id || '';
     document.getElementById('plate-colors-editor').innerHTML = renderColorEditor([], 'plate-colors');
   }
+  updateShareHelp();
   openModal('plate-modal');
   document.getElementById('plate-name').focus();
 }
+
+/** Live help under the override checkbox, with THIS plate's numbers. */
+function updateShareHelp() {
+  const p = findProject(editingPlateProjectId);
+  const el = document.getElementById('plate-share-help');
+  if (!p || !el) return;
+  const setSize = Number(p.items_per_set) || 1;
+  const ipp = parseInt(document.getElementById('plate-items').value) || 1;
+  const pb = editingPlateId
+    ? (p.calculation?.plateBreakdowns || []).find(b => b.plateId === editingPlateId) : null;
+  const o = { setSize, ipp, fmt };
+  // Euro figures come from the saved plate; skip them when the plate is new or
+  // #/plate was edited in this dialog (they would describe another plate).
+  if (pb && ipp === pb.itemsPerPlate) {
+    o.shareCost = pb.totalPlateCost * setSize / ipp;
+    o.wholeCost = pb.totalPlateCost * Math.ceil(setSize / ipp);
+  }
+  el.className = 'field-hint field-hint--info';
+  el.textContent = PlateModeText.shareHelp(o);
+}
+document.getElementById('plate-items').addEventListener('input', updateShareHelp);
 
 document.getElementById('btn-save-plate').addEventListener('click', async () => {
   const hours = parseInt(document.getElementById('plate-hours').value) || 0;
@@ -2810,6 +2913,7 @@ document.getElementById('btn-save-plate').addEventListener('click', async () => 
     material_id: parseInt(document.getElementById('plate-material').value) || null,
     notes: document.getElementById('plate-notes').value.trim() || null,
     colors: collectColors('plate-colors'),
+    charge_share_only: document.getElementById('plate-share-only').checked ? 1 : 0,
   };
   if (editingPlateId) {
     await PUT(`/api/projects/${editingPlateProjectId}/plates/${editingPlateId}`, data);
@@ -2838,6 +2942,7 @@ async function duplicatePlate(projectId, plateId) {
     notes: plate.notes,
     colors: plate.colors || [],
     enabled: plate.enabled,
+    charge_share_only: plate.charge_share_only ? 1 : 0,
   });
   await reloadSingleProject(projectId);
 }

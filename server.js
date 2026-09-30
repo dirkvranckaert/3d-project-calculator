@@ -284,6 +284,9 @@ function backfillSliced(db, files) {
  * calc.js, which treats 0 as a real target and only absence as absent. Absent
  * here means "no row / unparseable", not "zero".
  */
+/** Valid `projects.plate_mode` values (#2135). */
+const PLATE_MODES = ['parts', 'batch'];
+
 function defaultTargetMargin(db) {
   const raw = getSetting(db, 'default_target_margin_pct');
   const n = Number(raw);
@@ -490,6 +493,7 @@ function enrichProject(db, project) {
     isCustom: !!project.is_custom,
     settings,
     itemsPerSet: project.items_per_set,
+    plateMode: project.plate_mode,
     actualSalesPrice: project.actual_sales_price,
     marginLocked: !!project.margin_locked,
     targetMarginPct: project.target_margin_pct,
@@ -593,6 +597,7 @@ function enrichProjectLite(db, project) {
     isCustom: !!project.is_custom,
     settings,
     itemsPerSet: project.items_per_set,
+    plateMode: project.plate_mode,
     actualSalesPrice: project.actual_sales_price,
     marginLocked: !!project.margin_locked,
     targetMarginPct: project.target_margin_pct,
@@ -627,14 +632,16 @@ app.post('/api/projects', (req, res) => {
   const db = getDb();
   const { name, customer_name = null, items_per_set = 1, tags = '', notes = null, is_custom = 0, design_notes = null } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
+  const plateMode = req.body.plate_mode === undefined ? 'parts' : req.body.plate_mode;
+  if (!PLATE_MODES.includes(plateMode)) return res.status(400).json({ error: "plate_mode must be 'parts' or 'batch'" });
 
   // Seed the project's own target margin from the settings default. Stored, not
   // referenced: changing the default later must never move an existing project
   // (Dirk 2026-07-22). `/duplicate` already copies the source project's target.
   const seededTarget = defaultTargetMargin(db);
 
-  const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, target_margin_pct) VALUES (?,?,?,?,?,?,?,?)')
-    .run(name, customer_name, items_per_set, tags, notes, is_custom ? 1 : 0, design_notes, seededTarget);
+  const r = db.prepare('INSERT INTO projects (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, target_margin_pct, plate_mode) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(name, customer_name, items_per_set, tags, notes, is_custom ? 1 : 0, design_notes, seededTarget, plateMode);
   const projectId = r.lastInsertRowid;
 
   // Auto-add default extra cost items
@@ -653,7 +660,10 @@ app.put('/api/projects/:id', (req, res) => {
   const { name, customer_name, items_per_set, actual_sales_price, tags, notes, is_custom, design_notes,
     margin_locked, target_margin_pct } = req.body;
   // Read current is_custom / margin lock if not supplied in body, to avoid resetting them on ordinary edits
-  const existing = db.prepare('SELECT is_custom, margin_locked, target_margin_pct FROM projects WHERE id = ?').get(req.params.id);
+  const existing = db.prepare('SELECT is_custom, margin_locked, target_margin_pct, plate_mode FROM projects WHERE id = ?').get(req.params.id);
+  // Absent = keep what is stored, so ordinary edits from older clients never flip the mode.
+  const plateModeVal = req.body.plate_mode !== undefined ? req.body.plate_mode : (existing?.plate_mode ?? 'parts');
+  if (!PLATE_MODES.includes(plateModeVal)) return res.status(400).json({ error: "plate_mode must be 'parts' or 'batch'" });
   const isCustomVal = is_custom !== undefined ? (is_custom ? 1 : 0) : (existing?.is_custom ?? 0);
   const marginLockedVal = margin_locked !== undefined ? (margin_locked ? 1 : 0) : (existing?.margin_locked ?? 0);
   // Every project always carries a target. An explicit null is not a way to
@@ -678,9 +688,9 @@ app.put('/api/projects/:id', (req, res) => {
     ? targetMarginRaw
     : (existing?.target_margin_pct ?? defaultTargetMargin(db));
   db.prepare(`UPDATE projects SET name=?, customer_name=?, items_per_set=?, actual_sales_price=?, tags=?, notes=?,
-    is_custom=?, design_notes=?, margin_locked=?, target_margin_pct=?, updated_at=datetime('now') WHERE id=?`)
+    is_custom=?, design_notes=?, margin_locked=?, target_margin_pct=?, plate_mode=?, updated_at=datetime('now') WHERE id=?`)
     .run(name, customer_name, items_per_set, actual_sales_price ?? null, tags ?? '', notes ?? null,
-      isCustomVal, design_notes ?? null, marginLockedVal, targetMarginVal, req.params.id);
+      isCustomVal, design_notes ?? null, marginLockedVal, targetMarginVal, plateModeVal, req.params.id);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Not found' });
   res.json(enrichProject(db, project));
@@ -766,13 +776,14 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
   // The margin lock is a pricing policy, not a recorded sale, so it follows the
   // copy — unlike actual_sales_price, which stays empty on a duplicate.
   const r = db.prepare(`INSERT INTO projects
-    (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, margin_locked, target_margin_pct, locked_margin_pct, design_invoiced_separately)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, margin_locked, target_margin_pct, locked_margin_pct, design_invoiced_separately, plate_mode)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(`${src.name} (copy)`, src.customer_name, src.items_per_set, src.tags || '', src.notes, src.is_custom || 0,
       src.design_notes || null, src.margin_locked || 0,
       src.target_margin_pct ?? defaultTargetMargin(db),
       src.locked_margin_pct ?? null,
-      src.design_invoiced_separately || 0);
+      src.design_invoiced_separately || 0,
+      src.plate_mode || 'parts');
   const newId = r.lastInsertRowid;
 
   // Copy plates (including test-print plates — orphan plates copied as orphans with test_print_id=null)
@@ -780,15 +791,15 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
   const insPlate = db.prepare(`INSERT INTO project_plates
     (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
      risk_multiplier, pre_processing_minutes, post_processing_minutes,
-     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order, is_test_print)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order, is_test_print, charge_share_only)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   // Map old plate id -> new plate id for test_print_id linkage
   const plateIdMap = {};
   for (const pl of plates) {
     const pr = insPlate.run(newId, pl.name, pl.print_time_minutes, pl.plastic_grams, pl.items_per_plate,
       pl.risk_multiplier, pl.pre_processing_minutes, pl.post_processing_minutes,
       pl.printer_id, pl.material_id, pl.material_waste_grams, pl.notes, pl.colors, pl.enabled, pl.sort_order,
-      pl.is_test_print || 0);
+      pl.is_test_print || 0, pl.charge_share_only || 0);
     plateIdMap[pl.id] = pr.lastInsertRowid;
   }
 
@@ -899,11 +910,12 @@ app.post('/api/projects/:projectId/plates', (req, res) => {
   const r = db.prepare(`INSERT INTO project_plates
     (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
      risk_multiplier, pre_processing_minutes, post_processing_minutes,
-     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order, charge_share_only)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(pid, name, print_time_minutes, plastic_grams, items_per_plate,
       risk_multiplier, pre_processing_minutes, post_processing_minutes,
-      printer_id, material_id, material_waste_grams, notes, colors, enabled, maxOrder + 1);
+      printer_id, material_id, material_waste_grams, notes, colors, enabled, maxOrder + 1,
+      req.body.charge_share_only ? 1 : 0);
 
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
   const updatedProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
@@ -916,17 +928,24 @@ app.put('/api/projects/:projectId/plates/:plateId', (req, res) => {
     risk_multiplier, pre_processing_minutes, post_processing_minutes,
     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order } = req.body;
 
+  // Absent = keep the stored per-plate override (this route replaces the whole row).
+  const shareOnly = req.body.charge_share_only !== undefined
+    ? (req.body.charge_share_only ? 1 : 0)
+    : (db.prepare('SELECT charge_share_only FROM project_plates WHERE id=? AND project_id=?')
+      .get(req.params.plateId, req.params.projectId)?.charge_share_only ?? 0);
+
   db.prepare(`UPDATE project_plates SET
     name=?, print_time_minutes=?, plastic_grams=?, items_per_plate=?,
     risk_multiplier=?, pre_processing_minutes=?, post_processing_minutes=?,
-    printer_id=?, material_id=?, material_waste_grams=?, notes=?, colors=?, enabled=?, sort_order=?
+    printer_id=?, material_id=?, material_waste_grams=?, notes=?, colors=?, enabled=?, sort_order=?,
+    charge_share_only=?
     WHERE id=? AND project_id=?`)
     .run(name, print_time_minutes, plastic_grams, items_per_plate,
       risk_multiplier, pre_processing_minutes, post_processing_minutes,
       printer_id, material_id, material_waste_grams, notes || null,
       colors ? JSON.stringify(colors) : null,
       enabled !== undefined ? (enabled ? 1 : 0) : 1,
-      sort_order || 0, req.params.plateId, req.params.projectId);
+      sort_order || 0, shareOnly, req.params.plateId, req.params.projectId);
 
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(req.params.projectId);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.projectId);
@@ -943,11 +962,12 @@ app.patch('/api/projects/:projectId/plates/:plateId', (req, res) => {
   const allowed = ['name', 'print_time_minutes', 'plastic_grams', 'items_per_plate',
     'risk_multiplier', 'pre_processing_minutes', 'post_processing_minutes',
     'printer_id', 'material_id', 'material_waste_grams', 'notes', 'colors', 'enabled',
-    'source_plate_index', 'source_file_id'];
+    'source_plate_index', 'source_file_id', 'charge_share_only'];
   const updates = [];
   const values = [];
   for (const [k, v] of Object.entries(req.body)) {
     if (k === 'colors') { updates.push('colors=?'); values.push(v ? JSON.stringify(v) : null); continue; }
+    if (k === 'charge_share_only') { updates.push('charge_share_only=?'); values.push(v ? 1 : 0); continue; }
     if (allowed.includes(k)) { updates.push(`${k}=?`); values.push(v); }
   }
   if (updates.length === 0) return res.status(400).json({ error: 'No valid fields' });

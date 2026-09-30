@@ -436,6 +436,81 @@ body {
   gap: 4px;
 }
 
+/* Plate mode (#2135) — uses existing tokens only, so light and dark both work. */
+.field-hint--info { color: var(--text-muted); }
+.plate-mode-chip {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--primary-tint);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  vertical-align: middle;
+  cursor: pointer;
+}
+.plate-share-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--warning-tint);
+  color: var(--warning);
+  border: 1px solid var(--warning);
+  text-decoration: none !important;
+  vertical-align: middle;
+  margin-left: 6px;
+  cursor: help;
+  white-space: nowrap;
+}
+.plate-share-check { display: flex; gap: 8px; align-items: flex-start; font-weight: 600; cursor: pointer; }
+.plate-share-check input { width: auto; margin-top: 3px; }
+.plates-table tr.plates-sum-row td {
+  font-weight: 600;
+  border-top: 2px solid var(--border);
+  background: var(--surface-hover);
+}
+.plates-table tr.plates-sum-row td:first-child { white-space: normal; }
+.plates-sum-note { display: block; font-weight: 400; font-size: 11px; color: var(--text-muted); }
+.plate-qty-note {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  background: var(--surface-hover);
+}
+.plate-qty-note--short {
+  border-color: var(--danger);
+  background: var(--danger-tint);
+  color: var(--danger-text);
+  font-weight: 600;
+}
+.calc-explain {
+  margin: 16px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.calc-explain summary { cursor: pointer; font-weight: 700; font-size: 14px; }
+.calc-explain p { margin: 8px 0; }
+.calc-explain table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+.calc-explain th, .calc-explain td { padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: right; font-variant-numeric: tabular-nums; }
+.calc-explain th:first-child, .calc-explain td:first-child,
+.calc-explain th:nth-child(2), .calc-explain td:nth-child(2) { text-align: left; }
+.calc-explain tr.calc-explain-total td { font-weight: 700; border-top: 2px solid var(--border); }
+.calc-explain .calc-explain-override { color: var(--warning); font-weight: 600; }
+.calc-explain .calc-explain-note { color: var(--text-muted); }
+
 /* ================================================================== */
 /*  Cost breakdown                                                     */
 /* ================================================================== */
