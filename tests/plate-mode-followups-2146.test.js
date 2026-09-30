@@ -60,13 +60,38 @@ describe('run quantity wording never contradicts itself', () => {
     expect(T.shareCase(10, 5).badgeText).toBe('2 runs, same as whole');
   });
   test('never "about N ... not N", never "about 1 runs"', () => {
-    for (let set = 1; set <= 400; set += 7) for (let per = 1; per <= 400; per += 3) {
+    for (let set = 1; set <= 400; set++) for (let per = 1; per <= 400; per++) {
       const t = T.shareCase(set, per).badgeText;
       expect(t).not.toMatch(/about 1 runs/);
       const m = t.match(/^about ([\d.]+) runs?, not (\d+)/);
       if (m) expect(m[1]).not.toBe(m[2]);
       expect(t).not.toMatch(/(^|\s)1 runs/);
     }
+  });
+  test('scan is exhaustive: all 400 x 400 pairs (step 1) were visited', () => {
+    let n = 0;
+    for (let set = 1; set <= 400; set++) for (let per = 1; per <= 400; per++) { T.shareCase(set, per); n++; }
+    expect(n).toBe(160000);
+  });
+  test('safe-integer boundary: 5999999999 / 2000000000 is just under 3, not exact', () => {
+    const c = T.shareCase(5999999999, 2000000000);
+    expect(c.shareText).toBe('just under 3 runs');
+    expect(c.badgeText).toBe('just under 3 runs, not 3 whole runs');
+    expect(T.shareCase(6000000001, 2000000000).badgeText).toBe('just over 3 runs, not 4');
+    expect(T.runsQuantity(5999999999 / 2000000000).qual).toBe('just under ');
+  });
+  test('exact branch only when the quotient is exactly the shown value', () => {
+    expect(T.runsQuantity(2.5)).toEqual({ qual: '', num: '2.5', one: false });
+    expect(T.runsQuantity(3)).toEqual({ qual: '', num: '3', one: false });
+    expect(T.runsQuantity(2.9999999995).qual).toBe('just under ');
+  });
+  test('legacy non-whole pair 1.998 / 2 uses the qualified formatter', () => {
+    const c = T.shareCase(1.998, 2);
+    expect(c.shareText).toBe('just under 1 run');
+    expect(c.badgeText).toBe('just under 1 run, not 1 whole run');
+    expect(T.shareStatement({ setSize: 1.998, ipp: 2 })).toMatch(/just under 1 run is charged instead of 1 whole run/);
+    expect(T.shareCase(1.5, 4).badgeText).toBe('about 0.38 runs, not 1');
+    expect(T.shareCase(1, 3).badgeText).toBe('1/3 of a run, not 1');
   });
   test('count label agrees with the run count', () => {
     expect(T.countLabel({ mode: 'runs', runs: 2, shareNum: 1999, shareDen: 1000 }))
@@ -134,7 +159,7 @@ describe('share help euros equal the runtime contribution', () => {
 /* ---------------------------------------------------------------- */
 describe('items_per_set / items_per_plate validation', () => {
   const dbPath = path.join(__dirname, '..', 'data', 'test-2146.db');
-  let app, db, cookie;
+  let app, expressApp, db, cookie;
   beforeAll(async () => {
     process.env.NODE_ENV = 'test';
     process.env.ADMIN_USER = 'u2146';
@@ -143,19 +168,25 @@ describe('items_per_set / items_per_plate validation', () => {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     for (const s of ['', '-wal', '-shm']) fs.rmSync(dbPath + s, { force: true });
     jest.resetModules();
-    ({ app } = require('../server'));
+    // One shared listening server (same fix as tests/server.test.js): a fresh
+    // ephemeral-port server per request flaked with "socket hang up" on Node 26.
+    ({ app: expressApp } = require('../server'));
+    app = require('http').createServer(expressApp).listen(0);
     db = require('../db').getDb();
     const res = await request(app).post('/login').send({ username: 'u2146', password: 'p2146' });
     cookie = res.headers['set-cookie'][0].split(';')[0];
   });
-  afterAll(() => { for (const s of ['', '-wal', '-shm']) fs.rmSync(dbPath + s, { force: true }); });
+  afterAll(async () => {
+    await new Promise((resolve) => app.close(resolve));
+    for (const s of ['', '-wal', '-shm']) fs.rmSync(dbPath + s, { force: true });
+  });
   const api = (m, u, body) => request(app)[m](u).set('Cookie', cookie).send(body);
   const BAD = [0, -1, 1.5, 'abc', null, NaN, Infinity, [], {}, true, ''];
 
   test.each(BAD.map(v => [JSON.stringify(v) ?? String(v), v]))('POST /api/projects rejects items_per_set %s', async (_l, v) => {
     const res = await api('post', '/api/projects', { name: 'X', items_per_set: v });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Items per set must be a whole number of at least 1/);
+    expect(res.body.error).toMatch(/Items per set must be a whole number between 1 and 1000000/);
   });
 
   test('project create + PUT accept valid, reject invalid, store integers', async () => {
@@ -174,7 +205,7 @@ describe('items_per_set / items_per_plate validation', () => {
     for (const v of BAD.filter(x => x !== null && x !== '')) {
       const r = await api('post', `/api/projects/${p.id}/plates`, { name: 'a', items_per_plate: v });
       expect(r.status).toBe(400);
-      expect(r.body.error).toMatch(/Items per plate must be a whole number of at least 1/);
+      expect(r.body.error).toMatch(/Items per plate must be a whole number between 1 and 1000000/);
     }
     const good = await api('post', `/api/projects/${p.id}/plates`, { name: 'a', items_per_plate: 5 });
     expect(good.status).toBe(201);
@@ -183,6 +214,74 @@ describe('items_per_set / items_per_plate validation', () => {
     expect((await api('patch', `/api/projects/${p.id}/plates/${plate.id}`, { items_per_plate: -2 })).status).toBe(400);
     expect((await api('patch', `/api/projects/${p.id}/plates/${plate.id}`, { items_per_plate: 6 })).status).toBe(200);
     expect(db.prepare('SELECT items_per_plate FROM project_plates WHERE id=?').get(plate.id).items_per_plate).toBe(6);
+  });
+
+  test.each([
+    ['unsafe numeric string', '9007199254740993'], ['unsafe number', 9007199254740993], ['1e100', 1e100],
+    ['just over cap', 1000001], ['huge string', '99999999999999999999'], ['1e21 string', '1e21'],
+  ])('unsafe/oversized run count %s is rejected on every write path', async (_l, v) => {
+    const p = (await api('post', '/api/projects', { name: 'Big' })).body;
+    expect((await api('post', '/api/projects', { name: 'X', items_per_set: v })).status).toBe(400);
+    expect((await api('put', `/api/projects/${p.id}`, { name: 'Big', items_per_set: v })).status).toBe(400);
+    expect((await api('post', `/api/projects/${p.id}/plates`, { name: 'a', items_per_plate: v })).status).toBe(400);
+    const pl = (await api('post', `/api/projects/${p.id}/plates`, { name: 'a', items_per_plate: 2 })).body.plates[0];
+    expect((await api('put', `/api/projects/${p.id}/plates/${pl.id}`, { ...pl, items_per_plate: v })).status).toBe(400);
+    expect((await api('patch', `/api/projects/${p.id}/plates/${pl.id}`, { items_per_plate: v })).status).toBe(400);
+    expect((await api('post', `/api/projects/${p.id}/import-3mf`, { plates: [{ name: 'i', items_per_plate: v }] })).status).toBe(400);
+  });
+  test('upper bound 1000000 accepted', async () => {
+    const p = (await api('post', '/api/projects', { name: 'Cap', items_per_set: 1000000 })).body;
+    expect(p.items_per_set).toBe(1000000);
+  });
+
+  test('null vs omitted: one rule on every write path (null rejected, omitted defaults on create/import, keeps on update)', async () => {
+    const p = (await api('post', '/api/projects', { name: 'Nulls' })).body;
+    expect((await api('post', '/api/projects', { name: 'N', items_per_set: null })).status).toBe(400);
+    expect((await api('post', `/api/projects/${p.id}/plates`, { name: 'a', items_per_plate: null })).status).toBe(400);
+    expect((await api('post', `/api/projects/${p.id}/import-3mf`, { plates: [{ name: 'n', items_per_plate: null }] })).status).toBe(400);
+    expect(db.prepare('SELECT COUNT(*) c FROM project_plates WHERE project_id=?').get(p.id).c).toBe(0);
+    const created = await api('post', `/api/projects/${p.id}/plates`, { name: 'omitted' });
+    expect(created.status).toBe(201);
+    const imp = await api('post', `/api/projects/${p.id}/import-3mf`, { plates: [{ name: 'omitted' }] });
+    expect(imp.status).toBe(201);
+    expect(db.prepare('SELECT items_per_plate FROM project_plates WHERE project_id=? ORDER BY id').all(p.id).map(x => x.items_per_plate)).toEqual([1, 1]);
+    const pl = created.body.plates[0];
+    expect((await api('put', `/api/projects/${p.id}/plates/${pl.id}`, { ...pl, items_per_plate: null })).status).toBe(400);
+    expect((await api('patch', `/api/projects/${p.id}/plates/${pl.id}`, { items_per_plate: null })).status).toBe(400);
+    expect((await api('put', `/api/projects/${p.id}`, { name: 'Nulls', items_per_set: null })).status).toBe(400);
+    const kept = await api('patch', `/api/projects/${p.id}/plates/${pl.id}`, { name: 'renamed' });
+    expect(kept.status).toBe(200);
+  });
+
+  test('plate duplicate is a server-side copy: legacy 2.5 copied verbatim, ownership checked, other flows do not 400', async () => {
+    const p = (await api('post', '/api/projects', { name: 'Dup', items_per_set: 2 })).body;
+    const other = (await api('post', '/api/projects', { name: 'Other' })).body;
+    const pl = (await api('post', `/api/projects/${p.id}/plates`, { name: 'a', items_per_plate: 2, colors: ['#fff'], charge_share_only: 1 })).body.plates[0];
+    db.prepare('UPDATE project_plates SET items_per_plate = 2.5 WHERE id=?').run(pl.id);
+    db.prepare('UPDATE projects SET items_per_set = 2.5 WHERE id=?').run(p.id);
+    const d = await api('post', `/api/projects/${p.id}/plates/${pl.id}/duplicate`);
+    expect(d.status).toBe(201);
+    const rows = db.prepare('SELECT * FROM project_plates WHERE project_id=? ORDER BY id').all(p.id);
+    expect(rows).toHaveLength(2);
+    expect(rows[1].items_per_plate).toBe(2.5);
+    expect(rows[1].name).toBe('a (copy)');
+    expect(rows[1].colors).toBe(rows[0].colors);
+    expect(rows[1].charge_share_only).toBe(1);
+    expect(rows[1].sort_order).toBeGreaterThan(rows[0].sort_order);
+    // the body cannot inject a value
+    const d2 = await api('post', `/api/projects/${p.id}/plates/${pl.id}/duplicate`, { items_per_plate: 99 });
+    expect(d2.status).toBe(201);
+    expect(db.prepare('SELECT items_per_plate FROM project_plates WHERE project_id=? ORDER BY id DESC').get(p.id).items_per_plate).toBe(2.5);
+    // wrong project / unknown plate
+    expect((await api('post', `/api/projects/${other.id}/plates/${pl.id}/duplicate`)).status).toBe(404);
+    expect((await api('post', `/api/projects/${p.id}/plates/999999/duplicate`)).status).toBe(404);
+    // other flows over legacy rows: project duplicate, toggle, unrelated PATCH
+    const pd = await api('post', `/api/projects/${p.id}/duplicate`);
+    expect(pd.status).toBe(201);
+    expect(db.prepare('SELECT items_per_set FROM projects WHERE id=?').get(pd.body.id).items_per_set).toBe(2.5);
+    expect(db.prepare('SELECT items_per_plate FROM project_plates WHERE project_id=?').all(pd.body.id).every(r => r.items_per_plate === 2.5)).toBe(true);
+    expect((await api('patch', `/api/projects/${p.id}/plates/${pl.id}/toggle`)).status).toBe(200);
+    expect((await api('patch', `/api/projects/${p.id}/plates/${pl.id}`, { name: 'x' })).status).toBe(200);
   });
 
   test('3MF import: bad items_per_plate -> 400 and nothing inserted', async () => {

@@ -52,7 +52,9 @@
    */
   function runsQuantity(q) {
     const r = Math.round(q * 100) / 100;
-    if (Math.abs(q - r) < 1e-9) return { qual: '', num: String(r), one: r === 1 };
+    // Exact only when the quotient IS the rounded value (same exact-equality rule as
+    // calc.js wholeRunsDifferFromShare). No tolerance: 2.9999999995 must not read as 3.
+    if (q === r) return { qual: '', num: String(r), one: r === 1 };
     if (Number.isInteger(r)) return { qual: q < r ? 'just under ' : 'just over ', num: String(r), one: r === 1 };
     return { qual: 'about ', num: String(r), one: false };
   }
@@ -91,15 +93,18 @@
     const whole = Math.ceil(q);
     const kind = whole === q ? 'none' : (set < per ? 'fraction' : 'multi');
     const qty = runsQuantity(q);
+    // "1/3 of one run" style only for whole-number inputs; a legacy non-whole pair
+    // goes through the qualified formatter ("just under 1 run"), never a bare "1 of a run".
+    const fractional = kind === 'fraction' && Number.isInteger(set) && Number.isInteger(per);
     const runsText = `${qty.qual}${qty.num} run${qty.one ? '' : 's'}`;
     // "just under 2 runs, not 2 whole runs": name the whole runs when the number repeats.
     const notText = qty.num === String(whole) ? `${whole} whole run${whole === 1 ? '' : 's'}` : String(whole);
-    return { kind, set, per, whole, wholeText: `${whole} whole run${whole === 1 ? '' : 's'}`,
+    return { kind, fractional, set, per, whole, wholeText: `${whole} whole run${whole === 1 ? '' : 's'}`,
       // "1/3 of one run" or "2.5 runs"
-      shareText: kind === 'fraction' ? `${fraction(set, per)} of one run` : runsText,
+      shareText: fractional ? `${fraction(set, per)} of one run` : runsText,
       // badge-length: "1/3 of a run, not 1" / "2.5 runs, not 3"
-      badgeText: kind === 'fraction' ? `${fraction(set, per)} of a run, not ${whole}`
-        : (kind === 'multi' ? `${runsText}, not ${notText}` : `${whole} run${whole === 1 ? '' : 's'}, same as whole`) };
+      badgeText: fractional ? `${fraction(set, per)} of a run, not ${whole}`
+        : (kind === 'none' ? `${whole} run${whole === 1 ? '' : 's'}, same as whole` : `${runsText}, not ${notText}`) };
   }
 
   /** Short badge on the plate row: "1/3 of a run, not 1", "2.5 runs, not 3", "2 runs, same as whole". */
@@ -119,7 +124,7 @@
     if (c.kind === 'none') {
       return `${lead}, which is exactly ${c.whole} whole run${c.whole === 1 ? '' : 's'}, so this override changes nothing for this plate.`;
     }
-    return `${lead}, so the set uses ${c.shareText}. With the override on, ${c.shareText} ${c.kind === 'fraction' ? 'is' : 'are'} charged instead of `
+    return `${lead}, so the set uses ${c.shareText}. With the override on, ${c.shareText} ${c.fractional || (c.kind !== 'none' && c.shareText.endsWith(' run')) ? 'is' : 'are'} charged instead of `
       + `${c.wholeText}${moneyClause(o)}.`;
   }
 

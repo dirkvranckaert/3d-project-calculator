@@ -287,22 +287,34 @@ function backfillSliced(db, files) {
 /** Valid `projects.plate_mode` values (#2135). */
 const PLATE_MODES = ['parts', 'batch'];
 
+/** Upper bound for a run count (#2146): far beyond any real print job, far below 2^53. */
+const MAX_RUN_COUNT = 1000000;
+
 /**
- * Validate a run-count input (items_per_set / items_per_plate, #2146): a finite
- * whole number >= 1, JSON number or numeric string. The run maths divides by it,
- * so a fraction, 0, negative or non-numeric value silently corrupts every cost.
+ * Validate a run-count input (items_per_set / items_per_plate, #2146): a whole
+ * number 1..MAX_RUN_COUNT, JSON number or numeric string. The run maths divides
+ * by it, so a fraction, 0, negative, unsafe or non-numeric value silently
+ * corrupts every cost.
+ *
+ * THE null/omitted RULE, for every write path (POST, PUT, PATCH, import-3mf):
+ * omitted (undefined) is handled by the CALLER (create/import default to 1,
+ * update keeps the stored value); explicit null is NOT omission and is rejected
+ * here like any other non-number.
+ *
  * `stored` = the value already in the row: an UNCHANGED legacy value (e.g. an old
  * REAL 2.5) is passed through so saving an unrelated field never gets blocked.
+ * Copies of stored rows (plate/project duplicate) never go through here at all:
+ * they copy the row server-side.
  * Returns { value } or { error }. No DB CHECK constraint on purpose (needs a
  * SQLite table rebuild on live data).
  */
 function parseRunCount(raw, label, stored) {
   const n = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw;
   if (typeof n === 'number' && Number.isFinite(n)) {
-    if (Number.isInteger(n) && n >= 1) return { value: n };
+    if (Number.isSafeInteger(n) && n >= 1 && n <= MAX_RUN_COUNT) return { value: n };
     if (stored !== undefined && stored !== null && Number(stored) === n) return { value: n };
   }
-  return { error: `${label} must be a whole number of at least 1` };
+  return { error: `${label} must be a whole number between 1 and ${MAX_RUN_COUNT}` };
 }
 
 function defaultTargetMargin(db) {
@@ -949,6 +961,29 @@ app.post('/api/projects/:projectId/plates', (req, res) => {
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
   const updatedProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
   res.status(201).json(enrichProject(db, updatedProject));
+});
+
+// Duplicate a plate server-side: the stored row is copied verbatim (a legacy
+// items_per_plate such as 2.5 stays 2.5), so it never re-enters validation and
+// no client-supplied value can bypass it.
+app.post('/api/projects/:projectId/plates/:plateId/duplicate', (req, res) => {
+  const db = getDb();
+  const pid = req.params.projectId;
+  const src = db.prepare('SELECT * FROM project_plates WHERE id = ? AND project_id = ?').get(req.params.plateId, pid);
+  if (!src) return res.status(404).json({ error: 'Not found' });
+  const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order),0) as m FROM project_plates WHERE project_id = ?').get(pid).m;
+  db.prepare(`INSERT INTO project_plates
+    (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
+     risk_multiplier, pre_processing_minutes, post_processing_minutes,
+     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order, charge_share_only)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(pid, src.name ? `${src.name} (copy)` : null, src.print_time_minutes, src.plastic_grams, src.items_per_plate,
+      src.risk_multiplier, src.pre_processing_minutes, src.post_processing_minutes,
+      src.printer_id, src.material_id, src.material_waste_grams, src.notes, src.colors, src.enabled, maxOrder + 1,
+      src.charge_share_only || 0);
+  db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  res.status(201).json(enrichProject(db, project));
 });
 
 app.put('/api/projects/:projectId/plates/:plateId', (req, res) => {
@@ -1618,10 +1653,10 @@ app.post('/api/projects/:projectId/import-3mf', (req, res) => {
   const { plates = [] } = req.body;
   // plates is an array of: { name, print_time_minutes, plastic_grams, items_per_plate, printer_id, material_id }
 
-  // Validate every plate before inserting any (all-or-nothing). Absent/null = 1.
+  // Validate every plate before inserting any (all-or-nothing). Omitted = 1; explicit null is rejected (see parseRunCount).
   const perPlateCounts = [];
   for (const pl of plates) {
-    const raw = pl.items_per_plate === undefined || pl.items_per_plate === null ? 1 : pl.items_per_plate;
+    const raw = pl.items_per_plate === undefined ? 1 : pl.items_per_plate;
     const c = parseRunCount(raw, 'Items per plate');
     if (c.error) return res.status(400).json({ error: c.error });
     perPlateCounts.push(c.value);
