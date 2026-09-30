@@ -284,6 +284,124 @@ describe('items_per_set / items_per_plate validation', () => {
     expect((await api('patch', `/api/projects/${p.id}/plates/${pl.id}`, { name: 'x' })).status).toBe(200);
   });
 
+  /* -------- duplicate copies EVERY column (#2146 round 3) -------- */
+  const plateCols = () => db.prepare('PRAGMA table_info(project_plates)').all().map(c => c.name);
+  const projCols = () => db.prepare('PRAGMA table_info(projects)').all().map(c => c.name);
+  // "copy equals source except X": the generic assertion, built from the live column list.
+  const expectCopyEquals = (copy, source, cols, except, expectedOverrides = {}) => {
+    for (const c of cols) {
+      if (except.includes(c)) continue;
+      expect([c, copy[c]]).toEqual([c, source[c]]);
+    }
+    for (const [c, v] of Object.entries(expectedOverrides)) expect([c, copy[c]]).toEqual([c, v]);
+  };
+  // Give every optional plate column a distinctive non-default value.
+  const richPlate = async () => {
+    const printer = db.prepare("INSERT INTO printers (name) VALUES ('Dup printer')").run().lastInsertRowid;
+    const material = db.prepare("INSERT INTO materials (name, material_type, price_per_kg) VALUES ('Dup PLA','PLA',20)").run().lastInsertRowid;
+    const p = (await api('post', '/api/projects', { name: 'Rich', items_per_set: 4 })).body;
+    const pl = (await api('post', `/api/projects/${p.id}/plates`, { name: 'rich', print_time_minutes: 90, plastic_grams: 33, items_per_plate: 2, risk_multiplier: 1.3, pre_processing_minutes: 5, post_processing_minutes: 7, printer_id: printer, material_id: material, material_waste_grams: 4, notes: 'n', colors: ['#123456'], enabled: false, charge_share_only: 1 })).body.plates[0];
+    db.prepare('UPDATE project_plates SET source_plate_index = 3, source_file_id = ? WHERE id = ?').run('fictional-widget.3mf', pl.id);
+    return { p, plateId: pl.id };
+  };
+
+  test('plate duplicate: every column equals the source except id/name/sort_order (enabled, mapping, share override, legacy count)', async () => {
+    const { p, plateId } = await richPlate();
+    db.prepare('UPDATE project_plates SET items_per_plate = 2.5 WHERE id = ?').run(plateId);
+    const src = db.prepare('SELECT * FROM project_plates WHERE id=?').get(plateId);
+    expect(src.enabled).toBe(0);
+    expect(src.source_plate_index).toBe(3);
+    expect((await api('post', `/api/projects/${p.id}/plates/${plateId}/duplicate`)).status).toBe(201);
+    const copy = db.prepare('SELECT * FROM project_plates WHERE project_id=? AND id<>? ORDER BY id DESC').get(p.id, plateId);
+    expectCopyEquals(copy, src, plateCols(), ['id', 'name', 'sort_order'], { name: 'rich (copy)', sort_order: src.sort_order + 1 });
+    expect(copy.enabled).toBe(0);
+    expect(copy.source_file_id).toBe('fictional-widget.3mf');
+    expect(copy.charge_share_only).toBe(1);
+    expect(copy.items_per_plate).toBe(2.5);
+    // the column list really is live: every plates column is either compared or a named exclusion
+    expect(plateCols()).toEqual(expect.arrayContaining(['source_plate_index', 'source_file_id', 'is_test_print', 'test_print_id', 'charge_share_only', 'enabled']));
+  });
+
+  test('plate duplicate: a plate with a null name stays unnamed (no "null (copy)")', async () => {
+    const p = (await api('post', '/api/projects', { name: 'NoName' })).body;
+    const pl = (await api('post', `/api/projects/${p.id}/plates`, {})).body.plates[0];
+    await api('post', `/api/projects/${p.id}/plates/${pl.id}/duplicate`);
+    expect(db.prepare('SELECT name FROM project_plates WHERE project_id=? ORDER BY id DESC').get(p.id).name).toBeNull();
+  });
+
+  test('plate duplicate: test-print plate source is refused with 400, nothing inserted, kind never changes', async () => {
+    const p = (await api('post', '/api/projects', { name: 'TP' })).body;
+    const tp = (await api('post', `/api/projects/${p.id}/test-prints`, { description: 'Fit test' })).body;
+    const tpId = (tp.test_prints?.[0] || tp).id;
+    const plateId = db.prepare("INSERT INTO project_plates (project_id, name, is_test_print, test_print_id, sort_order) VALUES (?, 'tp plate', 1, ?, 1)").run(p.id, tpId).lastInsertRowid;
+    const orphanId = db.prepare("INSERT INTO project_plates (project_id, name, is_test_print, test_print_id, sort_order) VALUES (?, 'orphan tp', 1, NULL, 2)").run(p.id).lastInsertRowid;
+    for (const id of [plateId, orphanId]) {
+      const r = await api('post', `/api/projects/${p.id}/plates/${id}/duplicate`);
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/Test-print plates cannot be duplicated/);
+    }
+    expect(db.prepare('SELECT COUNT(*) c FROM project_plates WHERE project_id=?').get(p.id).c).toBe(2);
+  });
+
+  test('project duplicate: every plate column copied (mapping, enabled, share override, test-print kind) with test_print_id re-wired; every project column copied or a named exclusion', async () => {
+    const { p, plateId } = await richPlate();
+    const tp = (await api('post', `/api/projects/${p.id}/test-prints`, { description: 'Fit test' })).body;
+    const tpId = (tp.test_prints?.[0] || tp).id;
+    const tpPlate = db.prepare("INSERT INTO project_plates (project_id, name, is_test_print, test_print_id, sort_order, source_plate_index, source_file_id, charge_share_only) VALUES (?, 'tp', 1, ?, 9, 1, 'tp.3mf', 0)").run(p.id, tpId).lastInsertRowid;
+    db.prepare("UPDATE projects SET plate_mode='batch', margin_locked=1, locked_margin_pct=33, design_invoiced_separately=1, is_custom=1, design_notes='dn', notes='pn', tags='a,b', customer_name='Fictional Cust', actual_sales_price=1234, archived=1 WHERE id=?").run(p.id);
+    const srcProj = db.prepare('SELECT * FROM projects WHERE id=?').get(p.id);
+    const r = await api('post', `/api/projects/${p.id}/duplicate`);
+    expect(r.status).toBe(201);
+    const copyProj = db.prepare('SELECT * FROM projects WHERE id=?').get(r.body.id);
+    expectCopyEquals(copyProj, srcProj, projCols(), ['id', 'name', 'actual_sales_price', 'archived', 'created_at', 'updated_at'],
+      { name: 'Rich (copy)', actual_sales_price: null, archived: 0 });
+    expect(copyProj.plate_mode).toBe('batch');
+    const srcPlates = db.prepare('SELECT * FROM project_plates WHERE project_id=? ORDER BY sort_order, id').all(p.id);
+    const copyPlates = db.prepare('SELECT * FROM project_plates WHERE project_id=? ORDER BY sort_order, id').all(r.body.id);
+    expect(copyPlates).toHaveLength(srcPlates.length);
+    const newTp = db.prepare('SELECT id FROM project_test_prints WHERE project_id=?').get(r.body.id).id;
+    srcPlates.forEach((s, i) => {
+      expectCopyEquals(copyPlates[i], s, plateCols(), ['id', 'project_id', 'test_print_id'], { project_id: r.body.id });
+      expect(copyPlates[i].test_print_id).toBe(s.test_print_id === null ? null : newTp);
+    });
+    expect(copyPlates.find(x => x.name === 'rich').source_file_id).toBe('fictional-widget.3mf');
+    expect(copyPlates.find(x => x.name === 'tp').is_test_print).toBe(1);
+    expect(tpPlate).toBeGreaterThan(plateId);
+  });
+
+  test('every table column is copied or named: a new column cannot be dropped silently', () => {
+    // If this fails a column was added to projects/project_plates: copy it (plates
+    // are automatic) or add it to the project duplicate's documented exclusions.
+    expect(projCols().sort()).toEqual(['id', 'name', 'customer_name', 'items_per_set', 'actual_sales_price', 'tags', 'notes', 'archived', 'created_at', 'updated_at', 'is_custom', 'design_notes', 'margin_locked', 'target_margin_pct', 'locked_margin_pct', 'design_invoiced_separately', 'plate_mode'].sort());
+  });
+
+  /* -------- omitted run counts keep the stored value (#2146 round 3) -------- */
+  test('omitted items_per_set / items_per_plate keep the stored value on PUT project, PUT plate and PATCH plate', async () => {
+    const p = (await api('post', '/api/projects', { name: 'Keep', items_per_set: 6 })).body;
+    const pl = (await api('post', `/api/projects/${p.id}/plates`, { name: 'k', items_per_plate: 3 })).body.plates[0];
+    const { items_per_plate, ...plateNoCount } = pl;
+    const put1 = await api('put', `/api/projects/${p.id}`, { name: 'Keep renamed' });
+    expect(put1.status).toBe(200);
+    expect(put1.body.items_per_set).toBe(6);
+    expect(db.prepare('SELECT items_per_set FROM projects WHERE id=?').get(p.id).items_per_set).toBe(6);
+    const put2 = await api('put', `/api/projects/${p.id}/plates/${pl.id}`, plateNoCount);
+    expect(put2.status).toBe(200);
+    expect(db.prepare('SELECT items_per_plate FROM project_plates WHERE id=?').get(pl.id).items_per_plate).toBe(3);
+    const patch = await api('patch', `/api/projects/${p.id}/plates/${pl.id}`, { name: 'patched' });
+    expect(patch.status).toBe(200);
+    expect(db.prepare('SELECT items_per_plate, name FROM project_plates WHERE id=?').get(pl.id)).toEqual({ items_per_plate: 3, name: 'patched' });
+    // a legacy stored value is kept verbatim too
+    db.prepare('UPDATE projects SET items_per_set = 2.5 WHERE id=?').run(p.id);
+    db.prepare('UPDATE project_plates SET items_per_plate = 2.5 WHERE id=?').run(pl.id);
+    expect((await api('put', `/api/projects/${p.id}`, { name: 'Keep renamed' })).status).toBe(200);
+    expect((await api('put', `/api/projects/${p.id}/plates/${pl.id}`, plateNoCount)).status).toBe(200);
+    expect(db.prepare('SELECT items_per_set FROM projects WHERE id=?').get(p.id).items_per_set).toBe(2.5);
+    expect(db.prepare('SELECT items_per_plate FROM project_plates WHERE id=?').get(pl.id).items_per_plate).toBe(2.5);
+    // unknown project / plate -> 404, not a 500
+    expect((await api('put', '/api/projects/999999', { name: 'x' })).status).toBe(404);
+    expect((await api('put', `/api/projects/${p.id}/plates/999999`, plateNoCount)).status).toBe(404);
+  });
+
   test('3MF import: bad items_per_plate -> 400 and nothing inserted', async () => {
     const p = (await api('post', '/api/projects', { name: 'Import' })).body;
     const r = await api('post', `/api/projects/${p.id}/import-3mf`, { plates: [{ name: 'ok', items_per_plate: 2 }, { name: 'bad', items_per_plate: 1.5 }] });

@@ -298,7 +298,8 @@ const MAX_RUN_COUNT = 1000000;
  *
  * THE null/omitted RULE, for every write path (POST, PUT, PATCH, import-3mf):
  * omitted (undefined) is handled by the CALLER (create/import default to 1,
- * update keeps the stored value); explicit null is NOT omission and is rejected
+ * update keeps the stored value: PUT and PATCH both initialise from the stored
+ * row, tested on every route); explicit null is NOT omission and is rejected
  * here like any other non-number.
  *
  * `stored` = the value already in the row: an UNCHANGED legacy value (e.g. an old
@@ -315,6 +316,29 @@ function parseRunCount(raw, label, stored) {
     if (stored !== undefined && stored !== null && Number(stored) === n) return { value: n };
   }
   return { error: `${label} must be a whole number between 1 and ${MAX_RUN_COUNT}` };
+}
+
+/**
+ * Copy a project_plates row (#2146). The column list comes from the table itself
+ * (PRAGMA table_info), so a column added later is copied automatically and can
+ * never be dropped silently by a hand-written INSERT.
+ *
+ * Only `id` is never copied (identity, the database assigns a new one). Every
+ * other column is copied from `src` unless the caller names it in `overrides`;
+ * each caller states its overrides and why:
+ *   - plate duplicate: project_id (same project, explicit), name (" (copy)"
+ *     suffix), sort_order (appended at the end);
+ *   - project duplicate: project_id (the new project), test_print_id (points at
+ *     the OLD project's test print; re-wired to the new one afterwards).
+ * Returns the new row id. Nothing about the row's kind (is_test_print), its 3MF
+ * mapping (source_plate_index, source_file_id) or its share override
+ * (charge_share_only) is ever reset by omission.
+ */
+function copyPlateRow(db, src, overrides) {
+  const cols = db.prepare('PRAGMA table_info(project_plates)').all().map(c => c.name).filter(n => n !== 'id');
+  const vals = cols.map(n => (Object.prototype.hasOwnProperty.call(overrides, n) ? overrides[n] : src[n]));
+  return db.prepare(`INSERT INTO project_plates (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`)
+    .run(...vals).lastInsertRowid;
 }
 
 function defaultTargetMargin(db) {
@@ -693,7 +717,9 @@ app.put('/api/projects/:id', (req, res) => {
     margin_locked, target_margin_pct } = req.body;
   // Read current is_custom / margin lock if not supplied in body, to avoid resetting them on ordinary edits
   const existing = db.prepare('SELECT is_custom, margin_locked, target_margin_pct, plate_mode, items_per_set FROM projects WHERE id = ?').get(req.params.id);
-  let setVal = items_per_set;
+  // Omitted = keep the stored count (same rule as plate_mode / is_custom below).
+  if (!existing) return res.status(404).json({ error: 'Not found' });
+  let setVal = existing.items_per_set;
   if (items_per_set !== undefined) {
     const setCount = parseRunCount(items_per_set, 'Items per set', existing?.items_per_set);
     if (setCount.error) return res.status(400).json({ error: setCount.error });
@@ -813,6 +839,10 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
 
   // The margin lock is a pricing policy, not a recorded sale, so it follows the
   // copy — unlike actual_sales_price, which stays empty on a duplicate.
+  // Deliberately NOT copied: id, created_at/updated_at (new row), actual_sales_price
+  // (a recorded sale), archived (a copy starts active). Every other projects column
+  // is listed below; tests/plate-mode-followups-2146.test.js fails if a column is
+  // added to the table without being copied or excluded here.
   const r = db.prepare(`INSERT INTO projects
     (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, margin_locked, target_margin_pct, locked_margin_pct, design_invoiced_separately, plate_mode)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
@@ -826,19 +856,12 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
 
   // Copy plates (including test-print plates — orphan plates copied as orphans with test_print_id=null)
   const plates = db.prepare('SELECT * FROM project_plates WHERE project_id = ? ORDER BY sort_order').all(src.id);
-  const insPlate = db.prepare(`INSERT INTO project_plates
-    (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
-     risk_multiplier, pre_processing_minutes, post_processing_minutes,
-     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order, is_test_print, charge_share_only)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   // Map old plate id -> new plate id for test_print_id linkage
   const plateIdMap = {};
   for (const pl of plates) {
-    const pr = insPlate.run(newId, pl.name, pl.print_time_minutes, pl.plastic_grams, pl.items_per_plate,
-      pl.risk_multiplier, pl.pre_processing_minutes, pl.post_processing_minutes,
-      pl.printer_id, pl.material_id, pl.material_waste_grams, pl.notes, pl.colors, pl.enabled, pl.sort_order,
-      pl.is_test_print || 0, pl.charge_share_only || 0);
-    plateIdMap[pl.id] = pr.lastInsertRowid;
+    // Every stored column is copied (copyPlateRow); overrides: project_id, and
+    // test_print_id (re-wired below once the new test prints exist).
+    plateIdMap[pl.id] = copyPlateRow(db, pl, { project_id: newId, test_print_id: null });
   }
 
   // Copy extras
@@ -971,16 +994,14 @@ app.post('/api/projects/:projectId/plates/:plateId/duplicate', (req, res) => {
   const pid = req.params.projectId;
   const src = db.prepare('SELECT * FROM project_plates WHERE id = ? AND project_id = ?').get(req.params.plateId, pid);
   if (!src) return res.status(404).json({ error: 'Not found' });
+  // Test-print plates are owned by a project_test_prints row (cost estimate,
+  // attach/detach); the UI offers Duplicate on production plates only, so a
+  // copy here would be an unmanaged extra cost line. Refuse, never turn it into
+  // a production plate.
+  if (src.is_test_print) return res.status(400).json({ error: 'Test-print plates cannot be duplicated' });
   const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order),0) as m FROM project_plates WHERE project_id = ?').get(pid).m;
-  db.prepare(`INSERT INTO project_plates
-    (project_id, name, print_time_minutes, plastic_grams, items_per_plate,
-     risk_multiplier, pre_processing_minutes, post_processing_minutes,
-     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order, charge_share_only)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(pid, src.name ? `${src.name} (copy)` : null, src.print_time_minutes, src.plastic_grams, src.items_per_plate,
-      src.risk_multiplier, src.pre_processing_minutes, src.post_processing_minutes,
-      src.printer_id, src.material_id, src.material_waste_grams, src.notes, src.colors, src.enabled, maxOrder + 1,
-      src.charge_share_only || 0);
+  // All other columns copied from the source (copyPlateRow); overrides: name, sort_order.
+  copyPlateRow(db, src, { name: src.name ? `${src.name} (copy)` : null, sort_order: maxOrder + 1 });
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
   res.status(201).json(enrichProject(db, project));
@@ -992,10 +1013,12 @@ app.put('/api/projects/:projectId/plates/:plateId', (req, res) => {
     risk_multiplier, pre_processing_minutes, post_processing_minutes,
     printer_id, material_id, material_waste_grams, notes, colors, enabled, sort_order } = req.body;
 
-  let perPlateVal = items_per_plate;
+  const storedPlate = db.prepare('SELECT items_per_plate FROM project_plates WHERE id=? AND project_id=?')
+    .get(req.params.plateId, req.params.projectId);
+  // Omitted = keep the stored count (same rule as charge_share_only below).
+  if (!storedPlate) return res.status(404).json({ error: 'Not found' });
+  let perPlateVal = storedPlate.items_per_plate;
   if (items_per_plate !== undefined) {
-    const storedPlate = db.prepare('SELECT items_per_plate FROM project_plates WHERE id=? AND project_id=?')
-      .get(req.params.plateId, req.params.projectId);
     const perPlate = parseRunCount(items_per_plate, 'Items per plate', storedPlate?.items_per_plate);
     if (perPlate.error) return res.status(400).json({ error: perPlate.error });
     perPlateVal = perPlate.value;
