@@ -1941,3 +1941,68 @@ describe('the project target survives every price-state reset (#732 regression)'
     }
   });
 });
+
+/* ================================================================== */
+/*  Plate mode API (#2135)                                             */
+/* ================================================================== */
+describe('Plate mode API', () => {
+  const api = () => ({
+    post: (u, b) => request(app).post(u).set('Cookie', cookie).send(b),
+    put: (u, b) => request(app).put(u).set('Cookie', cookie).send(b),
+    patch: (u, b) => request(app).patch(u).set('Cookie', cookie).send(b),
+  });
+  let pid;
+
+  test('new project defaults to parts, explicit batch is stored, junk is rejected', async () => {
+    const a = await api().post('/api/projects', { name: 'PM default' });
+    expect(a.status).toBe(201);
+    expect(a.body.plate_mode).toBe('parts');
+    expect(a.body.calculation.plateMode).toBe('parts');
+    const b = await api().post('/api/projects', { name: 'PM batch', plate_mode: 'batch' });
+    expect(b.body.plate_mode).toBe('batch');
+    const bad = await api().post('/api/projects', { name: 'PM bad', plate_mode: 'whatever' });
+    expect(bad.status).toBe(400);
+    pid = a.body.id;
+  });
+
+  test('PUT changes the mode; omitting it keeps the stored one', async () => {
+    const base = { name: 'PM default', customer_name: null, items_per_set: 91 };
+    let r = await api().put(`/api/projects/${pid}`, { ...base, plate_mode: 'batch' });
+    expect(r.body.plate_mode).toBe('batch');
+    r = await api().put(`/api/projects/${pid}`, base);
+    expect(r.body.plate_mode).toBe('batch');
+    r = await api().put(`/api/projects/${pid}`, { ...base, plate_mode: 'nope' });
+    expect(r.status).toBe(400);
+    r = await api().put(`/api/projects/${pid}`, { ...base, plate_mode: 'parts' });
+    expect(r.body.plate_mode).toBe('parts');
+  });
+
+  test('mode drives the totals end to end; override persists across PUT/PATCH/duplicate', async () => {
+    const plate = { name: 'Legs', print_time_minutes: 49, plastic_grams: 23.15, items_per_plate: 3,
+      risk_multiplier: 1, pre_processing_minutes: 0, post_processing_minutes: 2,
+      printer_id: null, material_id: null, material_waste_grams: 0, notes: null };
+    await api().put(`/api/projects/${pid}`, { name: 'PM default', customer_name: null, items_per_set: 1, plate_mode: 'parts' });
+    let r = await api().post(`/api/projects/${pid}/plates`, plate);
+    const plateId = r.body.plates[0].id;
+    expect(r.body.plates[0].charge_share_only).toBe(0);
+    const whole = r.body.calculation.totals.totalCost;
+
+    r = await api().patch(`/api/projects/${pid}/plates/${plateId}`, { charge_share_only: true });
+    expect(r.body.plates[0].charge_share_only).toBe(1);
+    expect(r.body.calculation.totals.totalCost).toBeCloseTo(whole / 3, 2); // share is cents-rounded per component
+    expect(r.body.calculation.plateBreakdowns[0].count.mode).toBe('share');
+
+    // full-row PUT without the field keeps the override
+    r = await api().put(`/api/projects/${pid}/plates/${plateId}`, { ...plate, enabled: 1 });
+    expect(r.body.plates[0].charge_share_only).toBe(1);
+
+    // batch mode: override ignored, plate counts once
+    r = await api().put(`/api/projects/${pid}`, { name: 'PM default', customer_name: null, items_per_set: 1, plate_mode: 'batch' });
+    expect(r.body.calculation.plateBreakdowns[0].count.mode).toBe('once');
+    expect(r.body.calculation.totals.totalCost).toBeCloseTo(whole, 8);
+
+    const dup = await api().post(`/api/projects/${pid}/duplicate`, {});
+    expect(dup.body.plate_mode).toBe('batch');
+    expect(dup.body.plates[0].charge_share_only).toBe(1);
+  });
+});

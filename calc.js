@@ -578,7 +578,8 @@ function calculateDesignCosts(opts) {
  * Grams per plate are scaled identically to the Material Cost figure:
  * (totalPlasticGrams / items_per_plate) × itemsPerSet — i.e. per-item plastic ×
  * project item count. This authoritative plate figure ALWAYS drives the total,
- * keeping Σ(grams × price_per_kg) consistent with materialCost × itemsPerSet.
+ * keeping Σ(grams × price_per_kg) consistent with the material cost total (grams
+ * are exact; the money total is cents-rounded per plate, see scaleContribution).
  *
  * Two shapes are supported and may co-exist in one project (mixed DB state):
  *   - Plate WITH per-filament grams (`colors[].grams`, captured from the 3MF at
@@ -610,7 +611,12 @@ function aggregateMaterialRequirements(enabledPlates, itemsPerSet = 1) {
   for (const p of enabledPlates) {
     const items = p.itemsPerPlate || 1;
     // Authoritative plate grams — the figure the material cost is built from.
-    const plateGrams = ((p.totalPlasticGrams || 0) / items) * itemsPerSet;
+    // `factor` = how many plate-runs this project is charged for (whole runs,
+    // a share, or 1 in batch mode; see resolvePlateCount). Legacy callers that
+    // pass raw per-plate costs without it keep the proportional scaling.
+    const plateGrams = p.factor != null
+      ? (p.totalPlasticGrams || 0) * p.factor
+      : ((p.totalPlasticGrams || 0) / items) * itemsPerSet;
 
     const colours = (p.colors || [])
       .map(c => ({ ...c, g: Number(c.grams) }))
@@ -681,31 +687,130 @@ function aggregateMaterialRequirements(enabledPlates, itemsPerSet = 1) {
 /* ------------------------------------------------------------------ */
 
 /**
+ * Effective inputs of the run count: a missing/0 set or #/plate counts as 1.
+ * ONE definition, used by resolvePlateCount and by the db.js migration predicate.
+ */
+function effectiveRunInputs(itemsPerSet, itemsPerPlate) {
+  return { set: itemsPerSet || 1, ipp: itemsPerPlate || 1 };
+}
+
+/**
+ * True when charging whole runs (ceil(set / ipp)) costs something other than the
+ * proportional share (set / ipp), i.e. the real quotient is not integral. This is
+ * the ONE rule behind both the runtime count and the migration backfill; never
+ * use SQL `%` for it (SQLite coerces REAL operands to integers).
+ */
+function wholeRunsDifferFromShare(itemsPerSet, itemsPerPlate) {
+  const { set, ipp } = effectiveRunInputs(itemsPerSet, itemsPerPlate);
+  return Math.ceil(set / ipp) !== set / ipp;
+}
+
+/**
+ * How many plate-runs a project is charged for on one plate. ONE number drives
+ * time, plastic, material cost, processing, electricity and printer usage, so
+ * they can never disagree with each other.
+ *
+ * Plate mode is a project setting:
+ *   - 'parts' (default): every plate is a component of ONE sellable item.
+ *       runs = ceil(itemsPerSet / items_per_plate) — a half-filled last plate
+ *       still occupies a full print run. Whole runs everywhere.
+ *       Per-plate override `charge_share_only`: the plate is charged only the
+ *       share this set uses, itemsPerSet / items_per_plate of one run (leftover
+ *       pieces are kept for later sets, not wasted).
+ *   - 'batch': every enabled plate is printed exactly once (factor 1).
+ *       The override is ignored — every plate already counts once.
+ *
+ * @returns {{mode: 'runs'|'share'|'once', runs: number, factor: number,
+ *   shareNum: number, shareDen: number}}
+ */
+function resolvePlateCount(plate, itemsPerSet = 1, plateMode = 'parts') {
+  const { set, ipp } = effectiveRunInputs(itemsPerSet, plate.items_per_plate || plate.itemsPerPlate);
+  if (plateMode === 'batch') {
+    return { mode: 'once', runs: 1, factor: 1, shareNum: set, shareDen: ipp };
+  }
+  if (plate.charge_share_only || plate.chargeShareOnly) {
+    return { mode: 'share', runs: set / ipp, factor: set / ipp, shareNum: set, shareDen: ipp };
+  }
+  const runs = Math.ceil(set / ipp);
+  return { mode: 'runs', runs, factor: runs, shareNum: set, shareDen: ipp };
+}
+
+/**
  * Total print time (minutes) to produce the whole project.
  *
- * For each enabled, non-test plate the printer must run the plate
- * ceil(itemsPerSet / items_per_plate) times. A partially-filled final plate
- * still occupies a FULL print run, so the plate-print count is ROUNDED UP —
- * this deliberately diverges from material grams/cost, which scale linearly.
- * Total = Σ (per-plate time × plate-print count). Uses raw print_time_minutes
- * (no risk multiplier), matching the Time column in the plates table.
+ * Σ (raw per-plate time × charged runs, see resolvePlateCount) over enabled,
+ * non-test plates. Uses raw print_time_minutes (no risk multiplier), matching
+ * the Time column in the plates table.
  *
  * @param {Array<object>} plates – raw plate objects
- *   ({ print_time_minutes, items_per_plate, enabled, is_test_print })
+ *   ({ print_time_minutes, items_per_plate, enabled, is_test_print, charge_share_only })
  * @param {number} itemsPerSet
+ * @param {'parts'|'batch'} plateMode
  * @returns {number} total print time in minutes
  */
-function calculateTotalPrintTime(plates, itemsPerSet = 1) {
+function calculateTotalPrintTime(plates, itemsPerSet = 1, plateMode = 'parts') {
   let totalMinutes = 0;
   for (const plate of plates) {
     const enabled = plate.enabled !== undefined ? !!plate.enabled : true;
     if (!enabled || plate.is_test_print) continue;
     const perPlateMinutes = plate.print_time_minutes || 0;
-    const itemsPerPlate = plate.items_per_plate || 1;
-    const platePrints = Math.ceil((itemsPerSet || 1) / itemsPerPlate);
-    totalMinutes += perPlateMinutes * platePrints;
+    totalMinutes += perPlateMinutes * resolvePlateCount(plate, itemsPerSet, plateMode).factor;
   }
   return totalMinutes;
+}
+
+const COST_KEYS = ['materialCost', 'processingCost', 'electricityCost', 'printerUsageCost'];
+
+/** Zeroed totals accumulator shared by `totals` and `plateSum`. */
+function emptyTotals() {
+  return { materialCost: 0, processingCost: 0, electricityCost: 0, printerUsageCost: 0,
+    totalCost: 0, plasticGrams: 0, minutes: 0 };
+}
+
+/**
+ * What one plate contributes when charged `factor` runs. Money is cents-exact:
+ *   - whole runs / once (integer factor): the plate's per-run cost is rounded to
+ *     cents FIRST, then multiplied by the run count, so the total is what a
+ *     hand calculation with the per-plate figures on screen gives
+ *     (#29: 25 x (8.09 + 1.62) = 242.75, not 25 x 9.7107 = 242.63).
+ *   - share (fractional factor): the share is rounded once, from the raw
+ *     per-run cost (0.4024 x 1/3 -> 0.13), never from an already rounded cost.
+ * `pb` holds the plate's raw per-run costs (calculatePlateCosts output, left
+ * unrounded on purpose: test-print costs must equal plateBreakdowns exactly).
+ */
+function scaleContribution(pb, rawMinutes, factor) {
+  const c = {};
+  const src = pb;
+  const whole = Number.isInteger(factor);
+  for (const k of COST_KEYS) c[k] = whole ? roundToCents(roundToCents(src[k]) * factor) : roundToCents(src[k] * factor);
+  c.totalCost = roundToCents(COST_KEYS.reduce((sum, k) => sum + c[k], 0));
+  c.plasticGrams = pb.totalPlasticGrams * factor;
+  c.minutes = rawMinutes * factor;
+  return c;
+}
+
+function addTotals(acc, c) {
+  for (const k of Object.keys(acc)) acc[k] += c[k];
+  // Money stays whole cents (a sum of cents carries float noise otherwise).
+  for (const k of [...COST_KEYS, 'totalCost']) acc[k] = roundToCents(acc[k]);
+}
+
+/**
+ * Batch-mode quantity check: Σ items_per_plate of the enabled plates vs the
+ * project's items per set. Fewer -> 'short' (red), more -> 'spare' (neutral
+ * info), equal -> 'ok' (nothing shown).
+ */
+function calculateQuantityCheck(enabledPlates, itemsPerSet) {
+  const set = itemsPerSet || 1;
+  const onPlates = enabledPlates.reduce((s, p) => s + (p.itemsPerPlate || 1), 0);
+  if (onPlates < set) {
+    return { status: 'short', onPlates, itemsPerSet: set, shortfall: set - onPlates, spare: 0, sparePct: 0 };
+  }
+  if (onPlates > set) {
+    return { status: 'spare', onPlates, itemsPerSet: set, shortfall: 0,
+      spare: onPlates - set, sparePct: ((onPlates - set) / set) * 100 };
+  }
+  return { status: 'ok', onPlates, itemsPerSet: set, shortfall: 0, spare: 0, sparePct: 0 };
 }
 
 /* ------------------------------------------------------------------ */
@@ -742,12 +847,15 @@ function calculateProject(opts) {
     extraHours = [],
     settings = {},
     itemsPerSet = 1,
+    plateMode: plateModeRaw = 'parts',
     actualSalesPrice = null,
     marginLocked = false,
     targetMarginPct = null,
     lockedMarginPct = null,
     designInvoicedSeparately = false,
   } = opts;
+
+  const plateMode = plateModeRaw === 'batch' ? 'batch' : 'parts';
 
   const s = {
     hourly_rate: Number(settings.hourly_rate) || 40,
@@ -790,6 +898,8 @@ function calculateProject(opts) {
       price_per_kg: plate.material_price_per_kg || 0,
     };
     const costs = calculatePlateCosts(plate, printer, material, s);
+    const count = resolvePlateCount(plate, itemsPerSet, plateMode);
+    const rawMinutes = plate.print_time_minutes || 0;
     return {
       ...costs,
       plateId: plate.id,
@@ -802,12 +912,35 @@ function calculateProject(opts) {
       materialColor: plate.material_color || null,
       materialRollWeightG: Number(plate.material_roll_weight_g) || null,
       colors: Array.isArray(plate.colors) ? plate.colors : [],
+      chargeShareOnly: !!plate.charge_share_only,
+      rawMinutes,
+      count,
+      factor: count.factor,
+      // What this plate adds to the project totals (cost boxes).
+      contribution: scaleContribution(costs, rawMinutes, count.factor),
     };
   });
 
-  // Per-item costs (only enabled, non-test-print plates)
+  // Project totals: only enabled, non-test-print plates, each charged its
+  // resolved run count. Per-item figures are derived (total / itemsPerSet), so
+  // margins and pricing downstream are unchanged in shape.
   const enabledPlates = plateBreakdowns.filter(p => p.enabled && !p.isTestPrint);
-  const perItemCosts = calculatePerItemCosts(enabledPlates);
+  const totals = emptyTotals();
+  const plateSum = emptyTotals(); // raw one-run sum (cross-check row under the plates table)
+  for (const p of enabledPlates) {
+    addTotals(totals, p.contribution);
+    addTotals(plateSum, scaleContribution(p, p.rawMinutes, 1));
+  }
+  const setSize = itemsPerSet || 1;
+  const perItemCosts = {
+    materialCost: totals.materialCost / setSize,
+    processingCost: totals.processingCost / setSize,
+    electricityCost: totals.electricityCost / setSize,
+    printerUsageCost: totals.printerUsageCost / setSize,
+  };
+  perItemCosts.totalPerItem = perItemCosts.materialCost + perItemCosts.processingCost
+    + perItemCosts.electricityCost + perItemCosts.printerUsageCost;
+  const quantityCheck = plateMode === 'batch' ? calculateQuantityCheck(enabledPlates, itemsPerSet) : null;
 
   // Material requirements — total filament grams per material needed for the whole
   // project. Same enabled/non-test filter and same (÷ items_per_plate × items_per_set)
@@ -816,7 +949,7 @@ function calculateProject(opts) {
   const materialRequirements = aggregateMaterialRequirements(enabledPlates, itemsPerSet);
 
   // Total print time for the whole project (enabled non-test plates, ceil per plate)
-  const totalPrintTimeMinutes = calculateTotalPrintTime(plates, itemsPerSet);
+  const totalPrintTimeMinutes = totals.minutes;
 
   // Profit margins
   const profits = applyProfitMargins(perItemCosts, s);
@@ -905,7 +1038,11 @@ function calculateProject(opts) {
   }
 
   return {
+    plateMode,
     plateBreakdowns,
+    totals,
+    plateSum,
+    quantityCheck,
     perItemCosts,
     materialRequirements,
     totalPrintTimeMinutes,
@@ -1087,6 +1224,10 @@ module.exports = {
   calculatePerItemCosts,
   aggregateMaterialRequirements,
   calculateTotalPrintTime,
+  resolvePlateCount,
+  wholeRunsDifferFromShare,
+  roundToCents,
+  calculateQuantityCheck,
   applyProfitMargins,
   calculateExtraCosts,
   calculateExtraHoursCost,

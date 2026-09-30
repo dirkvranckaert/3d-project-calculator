@@ -102,6 +102,12 @@
         <input type="text" id="proj-customer">
         <label>Items per Set</label>
         <input type="number" id="proj-items-per-set" min="1" value="1">
+        <label for="proj-plate-mode">Plate mode</label>
+        <select id="proj-plate-mode" onchange="updatePlateModeHint()">
+          <option value="parts">Parts of one item</option>
+          <option value="batch">Batch run</option>
+        </select>
+        <div id="proj-plate-mode-hint" class="field-hint"></div>
         <label>Target Margin (% excl. VAT)</label>
         <input type="number" id="proj-target-margin" step="0.01" min="-100" max="99.99"
                oninput="updateTargetMarginHint()">
@@ -175,6 +181,13 @@
             <label>Material</label>
             <select id="plate-material"></select>
           </div>
+          <div class="form-group plate-share-group" id="plate-share-group" style="grid-column: 1 / -1">
+            <label class="plate-share-check">
+              <input type="checkbox" id="plate-share-only" onchange="updateShareHelp()">
+              <span id="plate-share-label"></span>
+            </label>
+            <div class="field-hint" id="plate-share-help"></div>
+          </div>
           <div class="form-group" style="grid-column: 1 / -1">
             <label>Notes</label>
             <textarea id="plate-notes" rows="2" placeholder="Optional notes about this plate..."></textarea>
@@ -232,7 +245,8 @@
   </div>
 
   <script src="ntc.js"></script>
-  <script src="app.js"></script>
+  <script src="plate-mode-text.js"></script>
+<script src="app.js"></script>
   <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');</script>
 </body>
 </html>
