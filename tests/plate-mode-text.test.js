@@ -60,4 +60,8 @@ describe('mode + quantity wording', () => {
     expect(short.level).toBe('short');
     expect(short.text).toContain('10 short');
   });
+  test('info hint modifier outranks the base .field-hint warning colour', () => {
+    const css = require('fs').readFileSync(require('path').join(__dirname, '../public/style.css'), 'utf8');
+    expect(css).toMatch(/\.field-hint\.field-hint--info\s*\{/);
+  });
 });

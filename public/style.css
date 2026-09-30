@@ -437,7 +437,7 @@ body {
 }
 
 /* Plate mode (#2135) — uses existing tokens only, so light and dark both work. */
-.field-hint--info { color: var(--text-muted); }
+.field-hint.field-hint--info { color: var(--text-muted); }
 .plate-mode-chip {
   display: inline-block;
   margin-left: 8px;
