@@ -57,6 +57,14 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// A request in the listen -> migration window runs the (idempotent, single
+// write-transaction) lock migration first, so no locked D>0 row is read or
+// written on the old basis.
+let lockMigrationPending = false;
+app.use((req, res, next) => {
+  if (lockMigrationPending) runLockAllInMigration();
+  next();
+});
 app.use(requireAuth);
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -2024,16 +2032,32 @@ app.get('/api/filament-catalog', async (req, res) => {
 const PORT = process.env.PORT || 3003;
 
 // One-shot, price-stable conversion of existing locks to the all-in basis (#2290).
-const lockAllIn = migrateLockedMarginAllIn(getDb(), enrichProject, calc);
-if (lockAllIn.migrated.length || lockAllIn.skipped.length) {
-  console.log('locked_margin_all_in: migrated', lockAllIn.migrated, 'skipped', lockAllIn.skipped);
+// Runs AFTER the port is bound (never before listen: a slow or failing migration
+// must not keep the server from booting) and never kills the process.
+function runLockAllInMigration() {
+  if (!lockMigrationPending) return;
+  lockMigrationPending = false;
+  try {
+    const r = migrateLockedMarginAllIn(getDb(), enrichProject, calc);
+    if (r.migrated.length || r.skipped.length) {
+      console.log('locked_margin_all_in: migrated', r.migrated, 'skipped', r.skipped);
+    }
+  } catch (err) {
+    console.error('locked_margin_all_in migration failed (retries on next start):', err);
+  }
 }
 
 let server;
 if (process.env.NODE_ENV !== 'test') {
+  lockMigrationPending = true;
   server = app.listen(PORT, () => {
     console.log(`Project Calculator running on http://localhost:${PORT}`);
+    setImmediate(runLockAllInMigration);
   });
 }
 
-module.exports = { app, getDb, quoteIdent, enrichProject };
+module.exports = {
+  app, getDb, quoteIdent, enrichProject,
+  // test hooks for the post-listen lock migration (#2290)
+  lockMigration: { run: runLockAllInMigration, setPending: v => { lockMigrationPending = v; } },
+};

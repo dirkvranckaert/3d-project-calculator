@@ -1803,19 +1803,23 @@ function renderPricingSection(p) {
   const lock = c.marginLock;
   const isLocked = !!lock?.locked;
   const effPrice = c.effectiveSalesPrice;
+  // The lock is on the all-in basis whenever setup & design > 0: say so.
+  const lockAllInBasis = (c.designCosts?.designTotal || 0) > 0;
+  const marginWord = lockAllInBasis ? 'All-in margin' : 'Margin';
+  const marginWordA = lockAllInBasis ? 'An all-in margin' : 'A margin';
   let actualBlock = '';
   if (isLocked && !effPrice) {
     // Locked but no price can be derived — say why instead of rendering a blank.
     const why = lock.reason === 'no-cost'
       ? 'No production cost yet, so there is nothing to apply the margin to. Add plates to get a price.'
       : lock.reason === null
-        ? `A margin of ${fmtPct(lock.targetPct)} excl. VAT derives a price that rounds to 0.00. Pick a higher margin.`
-        : `A margin of ${fmtPct(lock.targetPct)} excl. VAT is above the ${lock.maxMarginPct}% cap.`;
+        ? `${marginWordA} of ${fmtPct(lock.targetPct)} excl. VAT derives a price that rounds to 0.00. Pick a higher margin.`
+        : `${marginWordA} of ${fmtPct(lock.targetPct)} excl. VAT is above the ${lock.maxMarginPct}% cap.`;
     actualBlock = `<div class="pricing-block pricing-block--locked">
       <h4>Actual Sales Price (incl. VAT) ${lockBadge(lock)}</h4>
       <div class="big-price" style="opacity:.4">&mdash;</div>
       <div class="sub" style="color:var(--danger)">${why}</div>
-      <div class="sub" style="margin-top:4px">Margin excl. VAT: <span class="margin-badge margin-badge--empty margin-badge--editable"
+      <div class="sub" style="margin-top:4px">${marginWord} excl. VAT: <span class="margin-badge margin-badge--empty margin-badge--editable"
         title="Click to change the locked margin" onclick="promptTargetMargin(${p.id}, ${lock.targetPct})">Change target margin</span></div>
     </div>`;
   } else if (c.actualMargin) {
@@ -1835,7 +1839,9 @@ function renderPricingSection(p) {
       : (isLocked
         ? `Margin on the price excl. VAT — click to change the locked margin`
         : `Margin on the price excl. VAT — click to lock a target margin`);
-    const marginArg = lockPromptArgs(isLocked ? lock.targetPct : am.marginPct, isLocked);
+    // A recorded EUR 0 has no revenue, so its 0% is a sentinel, not an invertible
+    // lock seed: blank prompt (locking must never silently replace a recorded 0).
+    const marginArg = lockPromptArgs(isLocked ? lock.targetPct : (am.actualExclVat > 0 ? am.marginPct : null), isLocked);
     // When unlocked, the price value itself is the edit entry point — clicking
     // it opens the same prompt the margin badge uses. When locked, the price is
     // derived from the margin, so it stays plain and the margin badge is edited.
@@ -1862,7 +1868,7 @@ function renderPricingSection(p) {
           placeholder="Enter price..." onchange="updateActualPrice(${p.id}, this.value)" step="0.01" min="0">
       </div>
       <div class="sub" style="margin-top:4px;opacity:.5">Set your selling price to see actual margin</div>
-      <div class="sub" style="margin-top:4px">Margin excl. VAT: <span class="margin-badge margin-badge--empty margin-badge--editable"
+      <div class="sub" style="margin-top:4px">${marginWord} excl. VAT: <span class="margin-badge margin-badge--empty margin-badge--editable"
         title="No sales price yet — click to lock a target margin and let the price follow it"
         onclick="promptTargetMargin(${p.id}, ${lockPromptArgs(allInSuggested ? (pr.suggestedExclVat > 0 ? pr.suggestedMarginPct : null) : pr.suggestedProductionMarginPct, false)})">Lock margin</span></div>
     </div>`;
@@ -4120,7 +4126,8 @@ function openVerifyModal(projectId) {
 
   const pricing = p.calculation && p.calculation.pricing;
   const productionCost = pricing ? pricing.productionCost : 0;
-  const actualPrice    = p.calculation?.effectiveSalesPrice > 0 ? p.calculation.effectiveSalesPrice : null;
+  // A recorded EUR 0 is a price (actualMargin is set); a lock deriving no price is not.
+  const actualPrice    = p.calculation?.actualMargin ? p.calculation.effectiveSalesPrice : null;
   const suggestedPrice = pricing ? pricing.suggestedPrice : 0;
   const sellingPrice      = actualPrice !== null ? actualPrice : suggestedPrice;
   // Label rename per task #352: project's stored/calculated price → "Calculated selling price"

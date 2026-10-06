@@ -248,6 +248,55 @@ describe('Actual Sales Price card (all-in)', () => {
   });
 });
 
+describe('Codex R1 fixes (#2290)', () => {
+  const marginClick = s => s.match(/promptTargetMargin\(1, ([^)]*)\)/)[1];
+
+  test.each([
+    ['D = 0', () => asProject(run({ actualSalesPrice: 0 }), false, false)],
+    ['absorbed design', () => asProject(withDesign({ actualSalesPrice: 0 }))],
+  ])('recorded EUR 0 (%s): margin badge seeds blank, not the 0%% sentinel', (_n, mk) => {
+    const actual = block(sandbox.renderPricingSection(mk()), 'Actual Sales Price');
+    expect(actual).toContain('€0.00');
+    expect(marginClick(actual)).toBe('null, null');
+  });
+
+  test('a real price still seeds its margin (not blanked)', () => {
+    const actual = block(sandbox.renderPricingSection(asProject(withDesign({ actualSalesPrice: 300 }))), 'Actual Sales Price');
+    expect(marginClick(actual)).not.toBe('null, null');
+  });
+
+  test('labels say All-in margin when D > 0 in the no-price and underivable-lock branches', () => {
+    const noPrice = block(sandbox.renderPricingSection(asProject(withDesign({}))), 'Actual Sales Price');
+    expect(noPrice).toContain('All-in margin excl. VAT:');
+    const locked = withDesign({ designInvoicedSeparately: true, designExtras: [{ amount: 100000 }], marginLocked: true, lockedMarginPct: 40 });
+    const lockedBlock = block(sandbox.renderPricingSection(asProject(locked, true)), 'Actual Sales Price');
+    expect(lockedBlock).toContain('All-in margin excl. VAT:');
+    expect(lockedBlock).toContain('An all-in margin of');
+    // D = 0 keeps the production wording in both
+    const plainNo = block(sandbox.renderPricingSection(asProject(run({}), false, false)), 'Actual Sales Price');
+    expect(plainNo).toContain('>Margin excl. VAT:');
+    expect(plainNo).not.toContain('All-in');
+  });
+
+  test('Verify Batch: recorded EUR 0 is the selling price, a no-price lock is not', () => {
+    const sb = {
+      settings, verifyProjectId: null, verifyProjectRef: null, verifyPlates: [], verifySupplies: [],
+      projects: [], detachedProject: null,
+    };
+    const zero = { id: 5, items_per_set: 1, calculation: { ...withDesign({ actualSalesPrice: 0 }) } };
+    const none = { id: 6, items_per_set: 1, calculation: { ...withDesign({ designInvoicedSeparately: true, designExtras: [{ amount: 100000 }], marginLocked: true, lockedMarginPct: 40 }) } };
+    sb.projects = [zero, none];
+    vm.createContext(sb);
+    const src = extractFn('openVerifyModal');
+    // only the price-selection head of openVerifyModal is under test
+    const head = src.slice(0, src.indexOf('// Reset state'));
+    vm.runInContext(extractFn('findProject') + '\n' + head.replace('function openVerifyModal(projectId) {', 'function pick(projectId) {') + '\n return verifyProjectRef; }', sb);
+    expect(sb.pick(5).sellingPrice).toBe(0);
+    expect(sb.pick(5).sellingPriceLabel).toBe('Calculated selling price');
+    expect(sb.pick(6).sellingPriceLabel).toBe('Suggested price');
+  });
+});
+
 describe('Setup & Design card no longer carries all-in value or profit', () => {
   test.each([false, true])('only headline incl. VAT + excl. VAT line (separately=%s)', (sep) => {
     const html = sandbox.renderPricingSection(asProject(withDesign({ designInvoicedSeparately: sep, actualSalesPrice: 200 }), sep));

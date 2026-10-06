@@ -30,16 +30,22 @@
  * @returns {{ migrated: number[], skipped: number[], alreadyDone: boolean }}
  */
 function migrateLockedMarginAllIn(db, enrich, calc) {
-  const done = db.prepare("SELECT 1 FROM settings WHERE key = 'locked_margin_all_in'").get();
-  if (done) return { migrated: [], skipped: [], alreadyDone: true };
-
   const migrated = [];
   const skipped = [];
-  const rows = db.prepare('SELECT * FROM projects WHERE margin_locked = 1').all();
-  const vatRow = db.prepare("SELECT value FROM settings WHERE key = 'vat_rate'").get();
+  let alreadyDone = false;
   const update = db.prepare('UPDATE projects SET locked_margin_pct = ? WHERE id = ?');
 
+  // Marker check, candidate read, updates and marker write all run inside ONE
+  // write-locked (BEGIN IMMEDIATE) transaction: a concurrent starter blocks on
+  // the lock, then sees the marker and converts nothing, so no row is ever
+  // converted twice.
   const run = db.transaction(() => {
+    if (db.prepare("SELECT 1 FROM settings WHERE key = 'locked_margin_all_in'").get()) {
+      alreadyDone = true;
+      return;
+    }
+    const rows = db.prepare('SELECT * FROM projects WHERE margin_locked = 1').all();
+    const vatRow = db.prepare("SELECT value FROM settings WHERE key = 'vat_rate'").get();
     for (const row of rows) {
       const calculation = enrich(db, row).calculation;
       const design = calculation?.designCosts?.designTotal || 0;
@@ -58,8 +64,8 @@ function migrateLockedMarginAllIn(db, enrich, calc) {
     }
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('locked_margin_all_in', '1')").run();
   });
-  run();
-  return { migrated, skipped, alreadyDone: false };
+  run.immediate();
+  return { migrated, skipped, alreadyDone };
 }
 
 module.exports = { migrateLockedMarginAllIn };
