@@ -40,9 +40,9 @@ const sandbox = {
 };
 vm.createContext(sandbox);
 vm.runInContext(
-  extractFn('fmt') + '\n' +
+  'const MAX_MARGIN_PCT = 100;\n' + extractFn('fmt') + '\n' +
   extractFn('fmtPct') + '\n' +
-  extractFn('lockBadge') + '\n' +
+  extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' +
   extractFn('renderPricingSection'),
   sandbox
 );
@@ -125,7 +125,7 @@ describe('pricing section — margin affordance', () => {
   test('the suggested-price margin is display-only', () => {
     for (const name of Object.keys(states)) {
       const html = renderPricingSection(states[name]);
-      const suggested = html.slice(html.indexOf('<h4>Suggested Price</h4>'));
+      const suggested = html.slice(html.indexOf('<h4>Suggested Price (incl. VAT)</h4>'));
       const block = suggested.slice(0, suggested.indexOf('</div>', suggested.indexOf('margin-badge')));
       expect(block).not.toContain('margin-badge--editable');
       expect(block).not.toContain('promptTargetMargin');
@@ -193,7 +193,7 @@ describe('pricing section — margin display', () => {
   test('the suggested-price margin is unaffected by the lock', () => {
     const p = project({ marginLocked: true, targetMarginPct: 60 });
     const html = renderPricingSection(p);
-    const suggested = html.slice(html.indexOf('<h4>Suggested Price</h4>'));
+    const suggested = html.slice(html.indexOf('<h4>Suggested Price (incl. VAT)</h4>'));
     expect(suggested).toContain(
       `>${p.calculation.pricing.suggestedMarginPct.toFixed(2)}%<`
     );

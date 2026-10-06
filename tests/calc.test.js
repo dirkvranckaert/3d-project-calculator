@@ -1141,10 +1141,12 @@ describe('calculateProject — design cost module', () => {
       isCustom: false,
     });
 
-    // Production cost and pricing are identical regardless of design hours
+    // Production cost and the component total are identical regardless of design
+    // hours. The suggested price now absorbs design (all-in basis, 2026-10-06),
+    // so it is higher — see the 'suggested price all-in basis' describe.
     expect(withDesign.pricing.productionCost).toBeCloseTo(withoutDesign.pricing.productionCost, 4);
     expect(withDesign.pricing.totalExclVat).toBeCloseTo(withoutDesign.pricing.totalExclVat, 4);
-    expect(withDesign.pricing.suggestedPrice).toBeCloseTo(withoutDesign.pricing.suggestedPrice, 4);
+    expect(withDesign.pricing.suggestedPrice).toBeGreaterThan(withoutDesign.pricing.suggestedPrice);
   });
 
   // Reference project (Dirk, set of 100), reproduced end-to-end through
