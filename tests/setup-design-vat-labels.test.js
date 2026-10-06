@@ -43,7 +43,7 @@ vm.createContext(sandbox);
 vm.runInContext(
   'const MAX_MARGIN_PCT = 100;\n' + extractFn('fmt') + '\n' +
   extractFn('fmtPct') + '\n' +
-  extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' +
+  extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' + extractFn('lockPromptArgs') + '\n' +
   extractFn('renderPricingSection'),
   sandbox
 );
@@ -112,10 +112,9 @@ describe('Setup & Design card — VAT basis', () => {
     expect(block).toContain(`<div class="sub">€${DESIGN_EXCL.toFixed(2)} excl. VAT</div>`);
   });
 
-  // The per-item design-cost line was removed 2026-08-31 (Dirk) — the All-in
-  // / item line below already carries the per-item reading; this one was
-  // redundant and easy to misread as addable to it.
-  test('the per-item design-cost line is gone — only the all-in line remains', () => {
+  // The per-item design-cost line was removed 2026-08-31 (Dirk); the All-in /
+  // item line that replaced it was removed 2026-10-06 (#2290).
+  test('the per-item design-cost line is gone', () => {
     const block = designBlock(renderPricingSection(customProject({ itemsPerSet: 40 })));
     expect(block).not.toContain('/ item excl.');
   });
@@ -139,22 +138,3 @@ describe('Setup & Design card — VAT basis', () => {
   });
 });
 
-describe('Setup & Design card — the all-in line is unchanged', () => {
-  test('all-in excl. VAT is the ex-VAT sales price plus the ex-VAT setup', () => {
-    const p = customProject();
-    const block = designBlock(renderPricingSection(p));
-    const expected = (p.calculation.actualMargin.actualExclVat + DESIGN_EXCL) / 40;
-    const m = block.match(/All-in value \/ item: €([\d.]+) excl\./);
-    expect(m).not.toBeNull();
-    expect(Number(m[1])).toBeCloseTo(expected, 2);
-  });
-
-  test('all-in incl. VAT applies VAT once, to the whole', () => {
-    const p = customProject();
-    const block = designBlock(renderPricingSection(p));
-    const expected = ((p.calculation.actualMargin.actualExclVat + DESIGN_EXCL) * VAT) / 40;
-    const m = block.match(/excl\. &middot; €([\d.]+) incl\. VAT<\/strong>/);
-    expect(m).not.toBeNull();
-    expect(Number(m[1])).toBeCloseTo(expected, 2);
-  });
-});

@@ -42,7 +42,7 @@ vm.createContext(sandbox);
 vm.runInContext(
   'const MAX_MARGIN_PCT = 100;\n' + extractFn('fmt') + '\n' +
   extractFn('fmtPct') + '\n' +
-  extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' +
+  extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' + extractFn('lockPromptArgs') + '\n' +
   extractFn('renderPricingSection'),
   sandbox
 );
@@ -144,7 +144,7 @@ describe('pricing section — margin affordance', () => {
     expect(badge).toContain('Lock margin');
     // Seeded with the suggested margin so the dialog opens on a sane number.
     const suggested = states['no actual price, no lock'].calculation.pricing.suggestedMarginPct;
-    expect(badge).toContain(`promptTargetMargin(42, ${suggested.toFixed(2)})`);
+    expect(badge).toContain(`promptTargetMargin(42, ${suggested.toFixed(2)}, ${suggested})`);
   });
 });
 

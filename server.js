@@ -7,6 +7,7 @@ const path = require('path');
 const express = require('express');
 const { getDb, getSetting, setSetting, getAllSettings } = require('./db');
 const calc = require('./calc');
+const { migrateLockedMarginAllIn } = require('./migrate-lock-all-in');
 const { parse3mf, extractThumbnails } = require('./parse3mf');
 const sharedAuth = require('./shared-auth');
 const { readReleaseInfo } = require('./lib/release-info');
@@ -1817,15 +1818,17 @@ app.post('/api/materials/:id/price-impact', (req, res) => {
       current: {
         productionCost: currentPricing.productionCost,
         suggestedPrice: currentPricing.suggestedPrice,
-        marginPct: enriched.calculation.effectiveSalesPrice
-          ? enriched.calculation.actualMargin?.marginPct
+        // One basis per project: actualMargin and suggestedMarginPct are both
+        // all-in when the project carries setup & design, production otherwise.
+        marginPct: enriched.calculation.actualMargin
+          ? enriched.calculation.actualMargin.marginPct
           : currentPricing.suggestedMarginPct,
       },
       simulated: {
         productionCost: newPricing.productionCost,
         suggestedPrice: newPricing.suggestedPrice,
-        marginPct: newEnriched.calculation.effectiveSalesPrice
-          ? newEnriched.calculation.actualMargin?.marginPct
+        marginPct: newEnriched.calculation.actualMargin
+          ? newEnriched.calculation.actualMargin.marginPct
           : newPricing.suggestedMarginPct,
       },
     });
@@ -2020,6 +2023,12 @@ app.get('/api/filament-catalog', async (req, res) => {
 /* ------------------------------------------------------------------ */
 const PORT = process.env.PORT || 3003;
 
+// One-shot, price-stable conversion of existing locks to the all-in basis (#2290).
+const lockAllIn = migrateLockedMarginAllIn(getDb(), enrichProject, calc);
+if (lockAllIn.migrated.length || lockAllIn.skipped.length) {
+  console.log('locked_margin_all_in: migrated', lockAllIn.migrated, 'skipped', lockAllIn.skipped);
+}
+
 let server;
 if (process.env.NODE_ENV !== 'test') {
   server = app.listen(PORT, () => {
@@ -2027,4 +2036,4 @@ if (process.env.NODE_ENV !== 'test') {
   });
 }
 
-module.exports = { app, getDb, quoteIdent };
+module.exports = { app, getDb, quoteIdent, enrichProject };
