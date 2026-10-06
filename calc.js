@@ -428,9 +428,13 @@ function calculateFinalPricing(opts) {
   // Profit on suggested price, ex-VAT basis — the money actually kept.
   // Margin = (sales_excl_vat - production_cost) / sales_excl_vat * 100
   const suggestedProductionProfit = suggestedExclVat - productionCost;
+  // Zero suggested revenue (invoiced-separately clamp, D >= P/(1-m)) leaves the
+  // production margin undefined: null is a NON-LOCKABLE sentinel. A 0% here
+  // would seed the margin lock with a price (P x (1+VAT)) that is not the
+  // clamped EUR 0 suggestion.
   const suggestedProductionMarginPct = suggestedExclVat > 0
     ? (suggestedProductionProfit / suggestedExclVat) * 100
-    : 0;
+    : null;
   // With setup & design the badge/profit line report the all-in figures, so they
   // match the target the suggested price was solved for.
   const suggestedAllIn = allInBasis
@@ -442,7 +446,7 @@ function calculateFinalPricing(opts) {
     })
     : null;
   const suggestedProfitAmount = suggestedAllIn ? suggestedAllIn.profitAmount : suggestedProductionProfit;
-  const suggestedMarginPct = suggestedAllIn ? suggestedAllIn.marginPct : suggestedProductionMarginPct;
+  const suggestedMarginPct = suggestedAllIn ? suggestedAllIn.marginPct : (suggestedProductionMarginPct ?? 0);
   // Unrounded price (incl. VAT) that exactly hits the target on the basis above.
   const minPriceForTarget = Number.isFinite(targetPrice) ? targetPrice : 0;
 

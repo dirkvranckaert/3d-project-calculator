@@ -188,3 +188,88 @@ describe('round 1: lock seed stays inside what the lock accepts', () => {
     expect(sb.lockSeedMarginPct(42.5)).toBe('42.50');
   });
 });
+
+/* ---- review round 2 ------------------------------------------------------ */
+
+const sandbox2 = { settings, MAX_MARGIN_PCT: calc.maxReachableMarginPct() };
+vm.createContext(sandbox2);
+vm.runInContext(
+  extractFn('fmt') + '\n' + extractFn('fmtPct') + '\n' + extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' +
+  extractFn('renderPricingSection') + '\n' + extractFn('renderSummaryCard') + '\n' +
+  'function renderTagsPills() { return ""; }\nfunction esc(s) { return String(s); }',
+  sandbox2
+);
+const asProject2 = (calculation, sep) => ({
+  id: 1, name: 'x', items_per_set: 1, is_custom: 1, design_invoiced_separately: sep ? 1 : 0,
+  actual_sales_price: calculation.effectiveSalesPrice || null, plates: [plate], calculation,
+});
+const designBlock2 = html => {
+  const s = html.indexOf('<h4>Setup &amp; Design');
+  return html.slice(s, html.indexOf('<div class="pricing-block', s));
+};
+const allInValue = html => Number(designBlock2(html).match(/All-in value \/ item: €([\d.]+) excl\./)[1]);
+
+describe('round 2: all-in value card, suggested basis', () => {
+  test('absorbed: value = suggested price (design NOT added again) == allInMargin.revenue', () => {
+    const r = withDesign();
+    const v = allInValue(sandbox2.renderPricingSection(asProject2(r, false)));
+    expect(v).toBeCloseTo(r.pricing.suggestedExclVat, 2);
+    expect(v).toBeCloseTo(r.allInMargin.revenue, 2);
+  });
+
+  test('invoiced separately: value = suggested component + design == allInMargin.revenue', () => {
+    const r = withDesign({ designInvoicedSeparately: true, designExtras: [{ amount: 10 }] });
+    const v = allInValue(sandbox2.renderPricingSection(asProject2(r, true)));
+    expect(v).toBeCloseTo(r.pricing.suggestedExclVat + 10, 2);
+    expect(v).toBeCloseTo(r.allInMargin.revenue, 2);
+  });
+
+  test('actual price basis keeps adding design (unchanged rule)', () => {
+    const r = withDesign({ actualSalesPrice: 300 });
+    const v = allInValue(sandbox2.renderPricingSection(asProject2(r, false)));
+    expect(v).toBeCloseTo(r.actualMargin.actualExclVat + DESIGN, 2);
+  });
+});
+
+describe('round 2: zero suggested revenue is a non-lockable sentinel', () => {
+  const clamp = () => run({ isCustom: true, designExtras: [{ amount: 100000 }], designInvoicedSeparately: true });
+
+  test('clamped to 0 -> suggestedProductionMarginPct null, lock seed blank, display margin stays numeric', () => {
+    const r = clamp();
+    expect(r.pricing.suggestedExclVat).toBe(0);
+    expect(r.pricing.productionCost).toBeGreaterThan(0);
+    expect(r.pricing.suggestedProductionMarginPct).toBeNull();
+    expect(sandbox2.lockSeedMarginPct(r.pricing.suggestedProductionMarginPct)).toBeNull();
+    expect(Number.isFinite(r.pricing.suggestedMarginPct)).toBe(true);
+  });
+
+  test('"Lock margin" prompt is seeded blank in the clamp case (no fallback to the all-in %)', () => {
+    const html = sandbox2.renderPricingSection(asProject2(clamp(), true));
+    expect(html).toMatch(/promptTargetMargin\(1, null\)/);
+  });
+
+  test('no design, no cost fallback: production margin null, suggestedMarginPct 0', () => {
+    const zeroPlate = { ...plate, print_time_minutes: 0, plastic_grams: 0, printer_kwh_per_hour: 0, printer_purchase_price: 0 };
+    const r = run({ plates: [zeroPlate] });
+    expect(r.pricing.suggestedProductionMarginPct).toBeNull();
+    expect(r.pricing.suggestedMarginPct).toBe(0);
+  });
+});
+
+describe('round 2: labels name the all-in basis', () => {
+  test('summary card (suggested state, all-in) says All-in margin; production basis keeps old label', () => {
+    expect(sandbox2.renderSummaryCard(asProject2(withDesign(), false))).toContain('All-in margin excl. VAT</span>');
+    const plain = sandbox2.renderSummaryCard(asProject2(run({ isCustom: true }), false));
+    expect(plain).toContain('>Margin excl. VAT</span>');
+    expect(plain).not.toContain('All-in margin');
+  });
+
+  test('summary card with an actual price shows the production margin label', () => {
+    const html = sandbox2.renderSummaryCard(asProject2(withDesign({ actualSalesPrice: 300 }), false));
+    expect(html).toContain('>Margin excl. VAT</span>');
+  });
+
+  test('Suggested Price headline carries (incl. VAT)', () => {
+    expect(sandbox2.renderPricingSection(asProject2(withDesign(), false))).toContain('<h4>Suggested Price (incl. VAT)</h4>');
+  });
+});

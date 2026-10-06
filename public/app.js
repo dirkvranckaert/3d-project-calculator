@@ -493,6 +493,7 @@ function renderSummaryCard(p) {
   const displayPrice = hasActual ? effectivePrice : (pr.suggestedPrice || 0);
   const indicator = hasActual ? c?.actualIndicator : c?.suggestedIndicator;
   const marginPct = hasActual ? c?.actualMargin?.marginPct : pr.suggestedMarginPct;
+  const marginAllIn = !hasActual && pr.suggestedBasis === 'all-in';
 
   return `
   <div class="summary-card ${p.archived ? 'summary-card-archived' : ''}" data-project-id="${p.id}" onclick="navigate('#/project/${p.id}')" oncontextmenu="showProjectContextMenu(event, ${p.id})">
@@ -516,7 +517,7 @@ function renderSummaryCard(p) {
       <div class="summary-stat"><span class="summary-stat-label">Production</span><span class="summary-stat-value">${fmt(pr.productionCost)}</span></div>
       <div class="summary-stat"><span class="summary-stat-label">Suggested</span><span class="summary-stat-value">${fmt(pr.suggestedPrice)}</span></div>
       <div class="summary-stat"><span class="summary-stat-label">Actual</span><span class="summary-stat-value">${hasActual ? `${fmt(effectivePrice)}${c?.marginLock?.locked ? ' <span class="lock-badge lock-badge--mini" title="Margin locked">&#128274;</span>' : ''}` : '<span style="opacity:.4">-</span>'}</span></div>
-      <div class="summary-stat"><span class="summary-stat-label" title="Margin on the price excl. VAT">Margin excl. VAT</span><span class="summary-stat-value"><span class="margin-badge ${indicator || 'green'}">${marginPct != null ? fmtPct(marginPct) : '-'}</span></span></div>
+      <div class="summary-stat"><span class="summary-stat-label" title="${marginAllIn ? 'All-in margin excl. VAT (production cost + setup &amp; design)' : 'Margin on the price excl. VAT'}">${marginAllIn ? 'All-in margin excl. VAT' : 'Margin excl. VAT'}</span><span class="summary-stat-value"><span class="margin-badge ${indicator || 'green'}">${marginPct != null ? fmtPct(marginPct) : '-'}</span></span></div>
     </div>
     <div class="summary-card-meta">${productionPlateCount} plate${productionPlateCount !== 1 ? 's' : ''}${p.items_per_set > 1 ? ` \u00b7 set of ${p.items_per_set}` : ''}</div>
     ${renderTagsPills(p.tags)}
@@ -1850,14 +1851,18 @@ function renderPricingSection(p) {
       <div class="sub" style="margin-top:4px;opacity:.5">Set your selling price to see actual margin</div>
       <div class="sub" style="margin-top:4px">Margin excl. VAT: <span class="margin-badge margin-badge--empty margin-badge--editable"
         title="No sales price yet — click to lock a target margin and let the price follow it"
-        onclick="promptTargetMargin(${p.id}, ${lockSeedMarginPct(pr.suggestedProductionMarginPct ?? pr.suggestedMarginPct)})">Lock margin</span></div>
+        onclick="promptTargetMargin(${p.id}, ${lockSeedMarginPct(pr.suggestedProductionMarginPct)})">Lock margin</span></div>
     </div>`;
   }
 
   const basisActual = effPrice > 0 && !!c.actualMargin;
   const baseExclSet = basisActual ? c.actualMargin.actualExclVat : pr.suggestedExclVat;
   const basisLabel = basisActual ? 'actual sales price' : 'suggested price';
-  const allInExclSet = baseExclSet + (c.designCosts?.designTotal || 0);
+  // Suggested basis, absorbed: the suggested price already contains design
+  // (R = (P + D) / (1 - m)), so adding D again double-counts it. The actual
+  // price keeps its explicit always-add rule; invoiced separately always adds.
+  const designAlreadyInBase = !basisActual && allInSuggested && !p.design_invoiced_separately;
+  const allInExclSet = baseExclSet + (designAlreadyInBase ? 0 : (c.designCosts?.designTotal || 0));
   const allInInclSet = allInExclSet * vatMult;
 
   // `designTotal` is an excl. VAT figure — every setup & design input is entered
@@ -1900,7 +1905,7 @@ function renderPricingSection(p) {
     </div>
     ${designCostBlock}
     <div class="pricing-block">
-      <h4>Suggested Price</h4>
+      <h4>Suggested Price (incl. VAT)</h4>
       <div class="big-price">${fmt(pr.suggestedPrice)}</div>
       <div class="sub">${fmt(pr.suggestedExclVat)} excl. VAT</div>
       <div class="sub">Profit excl. VAT: ${fmt(pr.suggestedProfitAmount)} <span class="margin-badge ${c.suggestedIndicator}"
