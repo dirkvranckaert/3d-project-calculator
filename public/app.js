@@ -2530,8 +2530,9 @@ const MAX_MARGIN_PCT = 100;
 // gives 100%). Below -100 IS accepted: invoiced-separately design can need it.
 function lockSeedMarginPct(raw) {
   if (!Number.isFinite(raw)) return null;
-  const seed = raw.toFixed(2);
-  return Number(seed) < MAX_MARGIN_PCT ? seed : null;
+  // Eligibility on the full-precision value: 99.999 is a valid pin below the cap
+  // even though its 2-decimal text rounds to 100.00.
+  return raw < MAX_MARGIN_PCT ? raw.toFixed(2) : null;
 }
 
 // Args for `promptTargetMargin(id, shown, exact)`. `shown` is the 2-decimal text
@@ -2578,8 +2579,8 @@ async function promptTargetMargin(projectId, current, exact = null) {
     title: 'Lock target margin',
     message: `Enter the margin you want to hold, measured on the price excl. VAT. ${lockDesign > 0
       ? (lockSeparate
-        ? 'Setup &amp; design is invoiced on top of the unit price and counted in revenue, so this is the all-in margin: (revenue + setup &amp; design - production cost) / (revenue + setup &amp; design).'
-        : 'Setup &amp; design is absorbed into the unit price, so this is the all-in margin: (revenue - production cost - setup &amp; design) / revenue.')
+        ? 'Setup & design is invoiced on top of the unit price and counted in revenue, so this is the all-in margin: (revenue + setup & design - production cost) / (revenue + setup & design).'
+        : 'Setup & design is absorbed into the unit price, so this is the all-in margin: (revenue - production cost - setup & design) / revenue.')
       : 'The margin is measured against the production cost.'} The sales price is recalculated from it and follows it when costs change. Must be below ${maxPct}% — margin is profit as a share of the selling price, so ${maxPct}% would mean an infinite price.`,
     label: 'Target margin excl. VAT (%)',
     placeholder: '60',

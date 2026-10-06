@@ -291,9 +291,6 @@ function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21, des
     ? NaN
     : Number(targetMarginPct);
   const maxMarginPct = MAX_MARGIN_PCT;
-  const base = { price: null, rawPrice: null, maxMarginPct };
-  if (!Number.isFinite(target)) return { ...base, reason: 'unreachable' };
-  if (target >= maxMarginPct) return { ...base, reason: 'unreachable' };
   // ALL-IN BASIS (Dirk 2026-10-06): with setup & design (D > 0) the lock pins the
   // ALL-IN margin, the exact inverse of `calculateAllInMargin`:
   //   absorbed:            R = (P + D) / (1 - m)
@@ -308,6 +305,14 @@ function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21, des
   // 'production' basis keeps inverting P / (1 - m), so its price never moves.
   const legacyBasis = design?.lockBasis === 'production';
   const allIn = designExcl > 0 && !legacyBasis;
+  // The per-row basis rides on EVERY return, early exits included: the UI reads it
+  // to label a legacy production lock and pick its prompt path even when unpriceable.
+  const base = {
+    price: null, rawPrice: null, maxMarginPct,
+    ...(designExcl > 0 ? { basis: allIn ? 'all-in' : 'production' } : {}),
+  };
+  if (!Number.isFinite(target)) return { ...base, reason: 'unreachable' };
+  if (target >= maxMarginPct) return { ...base, reason: 'unreachable' };
   if (!(Number(productionCost) > 0) && !allIn) return { ...base, reason: 'no-cost' };
   // `(100 - target) / 100`, never `1 - target / 100`. The two are algebraically
   // equal but not in floating point: a target a hair under the cap makes the

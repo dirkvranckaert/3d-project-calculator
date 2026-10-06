@@ -183,7 +183,9 @@ describe('round 1: lock seed stays inside what the lock accepts', () => {
 
   test('zero production cost (100% margin) or non-finite -> blank seed, never an invalid value', () => {
     expect(sb.lockSeedMarginPct(100)).toBeNull();
-    expect(sb.lockSeedMarginPct(99.996)).toBeNull();
+    // eligibility on the full-precision value (R3): 99.996 < cap is a valid pin
+    expect(sb.lockSeedMarginPct(99.996)).toBe('100.00');
+    expect(sb.lockSeedMarginPct(100.004)).toBeNull();
     expect(sb.lockSeedMarginPct(NaN)).toBeNull();
     expect(sb.lockSeedMarginPct(42.5)).toBe('42.50');
   });

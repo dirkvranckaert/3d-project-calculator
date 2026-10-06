@@ -388,3 +388,45 @@ describe('per-row lock basis (calc + UI, #2290 R2)', () => {
     expect(sb.captured.message).not.toContain('plus setup');
   });
 });
+
+describe('Codex R3 fixes (#2290)', () => {
+  test('lockPromptArgs: eligibility on full precision, 99.999% seeds (finding 1)', () => {
+    expect(sandbox.lockPromptArgs(99.999, false)).toBe('100.00, 99.999');
+    expect(sandbox.lockPromptArgs(99.999, true)).toBe('100.00, 99.999');
+    expect(sandbox.lockPromptArgs(100, false)).toBe('null, null');
+    expect(sandbox.lockPromptArgs(100.004, false)).toBe('null, null');
+    expect(sandbox.lockSeedMarginPct(99.99)).toBe('99.99');
+  });
+
+  test.each([
+    ['unreachable (target >= cap)', 10, 100],
+    ['unreachable (no target)', 10, null],
+    ['no-cost', 0, 60],
+  ])('calculateLockedPrice attaches the per-row basis on early returns: %s (finding 2)', (name, cost, target) => {
+    const legacy = calc.calculateLockedPrice(cost, target, 21, { designTotalExcl: 50, lockBasis: 'production' });
+    expect(legacy.price).toBeNull();
+    expect(legacy.basis).toBe('production');
+    if (name !== 'no-cost') {
+      expect(calc.calculateLockedPrice(cost, target, 21, { designTotalExcl: 50 }).basis).toBe('all-in');
+    }
+    // D = 0: no basis key, byte-identical to before
+    expect(calc.calculateLockedPrice(cost, target, 21)).not.toHaveProperty('basis');
+  });
+
+  test('lock dialog message is text-only: literal ampersand, no HTML entities (finding 3)', async () => {
+    for (const sep of [false, true]) {
+      const sb = {
+        MAX_MARGIN_PCT: 100, settings, detachedProject: null, captured: null,
+        projects: [{ id: 3, design_invoiced_separately: sep ? 1 : 0, calculation: { pricing: { productionCost: 10 }, designCosts: { designTotal: 50 } } }],
+      };
+      sb.showPrompt = async o => { sb.captured = o; return null; };
+      vm.createContext(sb);
+      vm.runInContext(['findProject', 'lockDerivedPrice'].map(extractFn).join('\n') + '\nasync ' + extractFn('promptTargetMargin'), sb);
+      await sb.promptTargetMargin(3, null);
+      expect(sb.captured.message).toContain('Setup & design');
+      for (const s of [sb.captured.title, sb.captured.message, sb.captured.label, sb.captured.validate('abc')]) {
+        expect(s).not.toMatch(/&(amp|lt|gt|quot|#\d+);/);
+      }
+    }
+  });
+});
