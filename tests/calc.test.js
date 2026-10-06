@@ -474,8 +474,10 @@ describe('calculateActualMargin', () => {
     expect(r.marginPct).toBeCloseTo(oldBasisPct * 1.21, 6);
   });
 
-  test('returns null for zero/missing price', () => {
-    expect(calc.calculateActualMargin(0, 1.00, 21)).toBeNull();
+  test('returns null for missing price; a recorded 0 is a price (#2290)', () => {
+    expect(calc.calculateActualMargin(0, 1.00, 21)).toEqual({ actualExclVat: 0, profitAmount: -1, marginPct: 0 });
+    expect(calc.calculateActualMargin(-5, 1.00, 21)).toBeNull();
+    expect(calc.calculateActualMargin(undefined, 1.00, 21)).toBeNull();
     expect(calc.calculateActualMargin(null, 1.00, 21)).toBeNull();
   });
 

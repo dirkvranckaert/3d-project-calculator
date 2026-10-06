@@ -284,17 +284,36 @@ function roundToCents(value) {
  *   'unreachable' — target margin >= the hard cap (100%)
  *   'no-cost'     — production cost is 0 or missing, so there is nothing to mark up
  */
-function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21) {
+function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21, design = null) {
   // `Number(null)` and `Number('')` are 0, which would silently price a lock
   // with no target at a 0% margin. Treat absent as absent.
   const target = (targetMarginPct === null || targetMarginPct === undefined || targetMarginPct === '')
     ? NaN
     : Number(targetMarginPct);
   const maxMarginPct = MAX_MARGIN_PCT;
-  const base = { price: null, rawPrice: null, maxMarginPct };
+  // ALL-IN BASIS (Dirk 2026-10-06): with setup & design (D > 0) the lock pins the
+  // ALL-IN margin, the exact inverse of `calculateAllInMargin`:
+  //   absorbed:            R = (P + D) / (1 - m)
+  //   invoiced separately: R = P / (1 - m) - D   (clamped at 0)
+  // `design.lockBasis === 'production'` (legacy rows) keeps the old inverse.
+  // D = 0 is the untouched production path below, byte-identical.
+  // `design` = { designTotalExcl, designInvoicedSeparately } (an object, so a
+  // stray numeric 4th arg such as the old price ending can never read as design).
+  const designExcl = Number(design?.designTotalExcl) > 0 ? Number(design.designTotalExcl) : 0;
+  const designInvoicedSeparately = !!design?.designInvoicedSeparately;
+  // Per-row basis (`projects.locked_margin_basis`): a legacy lock stored on the
+  // 'production' basis keeps inverting P / (1 - m), so its price never moves.
+  const legacyBasis = design?.lockBasis === 'production';
+  const allIn = designExcl > 0 && !legacyBasis;
+  // The per-row basis rides on EVERY return, early exits included: the UI reads it
+  // to label a legacy production lock and pick its prompt path even when unpriceable.
+  const base = {
+    price: null, rawPrice: null, maxMarginPct,
+    ...(designExcl > 0 ? { basis: allIn ? 'all-in' : 'production' } : {}),
+  };
   if (!Number.isFinite(target)) return { ...base, reason: 'unreachable' };
   if (target >= maxMarginPct) return { ...base, reason: 'unreachable' };
-  if (!(Number(productionCost) > 0)) return { ...base, reason: 'no-cost' };
+  if (!(Number(productionCost) > 0) && !allIn) return { ...base, reason: 'no-cost' };
   // `(100 - target) / 100`, never `1 - target / 100`. The two are algebraically
   // equal but not in floating point: a target a hair under the cap makes the
   // second cancel catastrophically (at 99.99999999999999 it is out by 28%), and
@@ -302,7 +321,12 @@ function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21) {
   // keeps the significant digits. Dividing the cost by that fraction, rather
   // than multiplying the cost by 100 first, also keeps a huge cost from
   // overflowing on its way to a perfectly finite price.
-  const priceExVat = Number(productionCost) / ((100 - target) / 100);
+  const cost = Number(productionCost) > 0 ? Number(productionCost) : 0;
+  const divisor = (100 - target) / 100;
+  let priceExVat;
+  if (!allIn) priceExVat = Number(productionCost) / divisor;
+  else if (designInvoicedSeparately) priceExVat = Math.max(0, cost / divisor - designExcl);
+  else priceExVat = (cost + designExcl) / divisor;
   const rawPrice = priceExVat * (1 + vatRate / 100);
   const price = roundToCents(rawPrice);
   // A target close enough to the cap overflows on a large enough cost — and
@@ -318,6 +342,7 @@ function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21) {
     rawPrice,
     reason: null,
     maxMarginPct,
+    ...(designExcl > 0 ? { basis: allIn ? 'all-in' : 'production' } : {}),
   };
 }
 
@@ -475,12 +500,35 @@ function calculateFinalPricing(opts) {
  * `profitAmount` / `marginPct` are the ex-VAT reading — (excl_vat - cost) /
  * excl_vat — the money actually kept, and the only margin the app reports.
  */
-function calculateActualMargin(actualSalesPrice, productionCost, vatRate) {
-  if (!actualSalesPrice || actualSalesPrice <= 0) return null;
-  const actualExclVat = actualSalesPrice / (1 + vatRate / 100);
-  const profitAmount = actualExclVat - productionCost;
-  const marginPct = actualExclVat > 0 ? (profitAmount / actualExclVat) * 100 : 0;
-  return { actualExclVat, profitAmount, marginPct };
+function calculateActualMargin(actualSalesPrice, productionCost, vatRate, design = null) {
+  // 0 is a RECORDED price (a free job, or the invoiced-separately clamp advice),
+  // not absence: only null / undefined / '' / non-finite / negative mean "no price".
+  if (actualSalesPrice === null || actualSalesPrice === undefined || actualSalesPrice === '') return null;
+  const price = Number(actualSalesPrice);
+  if (!Number.isFinite(price) || price < 0) return null;
+  const actualExclVat = price / (1 + vatRate / 100);
+  const productionProfit = actualExclVat - productionCost;
+  const productionMarginPct = actualExclVat > 0 ? (productionProfit / actualExclVat) * 100 : 0;
+  const designExcl = Number(design?.designTotalExcl) > 0 ? Number(design.designTotalExcl) : 0;
+  if (designExcl > 0) {
+    // ALL-IN BASIS (Dirk 2026-10-06): same formula as the suggested price's
+    // profit/margin, so actual === suggested reads identically.
+    const ai = calculateAllInMargin({
+      actualExclVat,
+      productionCost,
+      designTotalExcl: designExcl,
+      designInvoicedSeparately: !!design.designInvoicedSeparately,
+    });
+    return {
+      actualExclVat,
+      profitAmount: ai.profitAmount,
+      marginPct: ai.marginPct,
+      basis: 'all-in',
+      productionProfitAmount: productionProfit,
+      productionMarginPct,
+    };
+  }
+  return { actualExclVat, profitAmount: productionProfit, marginPct: productionMarginPct };
 }
 
 /**
@@ -876,6 +924,8 @@ function calculateQuantityCheck(enabledPlates, itemsPerSet) {
  *     value (rows predating the column); a stored value always wins, so editing
  *     the global default never moves an existing project.
  *   - testPrints: Array<{estimated_cost, attachmentBreakdowns}> (custom projects)
+ *   - lockedMarginBasis: 'all-in' | 'production' — basis the stored pin was set
+ *     on (`projects.locked_margin_basis`); only matters when setup & design > 0.
  *   - lockedMarginPct: number | null — the LOCK's own pin, independent of
  *     targetMarginPct (task #736). Used only when marginLocked is true, and
  *     only to derive the actual sales price. No fallback to targetMarginPct:
@@ -896,6 +946,7 @@ function calculateProject(opts) {
     marginLocked = false,
     targetMarginPct = null,
     lockedMarginPct = null,
+    lockedMarginBasis = 'all-in',
     designInvoicedSeparately = false,
   } = opts;
 
@@ -1047,7 +1098,9 @@ function calculateProject(opts) {
     // No `price_rounding` here on purpose — the price ending is for the
     // suggested price only; a locked actual price is exact to the cent.
     const lock = calculateLockedPrice(
-      pricing.productionCost, lockedMarginPct, s.vat_rate
+      pricing.productionCost, lockedMarginPct, s.vat_rate,
+      { designTotalExcl: designCosts ? designCosts.designTotal : 0, designInvoicedSeparately,
+        lockBasis: lockedMarginBasis === 'production' ? 'production' : 'all-in' }
     );
     marginLock = { locked: true, targetPct: lockedMarginPct, ...lock };
     // A lock with no derivable price falls back to no actual price at all
@@ -1058,10 +1111,16 @@ function calculateProject(opts) {
   // Actual price margin — computed from the locked price when a lock is active.
   let actualMargin = null;
   let actualIndicator = null;
-  if (effectiveSalesPrice && effectiveSalesPrice > 0) {
+  // A stored 0 is a recorded actual price. A LOCK deriving 0 is the "no usable
+  // price" case (the UI says why), so only the unlocked path accepts 0.
+  if (effectiveSalesPrice !== null && effectiveSalesPrice !== undefined
+    && (!marginLocked || effectiveSalesPrice > 0)) {
     actualMargin = calculateActualMargin(
-      effectiveSalesPrice, pricing.productionCost, s.vat_rate
+      effectiveSalesPrice, pricing.productionCost, s.vat_rate,
+      { designTotalExcl: designCosts ? designCosts.designTotal : 0, designInvoicedSeparately }
     );
+  }
+  if (actualMargin) {
     actualIndicator = marginIndicator(
       actualMargin.marginPct, projectTarget, s.lowest_target_margin_pct
     );

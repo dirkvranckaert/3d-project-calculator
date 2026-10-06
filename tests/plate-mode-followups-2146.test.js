@@ -372,7 +372,7 @@ describe('items_per_set / items_per_plate validation', () => {
   test('every table column is copied or named: a new column cannot be dropped silently', () => {
     // If this fails a column was added to projects/project_plates: copy it (plates
     // are automatic) or add it to the project duplicate's documented exclusions.
-    expect(projCols().sort()).toEqual(['id', 'name', 'customer_name', 'items_per_set', 'actual_sales_price', 'tags', 'notes', 'archived', 'created_at', 'updated_at', 'is_custom', 'design_notes', 'margin_locked', 'target_margin_pct', 'locked_margin_pct', 'design_invoiced_separately', 'plate_mode'].sort());
+    expect(projCols().sort()).toEqual(['id', 'name', 'customer_name', 'items_per_set', 'actual_sales_price', 'tags', 'notes', 'archived', 'created_at', 'updated_at', 'is_custom', 'design_notes', 'margin_locked', 'target_margin_pct', 'locked_margin_pct', 'locked_margin_basis', 'design_invoiced_separately', 'plate_mode'].sort());
   });
 
   /* -------- omitted run counts keep the stored value (#2146 round 3) -------- */

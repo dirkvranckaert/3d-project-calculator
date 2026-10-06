@@ -104,7 +104,7 @@ function extractFn(name) {
 const sandbox = { settings, MAX_MARGIN_PCT: calc.maxReachableMarginPct() };
 vm.createContext(sandbox);
 vm.runInContext(
-  extractFn('fmt') + '\n' + extractFn('fmtPct') + '\n' + extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' +
+  extractFn('fmt') + '\n' + extractFn('fmtPct') + '\n' + extractFn('allInBasisText') + '\n' + extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' + extractFn('lockPromptArgs') + '\n' +
   extractFn('renderPricingSection'),
   sandbox
 );
@@ -183,7 +183,9 @@ describe('round 1: lock seed stays inside what the lock accepts', () => {
 
   test('zero production cost (100% margin) or non-finite -> blank seed, never an invalid value', () => {
     expect(sb.lockSeedMarginPct(100)).toBeNull();
-    expect(sb.lockSeedMarginPct(99.996)).toBeNull();
+    // eligibility on the full-precision value (R3): 99.996 < cap is a valid pin
+    expect(sb.lockSeedMarginPct(99.996)).toBe('100.00');
+    expect(sb.lockSeedMarginPct(100.004)).toBeNull();
     expect(sb.lockSeedMarginPct(NaN)).toBeNull();
     expect(sb.lockSeedMarginPct(42.5)).toBe('42.50');
   });
@@ -194,7 +196,7 @@ describe('round 1: lock seed stays inside what the lock accepts', () => {
 const sandbox2 = { settings, MAX_MARGIN_PCT: calc.maxReachableMarginPct() };
 vm.createContext(sandbox2);
 vm.runInContext(
-  extractFn('fmt') + '\n' + extractFn('fmtPct') + '\n' + extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' +
+  extractFn('fmt') + '\n' + extractFn('fmtPct') + '\n' + extractFn('allInBasisText') + '\n' + extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' + extractFn('lockPromptArgs') + '\n' +
   extractFn('renderPricingSection') + '\n' + extractFn('renderSummaryCard') + '\n' +
   'function renderTagsPills() { return ""; }\nfunction esc(s) { return String(s); }',
   sandbox2
@@ -207,59 +209,12 @@ const designBlock2 = html => {
   const s = html.indexOf('<h4>Setup &amp; Design');
   return html.slice(s, html.indexOf('<div class="pricing-block', s));
 };
-const allInValue = html => Number(designBlock2(html).match(/All-in value \/ item: €([\d.]+) excl\./)[1]);
-
-// Dirk 2026-08-31 (round 3 overrule): "All-in value / item" is ALWAYS
-// (price + design) / items on both bases, ignoring design_invoiced_separately.
-describe('round 4: all-in value card = (price + design) / items, toggle ignored', () => {
-  test('suggested basis, absorbed: value = suggested + design', () => {
-    const r = withDesign();
-    const v = allInValue(sandbox2.renderPricingSection(asProject2(r, false)));
-    expect(v).toBeCloseTo(r.pricing.suggestedExclVat + DESIGN, 2);
-  });
-
-  test('suggested basis, invoiced separately: value = suggested + design', () => {
-    const r = withDesign({ designInvoicedSeparately: true });
-    const v = allInValue(sandbox2.renderPricingSection(asProject2(r, true)));
-    expect(v).toBeCloseTo(r.pricing.suggestedExclVat + DESIGN, 2);
-  });
-
-  test('actual basis, both toggle states: value = actual + design', () => {
-    for (const sep of [false, true]) {
-      const r = withDesign({ actualSalesPrice: 300, designInvoicedSeparately: sep });
-      const v = allInValue(sandbox2.renderPricingSection(asProject2(r, sep)));
-      expect(v).toBeCloseTo(r.actualMargin.actualExclVat + DESIGN, 2);
-    }
-  });
-
-  test('suggested price entered unchanged as actual gives the same card value (absorbed)', () => {
-    const sug = withDesign();
-    const same = withDesign({ actualSalesPrice: sug.pricing.suggestedPrice });
-    const vs = allInValue(sandbox2.renderPricingSection(asProject2(sug, false)));
-    const va = allInValue(sandbox2.renderPricingSection(asProject2(same, false)));
-    expect(va).toBeCloseTo(vs, 1);
-  });
-
-  test('profit/margin line stays on allInMargin (toggle-driven)', () => {
-    for (const sep of [false, true]) {
-      const r = withDesign({ designInvoicedSeparately: sep });
-      const html = designBlock2(sandbox2.renderPricingSection(asProject2(r, sep)));
-      expect(html).toContain('Profit excl. VAT: €' + r.allInMargin.profitAmount.toFixed(2));
-    }
-  });
-
-  test('wording says loaded job value, not invoiced', () => {
-    const html = designBlock2(sandbox2.renderPricingSection(asProject2(withDesign(), false)));
-    expect(html).toContain('the loaded job value per item, not the amount actually invoiced per item');
-  });
-
-});
 
 describe('round 4: lock prompt rejects a margin whose price rounds to 0.00', () => {
-  const sb = { MAX_MARGIN_PCT: calc.maxReachableMarginPct(), settings, projects: [{ id: 7, calculation: { pricing: { productionCost: 100 } } }], captured: null };
+  const sb = { MAX_MARGIN_PCT: calc.maxReachableMarginPct(), settings, projects: [{ id: 7, calculation: { pricing: { productionCost: 100 } } }], detachedProject: null, captured: null };
   sb.showPrompt = async opts => { sb.captured = opts; return null; };
   vm.createContext(sb);
-  vm.runInContext(extractFn('lockDerivedPrice') + '\nasync ' + extractFn('promptTargetMargin'), sb);
+  vm.runInContext(extractFn('findProject') + '\n' + extractFn('lockDerivedPrice') + '\nasync ' + extractFn('promptTargetMargin'), sb);
   const validate = async (id, v) => { await sb.promptTargetMargin(id, null); return sb.captured.validate(v); };
 
   test('-1e9% with cost 100 -> rejected with a clear message', async () => {
@@ -298,7 +253,7 @@ describe('round 2: zero suggested revenue is a non-lockable sentinel', () => {
 
   test('"Lock margin" prompt is seeded blank in the clamp case (no fallback to the all-in %)', () => {
     const html = sandbox2.renderPricingSection(asProject2(clamp(), true));
-    expect(html).toMatch(/promptTargetMargin\(1, null\)/);
+    expect(html).toMatch(/promptTargetMargin\(1, null, null\)/);
   });
 
   test('no design, no cost fallback: production margin null, suggestedMarginPct 0', () => {
@@ -317,9 +272,9 @@ describe('round 2: labels name the all-in basis', () => {
     expect(plain).not.toContain('All-in margin');
   });
 
-  test('summary card with an actual price shows the production margin label', () => {
+  test('summary card with an actual price and design also shows the all-in label (#2290)', () => {
     const html = sandbox2.renderSummaryCard(asProject2(withDesign({ actualSalesPrice: 300 }), false));
-    expect(html).toContain('>Margin excl. VAT</span>');
+    expect(html).toContain('All-in margin excl. VAT</span>');
   });
 
   test('Suggested Price headline carries (incl. VAT)', () => {

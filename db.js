@@ -221,6 +221,11 @@ function migrate(db) {
   // Lock's own pin, split off from target_margin_pct (task #736, 2026-07-22).
   // See migrateLockedMarginSplit() for why this can't just reuse the column above.
   addCol('projects', 'locked_margin_pct', 'REAL');
+  // Basis the stored lock pin was set on (#2290). DEFAULT 'production' tags every
+  // pre-existing row as a legacy production-basis lock (O(1) ALTER, no row is
+  // rewritten, so every legacy price is exact); every pct write stamps 'all-in'.
+  // Only matters when setup & design > 0 (D = 0: both bases give the same price).
+  addCol('projects', 'locked_margin_basis', "TEXT NOT NULL DEFAULT 'production'");
   // Design invoiced separately toggle (2026-08-31). Default false: design is
   // absorbed into the unit price (Dirk's normal case), not billed on top.
   // Drives the all-in profit/margin figure (calc.calculateAllInMargin) and how

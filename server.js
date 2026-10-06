@@ -557,6 +557,7 @@ function enrichProject(db, project) {
     marginLocked: !!project.margin_locked,
     targetMarginPct: project.target_margin_pct,
     lockedMarginPct: project.locked_margin_pct,
+    lockedMarginBasis: project.locked_margin_basis,
     designInvoicedSeparately: !!project.design_invoiced_separately,
   });
 
@@ -661,6 +662,7 @@ function enrichProjectLite(db, project) {
     marginLocked: !!project.margin_locked,
     targetMarginPct: project.target_margin_pct,
     lockedMarginPct: project.locked_margin_pct,
+    lockedMarginBasis: project.locked_margin_basis,
     designInvoicedSeparately: !!project.design_invoiced_separately,
   });
 
@@ -805,8 +807,15 @@ app.patch('/api/projects/:id/margin-lock', (req, res) => {
     }
   }
 
-  db.prepare("UPDATE projects SET margin_locked=?, locked_margin_pct=?, updated_at=datetime('now') WHERE id=?")
-    .run(locked ? 1 : 0, Number.isFinite(pct) ? pct : null, req.params.id);
+  // Every write of a pct stamps the all-in basis: a new pin is the all-in margin
+  // the user typed/accepted, so re-locking a legacy 'production' row converts it.
+  // A write that keeps the STORED pct (plain unlock, or lock without a pct) keeps
+  // its basis too: pct and basis always travel together, so a legacy pin is never
+  // silently re-read on the new basis (that would move the price).
+  const explicitPct = req.body?.locked_margin_pct !== undefined && req.body.locked_margin_pct !== null;
+  const basis = explicitPct ? 'all-in' : project.locked_margin_basis;
+  db.prepare("UPDATE projects SET margin_locked=?, locked_margin_pct=?, locked_margin_basis=?, updated_at=datetime('now') WHERE id=?")
+    .run(locked ? 1 : 0, Number.isFinite(pct) ? pct : null, basis, req.params.id);
 
   const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
   res.json(enrichProject(db, updated));
@@ -852,12 +861,13 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
   // prints, re-wiring) rolls the whole copy back, never a partial duplicate.
   const newId = db.transaction(() => {
     const r = db.prepare(`INSERT INTO projects
-      (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, margin_locked, target_margin_pct, locked_margin_pct, design_invoiced_separately, plate_mode)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, margin_locked, target_margin_pct, locked_margin_pct, locked_margin_basis, design_invoiced_separately, plate_mode)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(`${src.name} (copy)`, src.customer_name, src.items_per_set, src.tags || '', src.notes, src.is_custom || 0,
         src.design_notes || null, src.margin_locked || 0,
         src.target_margin_pct ?? defaultTargetMargin(db),
         src.locked_margin_pct ?? null,
+        src.locked_margin_basis || 'production',
         src.design_invoiced_separately || 0,
         src.plate_mode || 'parts');
     const newId = r.lastInsertRowid;
@@ -1817,15 +1827,17 @@ app.post('/api/materials/:id/price-impact', (req, res) => {
       current: {
         productionCost: currentPricing.productionCost,
         suggestedPrice: currentPricing.suggestedPrice,
-        marginPct: enriched.calculation.effectiveSalesPrice
-          ? enriched.calculation.actualMargin?.marginPct
+        // One basis per project: actualMargin and suggestedMarginPct are both
+        // all-in when the project carries setup & design, production otherwise.
+        marginPct: enriched.calculation.actualMargin
+          ? enriched.calculation.actualMargin.marginPct
           : currentPricing.suggestedMarginPct,
       },
       simulated: {
         productionCost: newPricing.productionCost,
         suggestedPrice: newPricing.suggestedPrice,
-        marginPct: newEnriched.calculation.effectiveSalesPrice
-          ? newEnriched.calculation.actualMargin?.marginPct
+        marginPct: newEnriched.calculation.actualMargin
+          ? newEnriched.calculation.actualMargin.marginPct
           : newPricing.suggestedMarginPct,
       },
     });
@@ -2027,4 +2039,4 @@ if (process.env.NODE_ENV !== 'test') {
   });
 }
 
-module.exports = { app, getDb, quoteIdent };
+module.exports = { app, getDb, quoteIdent, enrichProject };
