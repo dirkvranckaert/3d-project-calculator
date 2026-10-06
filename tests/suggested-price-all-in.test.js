@@ -101,10 +101,10 @@ function extractFn(name) {
   if (!m) throw new Error('Could not locate function ' + name);
   return m[0];
 }
-const sandbox = { settings };
+const sandbox = { settings, MAX_MARGIN_PCT: calc.maxReachableMarginPct() };
 vm.createContext(sandbox);
 vm.runInContext(
-  extractFn('fmt') + '\n' + extractFn('fmtPct') + '\n' + extractFn('lockBadge') + '\n' +
+  extractFn('fmt') + '\n' + extractFn('fmtPct') + '\n' + extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' +
   extractFn('renderPricingSection'),
   sandbox
 );
@@ -135,5 +135,56 @@ describe('summary bar block order', () => {
     expect(html).toContain('all-in margin excl. VAT: <strong>€' + r.pricing.minPriceForTarget.toFixed(2));
     const plainHtml = sandbox.renderPricingSection(asProject(run(), false));
     expect(plainHtml).not.toContain('all-in margin excl. VAT');
+  });
+});
+
+/* ---- review round 1 ------------------------------------------------------ */
+
+describe('round 1: zero production cost with design', () => {
+  const zeroPlate = { ...plate, print_time_minutes: 0, plastic_grams: 0, printer_kwh_per_hour: 0, printer_purchase_price: 0 };
+  const zero = (opts = {}) => calc.calculateProject({
+    plates: [zeroPlate], settings, itemsPerSet: 1, targetMarginPct: 40,
+    isCustom: true, designExtras: [{ amount: DESIGN }], ...opts,
+  });
+
+  test('absorbed P=0, D=120, m=40% -> 200 excl. VAT', () => {
+    const r = zero();
+    expect(r.pricing.productionCost).toBe(0);
+    expect(r.pricing.minPriceForTarget / 1.21).toBeCloseTo(200, 8);
+    expect(r.pricing.suggestedPrice).toBeGreaterThan(200 * 1.21 - 1);
+    expect(r.pricing.suggestedMarginPct).toBeGreaterThanOrEqual(40);
+  });
+
+  test('no design and no cost stays on the legacy fallback (no target price)', () => {
+    const r = zero({ designExtras: [] });
+    expect(r.pricing.minPriceForTarget).toBe(0);
+  });
+});
+
+describe('round 1: lock seed stays inside what the lock accepts', () => {
+  const sb = { MAX_MARGIN_PCT: calc.maxReachableMarginPct() };
+  vm.createContext(sb);
+  vm.runInContext(extractFn('lockSeedMarginPct'), sb);
+
+  test('invoiced-separately design: seed below -100 reproduces the suggested price via the lock', () => {
+    const P = run({ isCustom: true }).pricing.productionCost;
+    const r = withDesign({ designInvoicedSeparately: true, designExtras: [{ amount: 1.4 * P }] });
+    expect(r.pricing.suggestedPrice).toBeGreaterThan(0);
+    const seed = sb.lockSeedMarginPct(r.pricing.suggestedProductionMarginPct);
+    expect(Number(seed)).toBeLessThan(-100);
+    const locked = calc.calculateLockedPrice(r.pricing.productionCost, Number(seed), 21);
+    expect(locked.reason).toBeNull();
+    expect(Math.abs(locked.price - r.pricing.suggestedPrice)).toBeLessThan(0.05);
+  });
+
+  test('prompt validation has no -100 floor (server never had one)', () => {
+    expect(APP_JS).not.toMatch(/n < -100/);
+  });
+
+  test('zero production cost (100% margin) or non-finite -> blank seed, never an invalid value', () => {
+    expect(sb.lockSeedMarginPct(100)).toBeNull();
+    expect(sb.lockSeedMarginPct(99.996)).toBeNull();
+    expect(sb.lockSeedMarginPct(NaN)).toBeNull();
+    expect(sb.lockSeedMarginPct(42.5)).toBe('42.50');
   });
 });

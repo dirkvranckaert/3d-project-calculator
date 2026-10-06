@@ -388,7 +388,12 @@ function calculateFinalPricing(opts) {
   const target = (targetMarginPct === null || targetMarginPct === undefined || targetMarginPct === '')
     ? NaN
     : Number(targetMarginPct);
-  const targetUsable = Number.isFinite(target) && target < MAX_MARGIN_PCT && productionCost > 0;
+  // All-in pricing is solvable from setup & design alone (P = 0, D > 0 gives
+  // D / (1 - m)), so the formula domain is cost > 0 OR design > 0.
+  const designExcl = Number(designTotalExcl) > 0 ? Number(designTotalExcl) : 0;
+  const allInBasis = designExcl > 0;
+  const targetUsable = Number.isFinite(target) && target < MAX_MARGIN_PCT
+    && (productionCost > 0 || allInBasis);
   // Same stable inversion as `calculateLockedPrice` — see the comment there.
   //
   // ALL-IN BASIS (Dirk 2026-10-06): when the project carries setup & design
@@ -399,8 +404,6 @@ function calculateFinalPricing(opts) {
   //   absorbed (default): (R - P - D) / R = m   ->  R = (P + D) / (1 - m)
   //   invoiced separately: (R + D - P) / (R + D) = m  ->  R = P / (1 - m) - D
   // Without design (D = 0) both reduce to the old `P / (1 - m)`, byte-identical.
-  const designExcl = Number(designTotalExcl) > 0 ? Number(designTotalExcl) : 0;
-  const allInBasis = designExcl > 0;
   const divisor = (100 - target) / 100;
   let targetPriceEx = NaN;
   if (targetUsable) {

@@ -41,9 +41,9 @@ const sandbox = {
 };
 vm.createContext(sandbox);
 vm.runInContext(
-  extractFn('fmt') + '\n' +
+  'const MAX_MARGIN_PCT = 100;\n' + extractFn('fmt') + '\n' +
   extractFn('fmtPct') + '\n' +
-  extractFn('lockBadge') + '\n' +
+  extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' +
   extractFn('renderPricingSection'),
   sandbox
 );

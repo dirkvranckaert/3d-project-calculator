@@ -1821,7 +1821,7 @@ function renderPricingSection(p) {
     const marginTitle = isLocked
       ? `Margin on the price excl. VAT — click to change the locked margin`
       : `Margin on the price excl. VAT — click to lock a target margin`;
-    const marginArg = isLocked ? lock.targetPct : am.marginPct.toFixed(2);
+    const marginArg = isLocked ? lock.targetPct : lockSeedMarginPct(am.marginPct);
     // When unlocked, the price value itself is the edit entry point — clicking
     // it opens the same prompt the margin badge uses. When locked, the price is
     // derived from the margin, so it stays plain and the margin badge is edited.
@@ -1850,7 +1850,7 @@ function renderPricingSection(p) {
       <div class="sub" style="margin-top:4px;opacity:.5">Set your selling price to see actual margin</div>
       <div class="sub" style="margin-top:4px">Margin excl. VAT: <span class="margin-badge margin-badge--empty margin-badge--editable"
         title="No sales price yet — click to lock a target margin and let the price follow it"
-        onclick="promptTargetMargin(${p.id}, ${(pr.suggestedProductionMarginPct ?? pr.suggestedMarginPct).toFixed(2)})">Lock margin</span></div>
+        onclick="promptTargetMargin(${p.id}, ${lockSeedMarginPct(pr.suggestedProductionMarginPct ?? pr.suggestedMarginPct)})">Lock margin</span></div>
     </div>`;
   }
 
@@ -2489,6 +2489,17 @@ async function setMarginLock(projectId, locked, lockedPct) {
 // margin)), above it negative. Not a house rule, and not a markup ceiling.
 const MAX_MARGIN_PCT = 100;
 
+// Seed for the "Lock margin" prompt from a PRODUCTION-basis margin (suggested or
+// actual price; what the lock stores and applies, price = cost / (1 - m)). Returns null
+// (blank field) when that value is not a number the lock accepts: not finite, or
+// >= the cap once rounded to the 2 decimals shown (e.g. zero production cost
+// gives 100%). Below -100 IS accepted: invoiced-separately design can need it.
+function lockSeedMarginPct(raw) {
+  if (!Number.isFinite(raw)) return null;
+  const seed = raw.toFixed(2);
+  return Number(seed) < MAX_MARGIN_PCT ? seed : null;
+}
+
 async function promptTargetMargin(projectId, current) {
   const maxPct = MAX_MARGIN_PCT;
   const val = await showPrompt({
@@ -2503,7 +2514,6 @@ async function promptTargetMargin(projectId, current) {
       const n = parseFloat(t.replace(',', '.'));
       if (!isFinite(n)) return 'Enter a valid number';
       if (n >= maxPct) return `Must be below ${maxPct}% — margin is profit as a share of the selling price, so ${maxPct}% is an infinite price. A markup on cost converts: 150% markup = 60% margin.`;
-      if (n < -100) return 'Margin cannot be below -100%';
       return null;
     },
   });
