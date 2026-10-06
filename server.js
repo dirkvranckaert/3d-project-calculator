@@ -7,7 +7,6 @@ const path = require('path');
 const express = require('express');
 const { getDb, getSetting, setSetting, getAllSettings } = require('./db');
 const calc = require('./calc');
-const { migrateLockedMarginAllIn } = require('./migrate-lock-all-in');
 const { parse3mf, extractThumbnails } = require('./parse3mf');
 const sharedAuth = require('./shared-auth');
 const { readReleaseInfo } = require('./lib/release-info');
@@ -57,14 +56,6 @@ function requireAuth(req, res, next) {
   next();
 }
 
-// A request in the listen -> migration window runs the (idempotent, single
-// write-transaction) lock migration first, so no locked D>0 row is read or
-// written on the old basis.
-let lockMigrationPending = false;
-app.use((req, res, next) => {
-  if (lockMigrationPending) runLockAllInMigration();
-  next();
-});
 app.use(requireAuth);
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -566,6 +557,7 @@ function enrichProject(db, project) {
     marginLocked: !!project.margin_locked,
     targetMarginPct: project.target_margin_pct,
     lockedMarginPct: project.locked_margin_pct,
+    lockedMarginBasis: project.locked_margin_basis,
     designInvoicedSeparately: !!project.design_invoiced_separately,
   });
 
@@ -670,6 +662,7 @@ function enrichProjectLite(db, project) {
     marginLocked: !!project.margin_locked,
     targetMarginPct: project.target_margin_pct,
     lockedMarginPct: project.locked_margin_pct,
+    lockedMarginBasis: project.locked_margin_basis,
     designInvoicedSeparately: !!project.design_invoiced_separately,
   });
 
@@ -814,8 +807,15 @@ app.patch('/api/projects/:id/margin-lock', (req, res) => {
     }
   }
 
-  db.prepare("UPDATE projects SET margin_locked=?, locked_margin_pct=?, updated_at=datetime('now') WHERE id=?")
-    .run(locked ? 1 : 0, Number.isFinite(pct) ? pct : null, req.params.id);
+  // Every write of a pct stamps the all-in basis: a new pin is the all-in margin
+  // the user typed/accepted, so re-locking a legacy 'production' row converts it.
+  // A write that keeps the STORED pct (plain unlock, or lock without a pct) keeps
+  // its basis too: pct and basis always travel together, so a legacy pin is never
+  // silently re-read on the new basis (that would move the price).
+  const explicitPct = req.body?.locked_margin_pct !== undefined && req.body.locked_margin_pct !== null;
+  const basis = explicitPct ? 'all-in' : project.locked_margin_basis;
+  db.prepare("UPDATE projects SET margin_locked=?, locked_margin_pct=?, locked_margin_basis=?, updated_at=datetime('now') WHERE id=?")
+    .run(locked ? 1 : 0, Number.isFinite(pct) ? pct : null, basis, req.params.id);
 
   const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
   res.json(enrichProject(db, updated));
@@ -861,12 +861,13 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
   // prints, re-wiring) rolls the whole copy back, never a partial duplicate.
   const newId = db.transaction(() => {
     const r = db.prepare(`INSERT INTO projects
-      (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, margin_locked, target_margin_pct, locked_margin_pct, design_invoiced_separately, plate_mode)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      (name, customer_name, items_per_set, tags, notes, is_custom, design_notes, margin_locked, target_margin_pct, locked_margin_pct, locked_margin_basis, design_invoiced_separately, plate_mode)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(`${src.name} (copy)`, src.customer_name, src.items_per_set, src.tags || '', src.notes, src.is_custom || 0,
         src.design_notes || null, src.margin_locked || 0,
         src.target_margin_pct ?? defaultTargetMargin(db),
         src.locked_margin_pct ?? null,
+        src.locked_margin_basis || 'production',
         src.design_invoiced_separately || 0,
         src.plate_mode || 'parts');
     const newId = r.lastInsertRowid;
@@ -2031,33 +2032,11 @@ app.get('/api/filament-catalog', async (req, res) => {
 /* ------------------------------------------------------------------ */
 const PORT = process.env.PORT || 3003;
 
-// One-shot, price-stable conversion of existing locks to the all-in basis (#2290).
-// Runs AFTER the port is bound (never before listen: a slow or failing migration
-// must not keep the server from booting) and never kills the process.
-function runLockAllInMigration() {
-  if (!lockMigrationPending) return;
-  lockMigrationPending = false;
-  try {
-    const r = migrateLockedMarginAllIn(getDb(), enrichProject, calc);
-    if (r.migrated.length || r.skipped.length) {
-      console.log('locked_margin_all_in: migrated', r.migrated, 'skipped', r.skipped);
-    }
-  } catch (err) {
-    console.error('locked_margin_all_in migration failed (retries on next start):', err);
-  }
-}
-
 let server;
 if (process.env.NODE_ENV !== 'test') {
-  lockMigrationPending = true;
   server = app.listen(PORT, () => {
     console.log(`Project Calculator running on http://localhost:${PORT}`);
-    setImmediate(runLockAllInMigration);
   });
 }
 
-module.exports = {
-  app, getDb, quoteIdent, enrichProject,
-  // test hooks for the post-listen lock migration (#2290)
-  lockMigration: { run: runLockAllInMigration, setPending: v => { lockMigrationPending = v; } },
-};
+module.exports = { app, getDb, quoteIdent, enrichProject };

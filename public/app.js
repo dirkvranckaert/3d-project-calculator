@@ -520,7 +520,7 @@ function renderSummaryCard(p) {
       <div class="summary-stat"><span class="summary-stat-label">Production</span><span class="summary-stat-value">${fmt(pr.productionCost)}</span></div>
       <div class="summary-stat"><span class="summary-stat-label">Suggested</span><span class="summary-stat-value">${fmt(pr.suggestedPrice)}</span></div>
       <div class="summary-stat"><span class="summary-stat-label">Actual</span><span class="summary-stat-value">${hasActual ? `${fmt(effectivePrice)}${c?.marginLock?.locked ? ' <span class="lock-badge lock-badge--mini" title="Margin locked">&#128274;</span>' : ''}` : '<span style="opacity:.4">-</span>'}</span></div>
-      <div class="summary-stat"><span class="summary-stat-label" title="${marginAllIn ? 'All-in margin excl. VAT (production cost + setup &amp; design)' : 'Margin on the price excl. VAT'}">${marginAllIn ? 'All-in margin excl. VAT' : 'Margin excl. VAT'}</span><span class="summary-stat-value"><span class="margin-badge ${indicator || 'green'}">${marginPct != null ? fmtPct(marginPct) : '-'}</span></span></div>
+      <div class="summary-stat"><span class="summary-stat-label" title="${marginAllIn ? `All-in margin excl. VAT (${allInBasisText(p.design_invoiced_separately)})` :'Margin on the price excl. VAT'}">${marginAllIn ? 'All-in margin excl. VAT' : 'Margin excl. VAT'}</span><span class="summary-stat-value"><span class="margin-badge ${indicator || 'green'}">${marginPct != null ? fmtPct(marginPct) : '-'}</span></span></div>
     </div>
     <div class="summary-card-meta">${productionPlateCount} plate${productionPlateCount !== 1 ? 's' : ''}${p.items_per_set > 1 ? ` \u00b7 set of ${p.items_per_set}` : ''}</div>
     ${renderTagsPills(p.tags)}
@@ -1804,9 +1804,13 @@ function renderPricingSection(p) {
   const isLocked = !!lock?.locked;
   const effPrice = c.effectiveSalesPrice;
   // The lock is on the all-in basis whenever setup & design > 0: say so.
-  const lockAllInBasis = (c.designCosts?.designTotal || 0) > 0;
-  const marginWord = lockAllInBasis ? 'All-in margin' : 'Margin';
-  const marginWordA = lockAllInBasis ? 'An all-in margin' : 'A margin';
+  // A legacy lock (lock.basis === 'production', set before the all-in basis) keeps
+  // its production-basis price, so its pin is worded as a production margin; the
+  // card's actual profit/margin below stays all-in either way.
+  const legacyLock = isLocked && lock.basis === 'production';
+  const lockAllInBasis = (c.designCosts?.designTotal || 0) > 0 && !legacyLock;
+  const marginWord = lockAllInBasis ? 'All-in margin' : legacyLock ? 'Production margin' : 'Margin';
+  const marginWordA = lockAllInBasis ? 'An all-in margin' : legacyLock ? 'A production margin' : 'A margin';
   let actualBlock = '';
   if (isLocked && !effPrice) {
     // Locked but no price can be derived — say why instead of rendering a blank.
@@ -1820,7 +1824,7 @@ function renderPricingSection(p) {
       <div class="big-price" style="opacity:.4">&mdash;</div>
       <div class="sub" style="color:var(--danger)">${why}</div>
       <div class="sub" style="margin-top:4px">${marginWord} excl. VAT: <span class="margin-badge margin-badge--empty margin-badge--editable"
-        title="Click to change the locked margin" onclick="promptTargetMargin(${p.id}, ${lock.targetPct})">Change target margin</span></div>
+        title="Click to change the locked margin" onclick="promptTargetMargin(${p.id}, ${legacyLock ? 'null, null' : lock.targetPct})">Change target margin</span></div>
     </div>`;
   } else if (c.actualMargin) {
     const am = c.actualMargin;
@@ -1834,14 +1838,18 @@ function renderPricingSection(p) {
     // read 1.29% here — that gap is real and gets shown, not papered over.
     const marginTitle = amAllIn
       ? (isLocked
-        ? `All-in margin excl. VAT (production cost + setup & design) — click to change the locked margin`
-        : `All-in margin excl. VAT (production cost + setup & design) — click to lock a target margin`)
+        ? `All-in margin excl. VAT (${allInBasisText(p.design_invoiced_separately)}) — click to change the locked margin`
+        : `All-in margin excl. VAT (${allInBasisText(p.design_invoiced_separately)}) — click to lock a target margin`)
       : (isLocked
         ? `Margin on the price excl. VAT — click to change the locked margin`
         : `Margin on the price excl. VAT — click to lock a target margin`);
     // A recorded EUR 0 has no revenue, so its 0% is a sentinel, not an invertible
     // lock seed: blank prompt (locking must never silently replace a recorded 0).
-    const marginArg = lockPromptArgs(isLocked ? lock.targetPct : (am.actualExclVat > 0 ? am.marginPct : null), isLocked);
+    // A legacy production-basis lock seeds from the ALL-IN margin of its current
+    // price (full precision), not its stored production pin: accepting the seed
+    // re-locks the same price on the all-in basis, so the price cannot jump.
+    const storedAllInLock = isLocked && !legacyLock;
+    const marginArg = lockPromptArgs(storedAllInLock ? lock.targetPct : (am.actualExclVat > 0 ? am.marginPct : null), storedAllInLock);
     // When unlocked, the price value itself is the edit entry point — clicking
     // it opens the same prompt the margin badge uses. When locked, the price is
     // derived from the margin, so it stays plain and the margin badge is edited.
@@ -1917,7 +1925,7 @@ function renderPricingSection(p) {
       <div class="big-price">${fmt(pr.suggestedPrice)}</div>
       <div class="sub">${fmt(pr.suggestedExclVat)} excl. VAT</div>
       <div class="sub">Profit excl. VAT: ${fmt(pr.suggestedProfitAmount)} <span class="margin-badge ${c.suggestedIndicator}"
-        title="${allInSuggested ? 'All-in margin excl. VAT (production cost + setup &amp; design)' : 'Margin on the price excl. VAT'}">${fmtPct(pr.suggestedMarginPct)}</span></div>
+        title="${allInSuggested ? `All-in margin excl. VAT (${allInBasisText(p.design_invoiced_separately)})` :'Margin on the price excl. VAT'}">${fmtPct(pr.suggestedMarginPct)}</span></div>
       ${isSet ? `<div class="sub" style="opacity:.6">${pi(pr.suggestedExclVat)} excl. &middot; ${pi(pr.suggestedPrice)} incl. VAT</div>` : ''}
     </div>
     ${actualBlock}
@@ -2482,8 +2490,21 @@ async function updateActualPrice(projectId, value) {
 /*  Margin lock                                                        */
 /* ================================================================== */
 // Visible marker that the percentage — not the price — is the driving figure.
+// What the all-in margin is measured against, per the project's toggle (HTML-safe).
+// Absorbed: design is part of the cost base. Invoiced separately: design is billed
+// on top and counted in revenue (profit = R + D - P over R + D), not added to cost.
+function allInBasisText(separately) {
+  return separately
+    ? 'setup &amp; design invoiced on top, counted in revenue'
+    : 'production cost + setup &amp; design';
+}
+
 function lockBadge(lock) {
-  return `<span class="lock-badge" title="Margin locked at ${fmtPct(lock.targetPct)} excl. VAT — the price follows the margin">
+  const legacy = lock.basis === 'production';
+  const title = legacy
+    ? `Margin locked at ${fmtPct(lock.targetPct)} of production cost excl. VAT (set before the all-in basis; price unchanged) — the price follows the margin`
+    : `Margin locked at ${fmtPct(lock.targetPct)} excl. VAT — the price follows the margin`;
+  return `<span class="lock-badge" title="${title}">
     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
     ${fmtPct(lock.targetPct)} locked</span>`;
 }
@@ -2555,7 +2576,11 @@ async function promptTargetMargin(projectId, current, exact = null) {
   const lockSeparate = !!proj?.design_invoiced_separately;
   const val = await showPrompt({
     title: 'Lock target margin',
-    message: `Enter the margin you want to hold, measured on the price excl. VAT. The sales price is recalculated from the production cost (plus setup &amp; design when it is on, so the margin is the all-in margin) and follows it when costs change. Must be below ${maxPct}% — margin is profit as a share of the selling price, so ${maxPct}% would mean an infinite price.`,
+    message: `Enter the margin you want to hold, measured on the price excl. VAT. ${lockDesign > 0
+      ? (lockSeparate
+        ? 'Setup &amp; design is invoiced on top of the unit price and counted in revenue, so this is the all-in margin: (revenue + setup &amp; design - production cost) / (revenue + setup &amp; design).'
+        : 'Setup &amp; design is absorbed into the unit price, so this is the all-in margin: (revenue - production cost - setup &amp; design) / revenue.')
+      : 'The margin is measured against the production cost.'} The sales price is recalculated from it and follows it when costs change. Must be below ${maxPct}% — margin is profit as a share of the selling price, so ${maxPct}% would mean an infinite price.`,
     label: 'Target margin excl. VAT (%)',
     placeholder: '60',
     initialValue: current != null ? String(current) : '',

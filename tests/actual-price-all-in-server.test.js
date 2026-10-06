@@ -2,8 +2,8 @@
 
 /**
  * Actual Sales Price on the ALL-IN basis, server side (task #2290, Dirk
- * 2026-10-06): price-impact endpoint basis, and the one-shot price-stable
- * conversion of existing locks (`migrate-lock-all-in.js`).
+ * 2026-10-06): price-impact endpoint basis, and the per-row lock basis
+ * (`projects.locked_margin_basis`) that keeps every legacy lock price exact.
  */
 
 const request = require('supertest');
@@ -19,8 +19,7 @@ process.env.DB_PATH = testDbPath;
 fs.mkdirSync(path.dirname(testDbPath), { recursive: true });
 for (const p of [testDbPath, testDbPath + '-wal', testDbPath + '-shm']) fs.rmSync(p, { force: true });
 
-const { app: expressApp, getDb, enrichProject, lockMigration } = require('../server');
-const { migrateLockedMarginAllIn } = require('../migrate-lock-all-in');
+const { app: expressApp, getDb, enrichProject } = require('../server');
 const calc = require('../calc');
 
 const app = http.createServer(expressApp).listen(0);
@@ -63,7 +62,7 @@ beforeAll(async () => {
 
 describe('actual price on the all-in basis (server)', () => {
   test.each([false, true])('actual = suggested -> identical profit/margin/indicator (separately=%s)', async (sep) => {
-    const id = await makeProject(`same-${sep}`, { design: 40, separately: sep });
+    const id = await makeProject(`same-${sep}`, { design: sep ? 5 : 40, separately: sep });
     const sug = enrich(id).calculation;
     getDb().prepare('UPDATE projects SET actual_sales_price = ? WHERE id = ?').run(sug.pricing.suggestedPrice, id);
     const c = enrich(id).calculation;
@@ -95,150 +94,104 @@ describe('actual price on the all-in basis (server)', () => {
   });
 });
 
-describe('lock migration (price-stable, #2290)', () => {
-  const resetMarker = () => getDb().prepare("DELETE FROM settings WHERE key = 'locked_margin_all_in'").run();
-
-  test.each([false, true])('locked D>0 keeps its price; pct becomes the all-in margin (separately=%s)', async (sep) => {
-    const id = await makeProject(`lock-${sep}`, { design: 40, separately: sep });
-    const production = enrich(id).calculation.pricing.productionCost;
-    const oldPrice = calc.calculateLockedPrice(production, 60, 21).price;
-    getDb().prepare('UPDATE projects SET margin_locked = 1, locked_margin_pct = 60 WHERE id = ?').run(id);
-    resetMarker();
-    const res = migrateLockedMarginAllIn(getDb(), enrichProject, calc);
-    expect(res.migrated).toContain(id);
-    const c = enrich(id).calculation;
-    expect(c.effectiveSalesPrice).toBe(oldPrice);
-    expect(c.marginLock.basis).toBe('all-in');
-    expect(c.actualMargin.marginPct).toBeCloseTo(c.marginLock.targetPct, 6);
-    // full precision stored, not 2-decimal text
-    const stored = getDb().prepare('SELECT locked_margin_pct FROM projects WHERE id = ?').get(id).locked_margin_pct;
-    expect(stored).not.toBe(60);
-  });
-
-  test('locked D=0 and unlocked rows are untouched; second run is a no-op', async () => {
-    const plain = await makeProject('lock-plain');
-    const unlocked = await makeProject('unlocked-design', { design: 40 });
-    getDb().prepare('UPDATE projects SET margin_locked = 1, locked_margin_pct = 55 WHERE id = ?').run(plain);
-    getDb().prepare('UPDATE projects SET margin_locked = 0, locked_margin_pct = 55 WHERE id = ?').run(unlocked);
-    resetMarker();
-    const res = migrateLockedMarginAllIn(getDb(), enrichProject, calc);
-    expect(res.migrated).not.toContain(plain);
-    expect(res.migrated).not.toContain(unlocked);
-    const pct = id => getDb().prepare('SELECT locked_margin_pct FROM projects WHERE id = ?').get(id).locked_margin_pct;
-    expect(pct(plain)).toBe(55);
-    expect(pct(unlocked)).toBe(55);
-    expect(migrateLockedMarginAllIn(getDb(), enrichProject, calc).alreadyDone).toBe(true);
-  });
-
-  const lockedRow = async (name) => {
-    const id = await makeProject(name, { design: 40 });
+describe('per-row lock basis (#2290, replaces the data migration)', () => {
+  const basisOf = id => getDb().prepare('SELECT locked_margin_basis b FROM projects WHERE id = ?').get(id).b;
+  const pctOf = id => getDb().prepare('SELECT locked_margin_pct p FROM projects WHERE id = ?').get(id).p;
+  /** Row exactly as a pre-upgrade lock looks: pin set, column left at its default. */
+  const legacyLock = async (name, o = {}) => {
+    const id = await makeProject(name, o);
     getDb().prepare('UPDATE projects SET margin_locked = 1, locked_margin_pct = 60 WHERE id = ?').run(id);
     return id;
   };
-  const storedPct = id => getDb().prepare('SELECT locked_margin_pct FROM projects WHERE id = ?').get(id).locked_margin_pct;
+  const oldPrice = id => calc.calculateLockedPrice(enrich(id).calculation.pricing.productionCost, 60, 21).price;
 
-  test('marker check + select + updates + marker write are one write-locked transaction (R1 #1)', async () => {
-    const Database = require('better-sqlite3');
-    const id = await lockedRow('atomic');
-    resetMarker();
-    const other = new Database(testDbPath, { timeout: 0 });
-    let lockedDuring = null;
-    let otherResult = null;
-    const enrichSpy = (db, row) => {
-      if (lockedDuring === null) {
-        // A concurrent starter cannot even begin its own transaction while A holds the write lock.
-        try {
-          otherResult = migrateLockedMarginAllIn(other, enrichProject, calc);
-          lockedDuring = false;
-        } catch (e) { lockedDuring = /locked|busy/i.test(e.message); }
-      }
-      return enrichProject(db, row);
-    };
-    const a = migrateLockedMarginAllIn(getDb(), enrichSpy, calc);
-    expect(a.migrated).toContain(id);
-    expect(lockedDuring).toBe(true);
-    const afterA = storedPct(id);
-    // B starts after A committed: sees the marker INSIDE its transaction, converts nothing.
-    const b = migrateLockedMarginAllIn(other, enrichProject, calc);
-    other.close();
-    expect(b.alreadyDone).toBe(true);
-    expect(b.migrated).toEqual([]);
-    expect(storedPct(id)).toBe(afterA);
+  test('a new row defaults to production; nothing is rewritten to get there', async () => {
+    const id = await makeProject('fresh');
+    expect(basisOf(id)).toBe('production');
   });
 
-  test('a stale pre-transaction marker read cannot double-convert (marker rechecked inside)', async () => {
-    const id = await lockedRow('stale');
-    resetMarker();
-    migrateLockedMarginAllIn(getDb(), enrichProject, calc);
-    const once = storedPct(id);
-    // second starter that "read no marker earlier": it only ever reads inside the transaction
-    expect(migrateLockedMarginAllIn(getDb(), enrichProject, calc).alreadyDone).toBe(true);
-    expect(storedPct(id)).toBe(once);
+  test.each([false, true])('legacy production lock with D>0 keeps its EXACT old price (separately=%s)', async (sep) => {
+    const id = await legacyLock(`legacy-${sep}`, { design: sep ? 5 : 40, separately: sep });
+    const c = enrich(id).calculation;
+    expect(c.effectiveSalesPrice).toBe(oldPrice(id));
+    expect(c.marginLock.basis).toBe('production');
+    expect(pctOf(id)).toBe(60); // never rewritten
+    // the actual card stays descriptive and all-in
+    expect(c.actualMargin.basis).toBe('all-in');
+    expect(c.actualMargin.marginPct).not.toBeCloseTo(60, 1);
   });
 
-  test('request in the listen->migration window migrates first; locked D>0 price is the stable one (R1 #2)', async () => {
-    const id = await lockedRow('window');
-    const production = enrich(id).calculation.pricing.productionCost;
-    const oldPrice = calc.calculateLockedPrice(production, 60, 21).price;
-    resetMarker();
-    lockMigration.setPending(true);
-    const res = await api('get', `/api/projects/${id}`);
-    expect(res.status).toBe(200);
-    expect(res.body.calculation.effectiveSalesPrice).toBe(oldPrice);
-    expect(res.body.calculation.marginLock.basis).toBe('all-in');
-    expect(getDb().prepare("SELECT 1 FROM settings WHERE key = 'locked_margin_all_in'").get()).toBeTruthy();
-    lockMigration.run(); // pending already consumed: no second run
+  test.each([false, true])('new lock round-trips on the all-in basis (separately=%s)', async (sep) => {
+    const id = await makeProject(`new-${sep}`, { design: sep ? 5 : 40, separately: sep });
+    const r = await api('patch', `/api/projects/${id}/margin-lock`, { locked: true, locked_margin_pct: 60 });
+    expect(r.status).toBe(200);
+    expect(basisOf(id)).toBe('all-in');
+    const c = r.body.calculation;
+    expect(c.marginLock.basis).toBe('all-in');
+    expect(c.actualMargin.marginPct).toBeCloseTo(60, 1);
   });
 
-  test('migration failure is logged, never thrown (server keeps serving)', async () => {
-    await lockedRow('failing');
-    resetMarker();
-    getDb().exec("CREATE TRIGGER boom BEFORE INSERT ON settings WHEN NEW.key = 'locked_margin_all_in' BEGIN SELECT RAISE(ABORT, 'boom'); END");
-    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      lockMigration.setPending(true);
-      expect(() => lockMigration.run()).not.toThrow();
-      expect(spy).toHaveBeenCalled();
-      expect(getDb().prepare("SELECT 1 FROM settings WHERE key = 'locked_margin_all_in'").get()).toBeUndefined();
-      // failed transaction rolled back: nothing half-converted, retry works
-      getDb().exec('DROP TRIGGER boom');
-      expect(migrateLockedMarginAllIn(getDb(), enrichProject, calc).alreadyDone).toBe(false);
-    } finally {
-      spy.mockRestore();
-      getDb().exec('DROP TRIGGER IF EXISTS boom');
-    }
+  test.each([false, true])('re-lock of a legacy row with the untouched seed is price-stable (separately=%s)', async (sep) => {
+    const id = await legacyLock(`relock-${sep}`, { design: sep ? 5 : 40, separately: sep });
+    const before = enrich(id).calculation;
+    // the UI seed: all-in margin of the current price, full precision
+    const seedPct = before.actualMargin.marginPct;
+    const r = await api('patch', `/api/projects/${id}/margin-lock`, { locked: true, locked_margin_pct: seedPct });
+    expect(r.status).toBe(200);
+    expect(basisOf(id)).toBe('all-in');
+    expect(r.body.calculation.effectiveSalesPrice).toBe(before.effectiveSalesPrice);
   });
-});
 
-describe('server boot: binds before the migration, survives its failure (R1 #2)', () => {
-  test('listens even when the migration cannot complete', async () => {
-    const { spawn } = require('child_process');
-    const id = await makeProject('boot', { design: 40 });
-    getDb().prepare('UPDATE projects SET margin_locked = 1, locked_margin_pct = 60 WHERE id = ?').run(id);
-    getDb().prepare("DELETE FROM settings WHERE key = 'locked_margin_all_in'").run();
-    getDb().exec("CREATE TRIGGER boom2 BEFORE INSERT ON settings WHEN NEW.key = 'locked_margin_all_in' BEGIN SELECT RAISE(ABORT, 'boom'); END");
-    const port = 3500 + Math.floor(Math.random() * 400);
-    const child = spawn(process.execPath, ['server.js'], {
-      cwd: path.join(__dirname, '..'),
-      env: { ...process.env, NODE_ENV: 'production', PORT: String(port), DB_PATH: testDbPath },
-    });
-    let out = '';
-    child.stdout.on('data', d => { out += d; });
-    child.stderr.on('data', d => { out += d; });
-    try {
-      const deadline = Date.now() + 15000;
-      while (!/migration failed/.test(out) && Date.now() < deadline) await new Promise(r => setTimeout(r, 100));
-      expect(out).toMatch(/Project Calculator running/);
-      expect(out).toMatch(/migration failed/);
-      expect(out.indexOf('Project Calculator running')).toBeLessThan(out.indexOf('migration failed'));
-      const r = await new Promise((resolve, reject) => {
-        http.get({ port, path: '/login', host: '127.0.0.1' }, resolve).on('error', reject);
-      });
-      expect(r.statusCode).toBeLessThan(500);
-      r.resume();
-    } finally {
-      child.kill('SIGKILL');
-      getDb().exec('DROP TRIGGER IF EXISTS boom2');
-    }
+  test('D = 0: both bases give the identical price and no basis flag is exposed', async () => {
+    const id = await legacyLock('plain-legacy');
+    const legacy = enrich(id).calculation;
+    expect(legacy.effectiveSalesPrice).toBe(oldPrice(id));
+    expect(legacy.marginLock.basis).toBeUndefined();
+    getDb().prepare("UPDATE projects SET locked_margin_basis = 'all-in' WHERE id = ?").run(id);
+    expect(enrich(id).calculation.effectiveSalesPrice).toBe(legacy.effectiveSalesPrice);
+  });
+
+  test('unlock keeps pin AND basis (legacy one-click re-lock stays price-stable); clear-price keeps both', async () => {
+    const id = await legacyLock('unlock', { design: 40 });
+    const before = enrich(id).calculation.effectiveSalesPrice;
+    await api('patch', `/api/projects/${id}/margin-lock`, { locked: false });
+    expect(basisOf(id)).toBe('production');
+    expect(pctOf(id)).toBe(60);
+    const relock = await api('patch', `/api/projects/${id}/margin-lock`, { locked: true });
+    expect(relock.body.calculation.effectiveSalesPrice).toBe(before);
+    await api('patch', `/api/projects/${id}/clear-price`);
+    expect(basisOf(id)).toBe('production');
+    expect(pctOf(id)).toBe(60);
+  });
+
+  test('PUT /api/projects/:id never touches pin or basis', async () => {
+    const id = await legacyLock('put', { design: 40 });
+    const before = enrich(id).calculation.effectiveSalesPrice;
+    const r = await api('put', `/api/projects/${id}`, { name: 'put2', items_per_set: 1 });
+    expect(r.status).toBe(200);
+    expect(basisOf(id)).toBe('production');
+    expect(pctOf(id)).toBe(60);
+    expect(r.body.calculation.effectiveSalesPrice).toBe(before);
+  });
+
+  test('duplicate copies pin and basis together (price identical)', async () => {
+    const id = await legacyLock('dup-legacy', { design: 40 });
+    const d1 = await api('post', `/api/projects/${id}/duplicate`);
+    expect(basisOf(d1.body.id)).toBe('production');
+    expect(d1.body.calculation.effectiveSalesPrice).toBe(enrich(id).calculation.effectiveSalesPrice);
+    const nid = await makeProject('dup-new', { design: 40 });
+    await api('patch', `/api/projects/${nid}/margin-lock`, { locked: true, locked_margin_pct: 55 });
+    const d2 = await api('post', `/api/projects/${nid}/duplicate`);
+    expect(basisOf(d2.body.id)).toBe('all-in');
+    expect(d2.body.calculation.effectiveSalesPrice).toBe(enrich(nid).calculation.effectiveSalesPrice);
+  });
+
+  test('price-impact on a legacy lock follows its basis (same price as enrichProject)', async () => {
+    const id = await legacyLock('impact-legacy', { design: 40 });
+    const r = await api('post', `/api/materials/${materialId}/price-impact`, { new_price_per_kg: 99 });
+    const row = r.body.impacts.find(i => i.projectId === id);
+    expect(row).toBeTruthy();
+    expect(Number.isFinite(row.current.marginPct)).toBe(true);
+    expect(enrich(id).calculation.effectiveSalesPrice).toBe(oldPrice(id));
   });
 });

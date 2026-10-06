@@ -298,12 +298,16 @@ function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21, des
   // ALL-IN margin, the exact inverse of `calculateAllInMargin`:
   //   absorbed:            R = (P + D) / (1 - m)
   //   invoiced separately: R = P / (1 - m) - D   (clamped at 0)
+  // `design.lockBasis === 'production'` (legacy rows) keeps the old inverse.
   // D = 0 is the untouched production path below, byte-identical.
   // `design` = { designTotalExcl, designInvoicedSeparately } (an object, so a
   // stray numeric 4th arg such as the old price ending can never read as design).
   const designExcl = Number(design?.designTotalExcl) > 0 ? Number(design.designTotalExcl) : 0;
   const designInvoicedSeparately = !!design?.designInvoicedSeparately;
-  const allIn = designExcl > 0;
+  // Per-row basis (`projects.locked_margin_basis`): a legacy lock stored on the
+  // 'production' basis keeps inverting P / (1 - m), so its price never moves.
+  const legacyBasis = design?.lockBasis === 'production';
+  const allIn = designExcl > 0 && !legacyBasis;
   if (!(Number(productionCost) > 0) && !allIn) return { ...base, reason: 'no-cost' };
   // `(100 - target) / 100`, never `1 - target / 100`. The two are algebraically
   // equal but not in floating point: a target a hair under the cap makes the
@@ -333,7 +337,7 @@ function calculateLockedPrice(productionCost, targetMarginPct, vatRate = 21, des
     rawPrice,
     reason: null,
     maxMarginPct,
-    ...(allIn ? { basis: 'all-in' } : {}),
+    ...(designExcl > 0 ? { basis: allIn ? 'all-in' : 'production' } : {}),
   };
 }
 
@@ -915,6 +919,8 @@ function calculateQuantityCheck(enabledPlates, itemsPerSet) {
  *     value (rows predating the column); a stored value always wins, so editing
  *     the global default never moves an existing project.
  *   - testPrints: Array<{estimated_cost, attachmentBreakdowns}> (custom projects)
+ *   - lockedMarginBasis: 'all-in' | 'production' — basis the stored pin was set
+ *     on (`projects.locked_margin_basis`); only matters when setup & design > 0.
  *   - lockedMarginPct: number | null — the LOCK's own pin, independent of
  *     targetMarginPct (task #736). Used only when marginLocked is true, and
  *     only to derive the actual sales price. No fallback to targetMarginPct:
@@ -935,6 +941,7 @@ function calculateProject(opts) {
     marginLocked = false,
     targetMarginPct = null,
     lockedMarginPct = null,
+    lockedMarginBasis = 'all-in',
     designInvoicedSeparately = false,
   } = opts;
 
@@ -1087,7 +1094,8 @@ function calculateProject(opts) {
     // suggested price only; a locked actual price is exact to the cent.
     const lock = calculateLockedPrice(
       pricing.productionCost, lockedMarginPct, s.vat_rate,
-      { designTotalExcl: designCosts ? designCosts.designTotal : 0, designInvoicedSeparately }
+      { designTotalExcl: designCosts ? designCosts.designTotal : 0, designInvoicedSeparately,
+        lockBasis: lockedMarginBasis === 'production' ? 'production' : 'all-in' }
     );
     marginLock = { locked: true, targetPct: lockedMarginPct, ...lock };
     // A lock with no derivable price falls back to no actual price at all

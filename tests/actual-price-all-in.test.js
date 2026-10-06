@@ -147,7 +147,7 @@ function extractFn(name) {
 const sandbox = { settings, MAX_MARGIN_PCT: 100 };
 vm.createContext(sandbox);
 vm.runInContext(
-  ['fmt', 'fmtPct', 'lockBadge', 'lockSeedMarginPct', 'lockPromptArgs', 'renderPricingSection', 'renderSummaryCard']
+  ['fmt', 'fmtPct', 'allInBasisText', 'lockBadge', 'lockSeedMarginPct', 'lockPromptArgs', 'renderPricingSection', 'renderSummaryCard']
     .map(extractFn).join('\n') +
   '\nfunction renderTagsPills() { return ""; }\nfunction esc(s) { return String(s); }',
   sandbox
@@ -307,5 +307,84 @@ describe('Setup & Design card no longer carries all-in value or profit', () => {
     expect(card).not.toContain('margin-badge');
     expect(card).toContain('excl. VAT');
     expect(card).toContain(`€${(DESIGN * 1.21).toFixed(2)}`);
+  });
+});
+
+describe('per-row lock basis (calc + UI, #2290 R2)', () => {
+  const lockedOpts = (basis, sep = false) => ({
+    designInvoicedSeparately: sep, marginLocked: true, lockedMarginPct: 60, lockedMarginBasis: basis,
+  });
+
+  test.each([false, true])('legacy production basis inverts P / (1 - m), exactly the old price (separately=%s)', (sep) => {
+    const c = withDesign(lockedOpts('production', sep));
+    expect(c.effectiveSalesPrice).toBe(calc.calculateLockedPrice(c.pricing.productionCost, 60, 21).price);
+    expect(c.marginLock.basis).toBe('production');
+    // descriptive actual card stays all-in
+    expect(c.actualMargin.basis).toBe('all-in');
+  });
+
+  test('all-in basis differs from production when D > 0, and is the default when no basis is given', () => {
+    const legacy = withDesign(lockedOpts('production'));
+    const allIn = withDesign(lockedOpts('all-in'));
+    expect(allIn.effectiveSalesPrice).not.toBe(legacy.effectiveSalesPrice);
+    expect(withDesign({ marginLocked: true, lockedMarginPct: 60 }).effectiveSalesPrice).toBe(allIn.effectiveSalesPrice);
+    expect(allIn.actualMargin.marginPct).toBeCloseTo(60, 1);
+  });
+
+  test('D = 0: both bases are byte-identical', () => {
+    const a = run(lockedOpts('production'));
+    const b = run(lockedOpts('all-in'));
+    expect(a.effectiveSalesPrice).toBe(b.effectiveSalesPrice);
+    expect(a.marginLock).toEqual(b.marginLock);
+    expect(a.marginLock.basis).toBeUndefined();
+  });
+
+  test.each([false, true])('legacy lock seeds the ALL-IN margin of its price; re-lock is price-stable (separately=%s)', (sep) => {
+    const legacy = withDesign(lockedOpts('production', sep));
+    const html = sandbox.renderPricingSection(asProject(legacy, sep));
+    const actual = block(html, 'Actual Sales Price');
+    const seedArgs = actual.match(/promptTargetMargin\(1, ([^)]*)\)/)[1];
+    expect(seedArgs).toBe(`${legacy.actualMargin.marginPct.toFixed(2)}, ${legacy.actualMargin.marginPct}`);
+    const relocked = withDesign({ ...lockedOpts('all-in', sep), lockedMarginPct: legacy.actualMargin.marginPct });
+    expect(relocked.effectiveSalesPrice).toBe(legacy.effectiveSalesPrice);
+  });
+
+  test('legacy lock badge says production-basis; an all-in lock does not', () => {
+    const legacy = block(sandbox.renderPricingSection(asProject(withDesign(lockedOpts('production')))), 'Actual Sales Price');
+    expect(legacy).toContain('of production cost excl. VAT');
+    const fresh = block(sandbox.renderPricingSection(asProject(withDesign(lockedOpts('all-in')))), 'Actual Sales Price');
+    expect(fresh).not.toContain('of production cost excl. VAT');
+  });
+
+  test('wording follows design_invoiced_separately (tooltips)', () => {
+    for (const sep of [false, true]) {
+      const act = withDesign({ designInvoicedSeparately: sep, designExtras: [{ amount: 5 }], actualSalesPrice: 300 });
+      const html = sandbox.renderPricingSection(asProject(act, sep)) + sandbox.renderSummaryCard(asProject(act, sep));
+      if (sep) {
+        expect(html).toContain('setup &amp; design invoiced on top, counted in revenue');
+        expect(html).not.toContain('production cost + setup');
+      } else {
+        expect(html).toContain('production cost + setup &amp; design');
+        expect(html).not.toContain('invoiced on top');
+      }
+    }
+  });
+
+  test.each([
+    [false, 'absorbed into the unit price', 'invoiced on top'],
+    [true, 'invoiced on top of the unit price and counted in revenue', 'absorbed'],
+  ])('lock prompt message (separately=%s)', async (sep, has, hasNot) => {
+    const sb = {
+      MAX_MARGIN_PCT: 100, settings, projects: [{ id: 3, design_invoiced_separately: sep ? 1 : 0,
+        calculation: { pricing: { productionCost: 10 }, designCosts: { designTotal: 50 } } }],
+      detachedProject: null, captured: null,
+    };
+    sb.showPrompt = async o => { sb.captured = o; return null; };
+    vm.createContext(sb);
+    vm.runInContext(['findProject', 'lockDerivedPrice'].map(extractFn).join('\n') + '\nasync ' + extractFn('promptTargetMargin'), sb);
+    await sb.promptTargetMargin(3, null);
+    expect(sb.captured.message).toContain(has);
+    expect(sb.captured.message).not.toContain(hasNot);
+    expect(sb.captured.message).not.toContain('plus setup');
   });
 });

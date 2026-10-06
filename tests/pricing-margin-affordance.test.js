@@ -42,7 +42,7 @@ vm.createContext(sandbox);
 vm.runInContext(
   'const MAX_MARGIN_PCT = 100;\n' + extractFn('fmt') + '\n' +
   extractFn('fmtPct') + '\n' +
-  extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' + extractFn('lockPromptArgs') + '\n' +
+  extractFn('allInBasisText') + '\n' + extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' + extractFn('lockPromptArgs') + '\n' +
   extractFn('renderPricingSection'),
   sandbox
 );

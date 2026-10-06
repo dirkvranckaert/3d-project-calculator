@@ -104,7 +104,7 @@ function extractFn(name) {
 const sandbox = { settings, MAX_MARGIN_PCT: calc.maxReachableMarginPct() };
 vm.createContext(sandbox);
 vm.runInContext(
-  extractFn('fmt') + '\n' + extractFn('fmtPct') + '\n' + extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' + extractFn('lockPromptArgs') + '\n' +
+  extractFn('fmt') + '\n' + extractFn('fmtPct') + '\n' + extractFn('allInBasisText') + '\n' + extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' + extractFn('lockPromptArgs') + '\n' +
   extractFn('renderPricingSection'),
   sandbox
 );
@@ -194,7 +194,7 @@ describe('round 1: lock seed stays inside what the lock accepts', () => {
 const sandbox2 = { settings, MAX_MARGIN_PCT: calc.maxReachableMarginPct() };
 vm.createContext(sandbox2);
 vm.runInContext(
-  extractFn('fmt') + '\n' + extractFn('fmtPct') + '\n' + extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' + extractFn('lockPromptArgs') + '\n' +
+  extractFn('fmt') + '\n' + extractFn('fmtPct') + '\n' + extractFn('allInBasisText') + '\n' + extractFn('lockBadge') + '\n' + extractFn('lockSeedMarginPct') + '\n' + extractFn('lockPromptArgs') + '\n' +
   extractFn('renderPricingSection') + '\n' + extractFn('renderSummaryCard') + '\n' +
   'function renderTagsPills() { return ""; }\nfunction esc(s) { return String(s); }',
   sandbox2
