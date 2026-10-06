@@ -259,7 +259,7 @@ describe('round 4: lock prompt rejects a margin whose price rounds to 0.00', () 
   const sb = { MAX_MARGIN_PCT: calc.maxReachableMarginPct(), settings, projects: [{ id: 7, calculation: { pricing: { productionCost: 100 } } }], captured: null };
   sb.showPrompt = async opts => { sb.captured = opts; return null; };
   vm.createContext(sb);
-  vm.runInContext(extractFn('lockDerivedPrice') + '\n' + extractFn('promptTargetMargin'), sb);
+  vm.runInContext(extractFn('lockDerivedPrice') + '\nasync ' + extractFn('promptTargetMargin'), sb);
   const validate = async (id, v) => { await sb.promptTargetMargin(id, null); return sb.captured.validate(v); };
 
   test('-1e9% with cost 100 -> rejected with a clear message', async () => {
