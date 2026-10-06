@@ -943,8 +943,9 @@ function renderDesignCostSection(p) {
   </div>`;
 
   // ── Design invoiced separately toggle ───────────────────────────────
-  // Drives only the all-in profit/margin figure on the pricing tab (see
-  // calc.calculateAllInMargin). Default off: design absorbed into unit price.
+  // Drives the all-in profit/margin figure (calc.calculateAllInMargin) and how
+  // setup & design enters the suggested price (calc.calculateFinalPricing:
+  // absorbed -> in the price, separately -> deducted from it). Default off.
   const invoicedSeparatelyBlock = `<div class="project-notes-section">
     <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
       <label class="toggle"><input type="checkbox" ${p.design_invoiced_separately ? 'checked' : ''}
@@ -1804,7 +1805,9 @@ function renderPricingSection(p) {
     // Locked but no price can be derived — say why instead of rendering a blank.
     const why = lock.reason === 'no-cost'
       ? 'No production cost yet, so there is nothing to apply the margin to. Add plates to get a price.'
-      : `A margin of ${fmtPct(lock.targetPct)} excl. VAT is above the ${lock.maxMarginPct}% cap.`;
+      : lock.reason === null
+        ? `A margin of ${fmtPct(lock.targetPct)} excl. VAT derives a price that rounds to 0.00. Pick a higher margin.`
+        : `A margin of ${fmtPct(lock.targetPct)} excl. VAT is above the ${lock.maxMarginPct}% cap.`;
     actualBlock = `<div class="pricing-block pricing-block--locked">
       <h4>Actual Sales Price (incl. VAT) ${lockBadge(lock)}</h4>
       <div class="big-price" style="opacity:.4">&mdash;</div>
@@ -1858,11 +1861,11 @@ function renderPricingSection(p) {
   const basisActual = effPrice > 0 && !!c.actualMargin;
   const baseExclSet = basisActual ? c.actualMargin.actualExclVat : pr.suggestedExclVat;
   const basisLabel = basisActual ? 'actual sales price' : 'suggested price';
-  // Suggested basis, absorbed: the suggested price already contains design
-  // (R = (P + D) / (1 - m)), so adding D again double-counts it. The actual
-  // price keeps its explicit always-add rule; invoiced separately always adds.
-  const designAlreadyInBase = !basisActual && allInSuggested && !p.design_invoiced_separately;
-  const allInExclSet = baseExclSet + (designAlreadyInBase ? 0 : (c.designCosts?.designTotal || 0));
+  // "All-in value / item" is the loaded job value: (price + design) / items on
+  // BOTH bases, whatever design_invoiced_separately says (Dirk 2026-08-31). It is
+  // not revenue and not an invoice line; the profit/margin line below uses the
+  // toggle-driven allInMargin instead.
+  const allInExclSet = baseExclSet + (c.designCosts?.designTotal || 0);
   const allInInclSet = allInExclSet * vatMult;
 
   // `designTotal` is an excl. VAT figure — every setup & design input is entered
@@ -2505,8 +2508,20 @@ function lockSeedMarginPct(raw) {
   return Number(seed) < MAX_MARGIN_PCT ? seed : null;
 }
 
+// Mirror of calc.calculateLockedPrice (incl. VAT, rounded to cents) for the
+// prompt only. A margin far below -100 is finite yet derives a price that
+// rounds to 0.00, which the lock cannot use. Null when cost is unknown.
+function lockDerivedPrice(productionCost, marginPct, vatRate) {
+  const cost = Number(productionCost);
+  if (!(cost > 0)) return null;
+  const raw = cost / ((100 - marginPct) / 100) * (1 + (Number(vatRate) || 0) / 100);
+  return Math.round((raw + Number.EPSILON) * 100) / 100;
+}
+
 async function promptTargetMargin(projectId, current) {
   const maxPct = MAX_MARGIN_PCT;
+  const proj = projects.find(x => x.id === projectId);
+  const lockCost = proj?.calculation?.pricing?.productionCost;
   const val = await showPrompt({
     title: 'Lock target margin',
     message: `Enter the margin you want to hold, measured on the price excl. VAT. The sales price is recalculated from the production cost and follows it when costs change. Must be below ${maxPct}% — margin is profit as a share of the selling price, so ${maxPct}% would mean an infinite price.`,
@@ -2519,6 +2534,10 @@ async function promptTargetMargin(projectId, current) {
       const n = parseFloat(t.replace(',', '.'));
       if (!isFinite(n)) return 'Enter a valid number';
       if (n >= maxPct) return `Must be below ${maxPct}% — margin is profit as a share of the selling price, so ${maxPct}% is an infinite price. A markup on cost converts: 150% markup = 60% margin.`;
+      const derived = lockDerivedPrice(lockCost, n, settings.vat_rate);
+      if (derived !== null && !(Number.isFinite(derived) && derived >= 0.01)) {
+        return 'That margin is so far below zero that the derived price rounds to 0.00. Enter a higher margin.';
+      }
       return null;
     },
   });

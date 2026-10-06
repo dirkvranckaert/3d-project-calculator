@@ -213,7 +213,7 @@ Deployed via the shared infrastructure repo: `../infrastructure/apps/project-cal
   - `testPrintDetails`: per-entry `{ estimated, actual, attachmentCount }` for variance display.
 - `calculateProject` accepts `testPrints = []` in opts; passes them to `calculateDesignCosts`.
 - `calculateProject` returns `designCosts: { designHoursSubtotal, testPrintsSubtotal, testPrintDetails, extrasSubtotal, designTotal }` when `isCustom=true`, else `null`.
-- `designTotal` is **never** added to `productionCost`, `totalExclVat`, or `suggestedPrice`.
+- `designTotal` is **never** added to `productionCost` or `totalExclVat`. It enters `suggestedPrice` only via `calculateFinalPricing`'s all-in basis when `designTotal > 0` (see the 2026-10-06 note above); with no design the suggested price is the production-only formula. The "All-in value / item" card is always (price + design) / items on both bases, ignoring the toggle (Dirk 2026-08-31).
 
 ## What NOT to do
 

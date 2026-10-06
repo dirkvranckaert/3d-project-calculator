@@ -209,25 +209,78 @@ const designBlock2 = html => {
 };
 const allInValue = html => Number(designBlock2(html).match(/All-in value \/ item: €([\d.]+) excl\./)[1]);
 
-describe('round 2: all-in value card, suggested basis', () => {
-  test('absorbed: value = suggested price (design NOT added again) == allInMargin.revenue', () => {
+// Dirk 2026-08-31 (round 3 overrule): "All-in value / item" is ALWAYS
+// (price + design) / items on both bases, ignoring design_invoiced_separately.
+describe('round 4: all-in value card = (price + design) / items, toggle ignored', () => {
+  test('suggested basis, absorbed: value = suggested + design', () => {
     const r = withDesign();
     const v = allInValue(sandbox2.renderPricingSection(asProject2(r, false)));
-    expect(v).toBeCloseTo(r.pricing.suggestedExclVat, 2);
-    expect(v).toBeCloseTo(r.allInMargin.revenue, 2);
+    expect(v).toBeCloseTo(r.pricing.suggestedExclVat + DESIGN, 2);
   });
 
-  test('invoiced separately: value = suggested component + design == allInMargin.revenue', () => {
-    const r = withDesign({ designInvoicedSeparately: true, designExtras: [{ amount: 10 }] });
+  test('suggested basis, invoiced separately: value = suggested + design', () => {
+    const r = withDesign({ designInvoicedSeparately: true });
     const v = allInValue(sandbox2.renderPricingSection(asProject2(r, true)));
-    expect(v).toBeCloseTo(r.pricing.suggestedExclVat + 10, 2);
-    expect(v).toBeCloseTo(r.allInMargin.revenue, 2);
+    expect(v).toBeCloseTo(r.pricing.suggestedExclVat + DESIGN, 2);
   });
 
-  test('actual price basis keeps adding design (unchanged rule)', () => {
-    const r = withDesign({ actualSalesPrice: 300 });
-    const v = allInValue(sandbox2.renderPricingSection(asProject2(r, false)));
-    expect(v).toBeCloseTo(r.actualMargin.actualExclVat + DESIGN, 2);
+  test('actual basis, both toggle states: value = actual + design', () => {
+    for (const sep of [false, true]) {
+      const r = withDesign({ actualSalesPrice: 300, designInvoicedSeparately: sep });
+      const v = allInValue(sandbox2.renderPricingSection(asProject2(r, sep)));
+      expect(v).toBeCloseTo(r.actualMargin.actualExclVat + DESIGN, 2);
+    }
+  });
+
+  test('suggested price entered unchanged as actual gives the same card value (absorbed)', () => {
+    const sug = withDesign();
+    const same = withDesign({ actualSalesPrice: sug.pricing.suggestedPrice });
+    const vs = allInValue(sandbox2.renderPricingSection(asProject2(sug, false)));
+    const va = allInValue(sandbox2.renderPricingSection(asProject2(same, false)));
+    expect(va).toBeCloseTo(vs, 1);
+  });
+
+  test('profit/margin line stays on allInMargin (toggle-driven)', () => {
+    for (const sep of [false, true]) {
+      const r = withDesign({ designInvoicedSeparately: sep });
+      const html = designBlock2(sandbox2.renderPricingSection(asProject2(r, sep)));
+      expect(html).toContain('Profit excl. VAT: €' + r.allInMargin.profitAmount.toFixed(2));
+    }
+  });
+
+  test('wording says loaded job value, not invoiced', () => {
+    const html = designBlock2(sandbox2.renderPricingSection(asProject2(withDesign(), false)));
+    expect(html).toContain('the loaded job value per item, not the amount actually invoiced per item');
+  });
+
+});
+
+describe('round 4: lock prompt rejects a margin whose price rounds to 0.00', () => {
+  const sb = { MAX_MARGIN_PCT: calc.maxReachableMarginPct(), settings, projects: [{ id: 7, calculation: { pricing: { productionCost: 100 } } }], captured: null };
+  sb.showPrompt = async opts => { sb.captured = opts; return null; };
+  vm.createContext(sb);
+  vm.runInContext(extractFn('lockDerivedPrice') + '\n' + extractFn('promptTargetMargin'), sb);
+  const validate = async (id, v) => { await sb.promptTargetMargin(id, null); return sb.captured.validate(v); };
+
+  test('-1e9% with cost 100 -> rejected with a clear message', async () => {
+    expect(calc.calculateLockedPrice(100, -1e9, 21).price).toBe(0);
+    expect(await validate(7, '-1000000000')).toMatch(/rounds to 0\.00/);
+  });
+
+  test('non-finite derived price is rejected too', async () => {
+    expect(await validate(7, '-1e308')).toMatch(/rounds to 0\.00/);
+  });
+
+  test('below -100 seeds that give a valid price still pass; normal values pass', async () => {
+    expect(await validate(7, '-150')).toBeNull();
+    expect(await validate(7, '-5000')).toBeNull();
+    expect(await validate(7, '40')).toBeNull();
+  });
+
+  test('cap + junk validation unchanged; unknown cost skips the price check', async () => {
+    expect(await validate(7, '100')).toMatch(/Must be below/);
+    expect(await validate(7, 'abc')).toMatch(/valid number/);
+    expect(await validate(99, '-1000000000')).toBeNull();
   });
 });
 

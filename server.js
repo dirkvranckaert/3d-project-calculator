@@ -931,8 +931,9 @@ app.patch('/api/projects/:id/custom', (req, res) => {
   res.json({ ok: true, is_custom: newVal });
 });
 
-// Toggle whether setup & design is invoiced separately (drives only the
-// all-in profit/margin figure — see calc.calculateAllInMargin). Default false.
+// Toggle whether setup & design is invoiced separately (drives the
+// all-in profit/margin figure and how design enters the suggested price — see
+// calc.calculateAllInMargin / calculateFinalPricing). Default false.
 app.patch('/api/projects/:id/design-invoiced-separately', (req, res) => {
   const db = getDb();
   const project = db.prepare('SELECT design_invoiced_separately FROM projects WHERE id = ?').get(req.params.id);

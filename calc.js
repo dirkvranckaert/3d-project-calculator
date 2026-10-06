@@ -568,7 +568,8 @@ function marginIndicator(marginPct, targetPct = 40, lowestPct = 25) {
 
 /**
  * Calculate one-time design costs for a custom project.
- * These are separate from production costs and NOT added to suggestedPrice.
+ * These are separate from production costs (never in productionCost / totalExclVat);
+ * calculateFinalPricing folds them into suggestedPrice on the all-in basis when > 0.
  *
  * @param {object} opts
  *   - designHours: Array<{hours, hourly_rate}>  (is_design_cost=1 rows)
@@ -1008,9 +1009,9 @@ function calculateProject(opts) {
   // Extra hours (project-level human-time, no margin)
   const extraHoursCost = calculateExtraHoursCost(extraHours);
 
-  // Design costs (only for custom projects). Reported alongside the pricing and
-  // billed separately — never added to `productionCost`, and therefore never
-  // part of the target-margin base. See the note in `calculateFinalPricing`.
+  // Design costs (only for custom projects). Never added to `productionCost`,
+  // so never part of the production-basis target-margin base; they enter the
+  // suggested price only on the all-in basis when > 0 (see `calculateFinalPricing`).
   const designCosts = isCustom
     ? calculateDesignCosts({ designHours, testPrints: opts.testPrints || [], designExtras })
     : null;

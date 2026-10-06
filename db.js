@@ -223,7 +223,8 @@ function migrate(db) {
   addCol('projects', 'locked_margin_pct', 'REAL');
   // Design invoiced separately toggle (2026-08-31). Default false: design is
   // absorbed into the unit price (Dirk's normal case), not billed on top.
-  // Drives only the all-in profit/margin figure — see calc.calculateAllInMargin.
+  // Drives the all-in profit/margin figure (calc.calculateAllInMargin) and how
+  // design enters the suggested price (calc.calculateFinalPricing).
   addCol('projects', 'design_invoiced_separately', 'INTEGER NOT NULL DEFAULT 0');
   // Plate mode (#2135, 2026-09-30). 'parts' = every plate is a component of ONE
   // item (whole runs); 'batch' = every enabled plate printed exactly once. The
