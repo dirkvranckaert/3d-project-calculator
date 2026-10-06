@@ -331,6 +331,8 @@ function calculateFinalPricing(opts) {
     vatRate = 21,
     priceRounding = 0.99,
     targetMarginPct = null,
+    designTotalExcl = 0,
+    designInvoicedSeparately = false,
   } = opts;
 
   // Scale per-item to per-set
@@ -350,7 +352,8 @@ function calculateFinalPricing(opts) {
   // up of test prints passed through, hours billed at a rate that already
   // carries his profit, and materials — and he invoices it separately at that
   // amount. Applying a target margin on top would charge margin on margin.
-  // Do not fold it in.
+  // Do not fold it in. (Since 2026-10-06 only the SUGGESTED PRICE absorbs design
+  // so the target is reached all-in — see the all-in basis note below.)
   const productionCost = baseCostPerSet + extraCostsTotal + extraHoursCost;
 
   // Total excl VAT = base costs + profits + extras + extra hours (no margin on hours)
@@ -387,9 +390,25 @@ function calculateFinalPricing(opts) {
     : Number(targetMarginPct);
   const targetUsable = Number.isFinite(target) && target < MAX_MARGIN_PCT && productionCost > 0;
   // Same stable inversion as `calculateLockedPrice` — see the comment there.
-  const targetPrice = targetUsable
-    ? (productionCost / ((100 - target) / 100)) * (1 + vatRate / 100)
-    : NaN;
+  //
+  // ALL-IN BASIS (Dirk 2026-10-06): when the project carries setup & design
+  // cost, the suggested price is the price to enter as the actual sales price so
+  // the TARGET margin is reached on the all-in line (`calculateAllInMargin`),
+  // not only on the production cost. Design still never enters `productionCost`;
+  // only the suggested price absorbs it, per the design-invoicing toggle:
+  //   absorbed (default): (R - P - D) / R = m   ->  R = (P + D) / (1 - m)
+  //   invoiced separately: (R + D - P) / (R + D) = m  ->  R = P / (1 - m) - D
+  // Without design (D = 0) both reduce to the old `P / (1 - m)`, byte-identical.
+  const designExcl = Number(designTotalExcl) > 0 ? Number(designTotalExcl) : 0;
+  const allInBasis = designExcl > 0;
+  const divisor = (100 - target) / 100;
+  let targetPriceEx = NaN;
+  if (targetUsable) {
+    if (!allInBasis) targetPriceEx = productionCost / divisor;
+    else if (designInvoicedSeparately) targetPriceEx = Math.max(0, productionCost / divisor - designExcl);
+    else targetPriceEx = (productionCost + designExcl) / divisor;
+  }
+  const targetPrice = targetUsable ? targetPriceEx * (1 + vatRate / 100) : NaN;
   // `roundToPriceEnding` maps a non-finite input to 0, so the fallback has to
   // be decided on `targetPrice` itself — 0 is a price, and a silent 0 here
   // would read as "free" rather than "no target".
@@ -405,10 +424,24 @@ function calculateFinalPricing(opts) {
 
   // Profit on suggested price, ex-VAT basis — the money actually kept.
   // Margin = (sales_excl_vat - production_cost) / sales_excl_vat * 100
-  const suggestedProfitAmount = suggestedExclVat - productionCost;
-  const suggestedMarginPct = suggestedExclVat > 0
-    ? (suggestedProfitAmount / suggestedExclVat) * 100
+  const suggestedProductionProfit = suggestedExclVat - productionCost;
+  const suggestedProductionMarginPct = suggestedExclVat > 0
+    ? (suggestedProductionProfit / suggestedExclVat) * 100
     : 0;
+  // With setup & design the badge/profit line report the all-in figures, so they
+  // match the target the suggested price was solved for.
+  const suggestedAllIn = allInBasis
+    ? calculateAllInMargin({
+      actualExclVat: suggestedExclVat,
+      productionCost,
+      designTotalExcl: designExcl,
+      designInvoicedSeparately,
+    })
+    : null;
+  const suggestedProfitAmount = suggestedAllIn ? suggestedAllIn.profitAmount : suggestedProductionProfit;
+  const suggestedMarginPct = suggestedAllIn ? suggestedAllIn.marginPct : suggestedProductionMarginPct;
+  // Unrounded price (incl. VAT) that exactly hits the target on the basis above.
+  const minPriceForTarget = Number.isFinite(targetPrice) ? targetPrice : 0;
 
   return {
     baseCostPerSet,
@@ -423,6 +456,9 @@ function calculateFinalPricing(opts) {
     suggestedExclVat,
     suggestedProfitAmount,
     suggestedMarginPct,
+    suggestedProductionMarginPct,
+    suggestedBasis: allInBasis ? 'all-in' : 'production',
+    minPriceForTarget,
   };
 }
 
@@ -982,6 +1018,8 @@ function calculateProject(opts) {
     vatRate: s.vat_rate,
     priceRounding: s.price_rounding,
     targetMarginPct: projectTarget,
+    designTotalExcl: designCosts ? designCosts.designTotal : 0,
+    designInvoicedSeparately,
   });
 
   // Suggested margin indicator

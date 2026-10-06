@@ -85,11 +85,13 @@ function customProject({ itemsPerSet = 40, actualSalesPrice = 539.83 } = {}) {
   };
 }
 
-/** The Setup & Design card only — the grid holds four other blocks. */
+/** The Setup & Design card only — the grid holds four other blocks. It sits
+ * before Suggested/Actual, so cut at the next block rather than at the end. */
 function designBlock(html) {
   const start = html.indexOf('<h4>Setup &amp; Design');
   expect(start).toBeGreaterThan(-1);
-  return html.slice(start);
+  const next = html.indexOf('<div class="pricing-block', start);
+  return html.slice(start, next > -1 ? next : undefined);
 }
 
 describe('Setup & Design card — VAT basis', () => {

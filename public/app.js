@@ -1781,7 +1781,12 @@ function renderPricingSection(p) {
   const vatMult = 1 + (settings.vat_rate || 21) / 100;
   // Margin is measured excl. VAT: price_ex = cost / (1 - margin), then + VAT.
   const denominator = 1 - (greenPct / 100);
-  const minPriceForGreen = denominator > 0 ? (pr.productionCost / denominator) * vatMult : 0;
+  // With setup & design the hint tracks the all-in basis the suggested price is
+  // solved on (server-computed, same formula), else the production-cost basis.
+  const allInSuggested = pr.suggestedBasis === 'all-in';
+  const minPriceForGreen = allInSuggested
+    ? (pr.minPriceForTarget || 0)
+    : (denominator > 0 ? (pr.productionCost / denominator) * vatMult : 0);
 
   // Actual price section.
   //
@@ -1845,7 +1850,7 @@ function renderPricingSection(p) {
       <div class="sub" style="margin-top:4px;opacity:.5">Set your selling price to see actual margin</div>
       <div class="sub" style="margin-top:4px">Margin excl. VAT: <span class="margin-badge margin-badge--empty margin-badge--editable"
         title="No sales price yet — click to lock a target margin and let the price follow it"
-        onclick="promptTargetMargin(${p.id}, ${pr.suggestedMarginPct.toFixed(2)})">Lock margin</span></div>
+        onclick="promptTargetMargin(${p.id}, ${(pr.suggestedProductionMarginPct ?? pr.suggestedMarginPct).toFixed(2)})">Lock margin</span></div>
     </div>`;
   }
 
@@ -1882,7 +1887,7 @@ function renderPricingSection(p) {
       <div class="big-price">${fmt(pr.productionCost)}</div>
       <div class="sub">excl. VAT, no margins</div>
       ${isSet ? `<div class="sub" style="opacity:.6">${pi(pr.productionCost)}</div>` : ''}
-      ${minPriceForGreen > 0 ? `<div class="sub" style="margin-top:4px">Min. for ${greenPct}% margin excl. VAT: <strong>${fmt(minPriceForGreen)}</strong> incl. VAT</div>` : ''}
+      ${minPriceForGreen > 0 ? `<div class="sub" style="margin-top:4px">Min. for ${greenPct}% ${allInSuggested ? 'all-in ' : ''}margin excl. VAT: <strong>${fmt(minPriceForGreen)}</strong> incl. VAT</div>` : ''}
     </div>
     <div class="pricing-block">
       <h4>Total excl. VAT (basic margins applied)</h4>
@@ -1893,16 +1898,16 @@ function renderPricingSection(p) {
       <div class="sub">Total incl. VAT: ${fmt(pr.totalInclVat)}</div>
       ${isSet ? `<div class="sub" style="opacity:.6">${pi(pr.totalExclVat)} excl. &middot; ${pi(pr.totalInclVat)} incl. VAT</div>` : ''}
     </div>
+    ${designCostBlock}
     <div class="pricing-block">
       <h4>Suggested Price</h4>
       <div class="big-price">${fmt(pr.suggestedPrice)}</div>
       <div class="sub">${fmt(pr.suggestedExclVat)} excl. VAT</div>
       <div class="sub">Profit excl. VAT: ${fmt(pr.suggestedProfitAmount)} <span class="margin-badge ${c.suggestedIndicator}"
-        title="Margin on the price excl. VAT">${fmtPct(pr.suggestedMarginPct)}</span></div>
+        title="${allInSuggested ? 'All-in margin excl. VAT (production cost + setup &amp; design)' : 'Margin on the price excl. VAT'}">${fmtPct(pr.suggestedMarginPct)}</span></div>
       ${isSet ? `<div class="sub" style="opacity:.6">${pi(pr.suggestedExclVat)} excl. &middot; ${pi(pr.suggestedPrice)} incl. VAT</div>` : ''}
     </div>
     ${actualBlock}
-    ${designCostBlock}
   </div>
   <div style="padding:8px 0 0;text-align:right">
     ${isLocked ? `<button class="btn btn-sm" onclick="setMarginLock(${p.id}, false)">Unlock margin</button>` : ''}
