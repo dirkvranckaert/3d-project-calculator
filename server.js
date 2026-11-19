@@ -1169,10 +1169,21 @@ app.put('/api/projects/:projectId/extras', (req, res) => {
     }
     if (quantity > 0) rows.push([Number(item.extra_cost_id), quantity, linked]);
   }
+  // Relational constraints too (FK + UNIQUE(project, extra_cost)), still before any write.
+  const seen = new Set();
+  const exists = db.prepare('SELECT 1 FROM extra_cost_items WHERE id = ?');
+  for (const [ecId] of rows) {
+    if (seen.has(ecId)) return res.status(400).json({ error: 'Duplicate supplies row' });
+    seen.add(ecId);
+    if (!exists.get(ecId)) return res.status(400).json({ error: 'Unknown supplies item' });
+  }
 
-  db.prepare('DELETE FROM project_extra_costs WHERE project_id = ?').run(pid);
+  // One transaction: whatever happens, the old list is either kept or fully replaced.
   const ins = db.prepare('INSERT INTO project_extra_costs (project_id, extra_cost_id, quantity, scales_with_order) VALUES (?,?,?,?)');
-  for (const [ecId, quantity, linked] of rows) ins.run(pid, ecId, quantity, linked);
+  db.transaction(() => {
+    db.prepare('DELETE FROM project_extra_costs WHERE project_id = ?').run(pid);
+    for (const [ecId, quantity, linked] of rows) ins.run(pid, ecId, quantity, linked);
+  })();
 
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);

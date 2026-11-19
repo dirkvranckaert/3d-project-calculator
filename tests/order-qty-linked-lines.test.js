@@ -34,7 +34,7 @@ function extractFn(name) {
 const ctx = {};
 vm.createContext(ctx);
 vm.runInContext(
-  'const _listWriteQueues = new Map();\n' + ['parsePerUnitInput', 'parseHoursMinutes', 'formatHoursMinutes', 'extraHourPayload', 'parseExtraQtyInput', 'buildExtrasPayload', 'toggleLinkedPatch', 'serializeListWrite', 'collectExtraHoursItems', 'commitExtraHours'].map(extractFn).join('\n'),
+  'const _listWriteQueues = new Map();\nconst _listWritePending = new Map();\n' + ['parsePerUnitInput', 'parseHoursMinutes', 'formatHoursMinutes', 'extraHourPayload', 'parseExtraQtyInput', 'buildExtrasPayload', 'toggleLinkedPatch', 'setListPanelInert', 'serializeListWrite', 'collectExtraHoursItems', 'commitExtraHours'].map(extractFn).join('\n'),
   ctx
 );
 
@@ -296,6 +296,28 @@ describe('list write queue: stale recovery and edit snapshot (Codex R2)', () => 
     expect(log).toEqual(['refresh', 'ran2']);
   });
 
+  test('panel is inert from enqueue until the whole queue drained (no overlapping edits), also after a failure', async () => {
+    const els = { 'extra-hours-9': { inert: false }, 'extras-9': { inert: false } };
+    const saved = ctx.document;
+    ctx.document = { querySelectorAll: (sel) => {
+      const m = /data-(extras|extra-hours)-panel="9"/.exec(sel);
+      return m ? [els[m[1] + '-9']] : [];
+    } };
+    let release;
+    const a = ctx.serializeListWrite('extra-hours-9', () => new Promise(r => { release = r; }));
+    expect(els['extra-hours-9'].inert).toBe(true);
+    expect(els['extras-9'].inert).toBe(false);
+    const b = ctx.serializeListWrite('extra-hours-9', () => Promise.reject(new Error('x')));
+    await new Promise(r => setTimeout(r, 1));
+    release();
+    await a;
+    expect(els['extra-hours-9'].inert).toBe(true);   // b still pending
+    await expect(b).rejects.toThrow();
+    await new Promise(r => setTimeout(r, 1));
+    expect(els['extra-hours-9'].inert).toBe(false);  // unlocked after failure too
+    ctx.document = saved;
+  });
+
   test('no failure, no refresh', async () => {
     const log = [];
     await ctx.serializeListWrite('r3', async () => { log.push('a'); }, async () => { log.push('refresh'); });
@@ -314,7 +336,7 @@ describe('list write queue: stale recovery and edit snapshot (Codex R2)', () => 
       })[sel] || null,
     });
     let rows = [mkRow('A', '1:00'), mkRow('B', '2:00')];
-    ctx.document = { querySelector: () => ({ querySelectorAll: () => rows }) };
+    ctx.document = { querySelector: () => ({ querySelectorAll: () => rows }), querySelectorAll: () => [] };
     const puts = [];
     let release;
     ctx.PUT = (url, body) => { puts.push(body.map(i => i.hours)); return puts.length === 1 ? new Promise(r => { release = r; }) : Promise.resolve(); };
@@ -359,6 +381,24 @@ describe('API: supplies payload validation (Codex R2)', () => {
     const ok = await api('put', `/api/projects/${pid}/extras`, [{ extra_cost_id: ec, quantity: 0.25, scales_with_order: 1 }]);
     expect(ok.status).toBe(200);
     expect(ok.body.extras[0].effective_quantity).toBe(3);
+  });
+
+  test('unknown supplies item or duplicate item is 400 and the old list survives (no partial replace)', async () => {
+    const ec = (await api('post', '/api/extra-costs', { name: 'Atomic', price_excl_vat: 1, default_included: 0, default_quantity: 1 })).body.id;
+    const pid = (await api('post', '/api/projects', { name: 'Atomic', items_per_set: 10 })).body.id;
+    await api('put', `/api/projects/${pid}/extras`, [{ extra_cost_id: ec, quantity: 4, scales_with_order: 0 }]);
+    const unknown = await api('put', `/api/projects/${pid}/extras`, [{ extra_cost_id: 987654, quantity: 1, scales_with_order: 0 }]);
+    expect(unknown.status).toBe(400);
+    const dup = await api('put', `/api/projects/${pid}/extras`, [
+      { extra_cost_id: ec, quantity: 1, scales_with_order: 0 }, { extra_cost_id: ec, quantity: 2, scales_with_order: 0 },
+    ]);
+    expect(dup.status).toBe(400);
+    expect((await api('get', `/api/projects/${pid}`)).body.extras.map(e => e.quantity)).toEqual([4]);
+    // a zero-quantity duplicate is a removal, not a constraint hit
+    const rm = await api('put', `/api/projects/${pid}/extras`, [
+      { extra_cost_id: ec, quantity: 0, scales_with_order: 0 }, { extra_cost_id: ec, quantity: 2, scales_with_order: 0 },
+    ]);
+    expect(rm.status).toBe(200);
   });
 
   test('unknown project is 404 and nothing is deleted first', async () => {

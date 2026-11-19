@@ -1463,7 +1463,7 @@ function renderExtrasSection(p) {
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
     </button></td></tr>`).join('');
 
-  return `<div class="extras-section">
+  return `<div class="extras-section" data-extras-panel="${p.id}">
     <div class="extras-section-header"><h3>Supplies &amp; Packaging</h3><span class="ec-total-badge">Total (excl. VAT): ${fmt(total)}</span></div>
     ${activeItems.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
       <thead><tr><th>Item</th><th>Unit Price (excl. VAT)</th><th>Qty</th><th>Total</th><th></th></tr></thead>
@@ -2749,12 +2749,33 @@ const _listWriteQueues = new Map();
 // in-memory project stale. So when the previous task failed, `refresh` (a reload)
 // must succeed before the next task builds a full replacement; if it fails too the
 // next task fails without writing.
+//
+// While a list write is pending its panel is made inert. Queued writes carry state
+// captured earlier (a DOM snapshot, a row index), so a second edit made before the
+// first one's reload re-renders the panel could be applied on top of a changed list
+// (removing the wrong row, resurrecting a removed one). Inert = no overlapping edits;
+// the re-render after the reload replaces the panel with a fresh, editable one.
+const _listWritePending = new Map();
+function setListPanelInert(key, on) {
+  if (typeof document === 'undefined' || !document.querySelectorAll) return;
+  const m = /^(extras|extra-hours)-(.+)$/.exec(key);
+  if (!m) return;
+  document.querySelectorAll(`[data-${m[1]}-panel="${m[2]}"]`).forEach(el => { el.inert = on; });
+}
 function serializeListWrite(key, fn, refresh) {
   const prev = _listWriteQueues.get(key) || Promise.resolve();
+  _listWritePending.set(key, (_listWritePending.get(key) || 0) + 1);
+  setListPanelInert(key, true);
   const next = prev.then(() => false, () => true).then(async prevFailed => {
     if (prevFailed && refresh) await refresh();
     return fn();
   });
+  const settle = () => {
+    const n = (_listWritePending.get(key) || 1) - 1;
+    _listWritePending.set(key, n);
+    if (n === 0) setListPanelInert(key, false);
+  };
+  next.then(settle, settle);
   _listWriteQueues.set(key, next);
   return next;
 }
