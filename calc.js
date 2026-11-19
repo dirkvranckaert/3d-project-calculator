@@ -169,12 +169,16 @@ function orderQuantity(itemsPerSet) {
 
 /**
  * Effective quantity of a supplies line. A line with `scales_with_order`
- * truthy treats `quantity` as PER ORDERED ITEM and multiplies by the order
- * quantity (#3927); any other line keeps its fixed quantity.
+ * truthy treats `quantity` as a per-ordered-item RATIO (decimals allowed,
+ * 0.5 = one per two items) and multiplies by the order quantity (#3927). The
+ * total is ROUNDED UP to a whole piece (you cannot buy half a keyring); the
+ * 1e-9 pre-round stops float noise (0.1 x 30 = 3.0000000000000004) adding one.
+ * Any other line keeps its fixed quantity.
  */
 function effectiveExtraQuantity(extra, itemsPerSet = 1) {
   const q = Number(extra && extra.quantity) || 0;
-  return extra && extra.scales_with_order ? q * orderQuantity(itemsPerSet) : q;
+  if (!(extra && extra.scales_with_order)) return q;
+  return Math.ceil(Math.round(q * orderQuantity(itemsPerSet) * 1e9) / 1e9);
 }
 
 /**

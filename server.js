@@ -892,6 +892,15 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
     const insEC = db.prepare('INSERT INTO project_extra_costs (project_id, extra_cost_id, quantity, scales_with_order) VALUES (?,?,?,?)');
     for (const e of extras) insEC.run(newId, e.extra_cost_id, e.quantity, e.scales_with_order);
 
+    // Copy production extra hours (is_design_cost=0), incl. time-per-unit rows (#3928)
+    const prodHours = db.prepare('SELECT * FROM project_extra_hours WHERE project_id = ? AND is_design_cost = 0 ORDER BY sort_order, id').all(src.id);
+    const insProdHour = db.prepare(
+      'INSERT INTO project_extra_hours (project_id, description, hours, hourly_rate, sort_order, is_design_cost, per_unit_value, per_unit_unit) VALUES (?,?,?,?,?,0,?,?)'
+    );
+    for (const h of prodHours) {
+      insProdHour.run(newId, h.description, h.hours, h.hourly_rate, h.sort_order, h.per_unit_value ?? null, h.per_unit_unit ?? null);
+    }
+
     // Copy design hours (is_design_cost=1)
     const designHours = db.prepare('SELECT * FROM project_extra_hours WHERE project_id = ? AND is_design_cost = 1 ORDER BY sort_order, id').all(src.id);
     const insDesignHour = db.prepare(
@@ -1984,6 +1993,7 @@ app.get('/api/export', (_req, res) => {
       ...p,
       plates: db.prepare('SELECT * FROM project_plates WHERE project_id = ?').all(p.id),
       extras: db.prepare('SELECT extra_cost_id, quantity, scales_with_order FROM project_extra_costs WHERE project_id = ?').all(p.id),
+      extra_hours: db.prepare('SELECT * FROM project_extra_hours WHERE project_id = ? ORDER BY sort_order, id').all(p.id),
     })),
     exported_at: new Date().toISOString(),
   };

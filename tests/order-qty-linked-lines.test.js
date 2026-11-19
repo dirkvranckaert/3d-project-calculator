@@ -34,7 +34,7 @@ function extractFn(name) {
 const ctx = {};
 vm.createContext(ctx);
 vm.runInContext(
-  ['parsePerUnitInput', 'parseHoursMinutes', 'formatHoursMinutes', 'extraHourPayload'].map(extractFn).join('\n'),
+  'const _listWriteQueues = new Map();\n' + ['parsePerUnitInput', 'parseHoursMinutes', 'formatHoursMinutes', 'extraHourPayload', 'parseExtraQtyInput', 'buildExtrasPayload', 'toggleLinkedPatch', 'serializeListWrite'].map(extractFn).join('\n'),
   ctx
 );
 
@@ -205,6 +205,142 @@ describe('API: order-quantity-linked lines', () => {
     const dup = (await api('get', `/api/projects/${d.body.id}`)).body;
     expect(dup.extras.find(e => e.extra_cost_id === keyringId).scales_with_order).toBe(1);
     await api('delete', `/api/projects/${d.body.id}`);
+  });
+});
+
+describe('decimal per-item ratio, rounded up (#3927, Dirk)', () => {
+  const lin = (q) => ({ price_excl_vat: 0.2, quantity: q, scales_with_order: 1 });
+
+  test.each([
+    [2, 50, 100], [0.5, 50, 25], [0.5, 51, 26], [0.25, 50, 13], [1.5, 3, 5], [0.01, 50, 1],
+  ])('ratio %p x order %p = %p pieces (rounded up)', (ratio, order, expected) => {
+    expect(calc.effectiveExtraQuantity(lin(ratio), order)).toBe(expected);
+  });
+
+  test('float noise does not add a piece (0.07 x 100 = 7.000000000000001 -> 7)', () => {
+    expect(0.07 * 100).not.toBe(7);
+    expect(calc.effectiveExtraQuantity(lin(0.07), 100)).toBe(7);
+    expect(calc.effectiveExtraQuantity(lin(0.29), 100)).toBe(29);
+  });
+
+  test('cost uses the rounded-up quantity; unlinked decimals are never rounded here', () => {
+    expect(calc.calculateExtraCosts([lin(0.5)], 51)).toBeCloseTo(0.2 * 26, 10);
+    expect(calc.effectiveExtraQuantity({ quantity: 2.5, scales_with_order: 0 }, 50)).toBe(2.5);
+  });
+
+  test.each([['0,5', 0.5], ['2', 2], ['1.25', 1.25], [' 3,0 ', 3]])('linked input %j -> %p', (raw, v) => {
+    expect(ctx.parseExtraQtyInput(raw, true)).toBeCloseTo(v, 10);
+  });
+  test.each(['abc', '-1', '', '1,2,3'])('linked garbage %j -> 0 (removes the line)', (raw) => {
+    expect(ctx.parseExtraQtyInput(raw, true)).toBe(0);
+  });
+  test('fixed lines stay whole numbers (parseInt, as before)', () => {
+    expect(ctx.parseExtraQtyInput('3', false)).toBe(3);
+    expect(ctx.parseExtraQtyInput('2,5', false)).toBe(2);
+    expect(ctx.parseExtraQtyInput('x', false)).toBe(0);
+  });
+
+  test('payload builder keeps other rows flags and applies one patch', () => {
+    const extras = [
+      { extra_cost_id: 1, quantity: 0.5, scales_with_order: 1 },
+      { extra_cost_id: 2, quantity: 1, scales_with_order: 0 },
+    ];
+    const out = ctx.buildExtrasPayload(extras, 2, { scales_with_order: 1 });
+    expect(out).toEqual([
+      { extra_cost_id: 1, quantity: 0.5, scales_with_order: 1 },
+      { extra_cost_id: 2, quantity: 1, scales_with_order: 1 },
+    ]);
+    expect(ctx.buildExtrasPayload([], 9, { quantity: 1 })).toEqual([{ extra_cost_id: 9, quantity: 1, scales_with_order: 0 }]);
+  });
+
+  test('list writes of one project run strictly in order, other projects are independent', async () => {
+    const log = [];
+    const slow = (name, ms) => () => new Promise(r => setTimeout(() => { log.push(name); r(); }, ms));
+    await Promise.all([
+      ctx.serializeListWrite('p1', slow('a', 30)),
+      ctx.serializeListWrite('p1', slow('b', 1)),
+      ctx.serializeListWrite('p2', slow('c', 1)),
+    ]);
+    expect(log.indexOf('a')).toBeLessThan(log.indexOf('b'));
+    expect(log.indexOf('c')).toBeLessThan(log.indexOf('a'));
+  });
+
+  test('a failing write does not block the next one', async () => {
+    const log = [];
+    const p1 = ctx.serializeListWrite('p3', () => Promise.reject(new Error('boom')));
+    const p2 = ctx.serializeListWrite('p3', async () => { log.push('ran'); });
+    await expect(p1).rejects.toThrow('boom');
+    await p2;
+    expect(log).toEqual(['ran']);
+  });
+});
+
+describe('toggling a supplies line keeps its total', () => {
+  test('ON: 50 fixed at order 50 becomes ratio 1', () => {
+    expect(ctx.toggleLinkedPatch({ quantity: 50 }, true, 50)).toEqual({ scales_with_order: 1, quantity: 1 });
+    expect(ctx.toggleLinkedPatch({ quantity: 25 }, true, 50)).toEqual({ scales_with_order: 1, quantity: 0.5 });
+  });
+  test('OFF: ratio becomes the current total, rounded up', () => {
+    expect(ctx.toggleLinkedPatch({ quantity: 1 }, false, 50)).toEqual({ scales_with_order: 0, quantity: 50 });
+    expect(ctx.toggleLinkedPatch({ quantity: 0.5 }, false, 51)).toEqual({ scales_with_order: 0, quantity: 26 });
+    expect(ctx.toggleLinkedPatch({ quantity: 0.1 }, false, 30)).toEqual({ scales_with_order: 0, quantity: 3 });
+  });
+  test('ON then OFF at the same order quantity is a round trip, also for awkward ratios', () => {
+    for (const [q, n] of [[50, 50], [7, 3], [10, 30], [1, 7]]) {
+      const on = ctx.toggleLinkedPatch({ quantity: q }, true, n);
+      const off = ctx.toggleLinkedPatch({ quantity: on.quantity }, false, n);
+      expect(off.quantity).toBe(q);
+    }
+  });
+  test('missing/invalid order quantity falls back to 1', () => {
+    expect(ctx.toggleLinkedPatch({ quantity: 4 }, true, 0)).toEqual({ scales_with_order: 1, quantity: 4 });
+    expect(ctx.toggleLinkedPatch(undefined, false, 50)).toEqual({ scales_with_order: 0, quantity: 0 });
+  });
+  test('total unchanged through the calc layer', () => {
+    const row = { price_excl_vat: 0.2, quantity: 50, scales_with_order: 0 };
+    const before = calc.calculateExtraCosts([row], 50);
+    const on = { ...row, ...ctx.toggleLinkedPatch(row, true, 50) };
+    expect(calc.calculateExtraCosts([on], 50)).toBeCloseTo(before, 10);
+  });
+});
+
+describe('API: decimal ratio, duplicate and export carry the new fields', () => {
+  let cookie;
+  const api = (method, url, body) => {
+    const r = request(app)[method](url).set('Cookie', cookie);
+    return body === undefined ? r : r.send(body);
+  };
+  beforeAll(async () => {
+    const login = await request(app).post('/login').send({ username: 'testadmin', password: 'testpass' });
+    cookie = login.headers['set-cookie'][0].split(';')[0];
+  });
+
+  test('0.5 per item persists as a decimal and totals round up', async () => {
+    const ec = (await api('post', '/api/extra-costs', { name: 'Ratio ring', price_excl_vat: 0.2, default_included: 0, default_quantity: 1 })).body.id;
+    const pid = (await api('post', '/api/projects', { name: 'Ratio', items_per_set: 51 })).body.id;
+    const r = await api('put', `/api/projects/${pid}/extras`, [{ extra_cost_id: ec, quantity: 0.5, scales_with_order: 1 }]);
+    expect(r.body.extras[0].quantity).toBeCloseTo(0.5, 10);
+    expect(r.body.extras[0].effective_quantity).toBe(26);
+    expect(r.body.calculation.pricing.extraCostsTotal).toBeCloseTo(0.2 * 26, 10);
+  });
+
+  test('duplicate copies production extra hours incl. per-unit rows; export lists them', async () => {
+    const pid = (await api('post', '/api/projects', { name: 'Dup hours', items_per_set: 50 })).body.id;
+    await api('put', `/api/projects/${pid}/extra-hours`, [
+      { description: 'Per unit', hours: 0, hourly_rate: 60, per_unit_value: 0.75, per_unit_unit: 'min' },
+      { description: 'Fixed', hours: 1, hourly_rate: 60 },
+    ]);
+    const d = await api('post', `/api/projects/${pid}/duplicate`);
+    const dup = (await api('get', `/api/projects/${d.body.id}`)).body;
+    expect(dup.extra_hours.map(h => [h.description, h.per_unit_value, h.per_unit_unit])).toEqual([
+      ['Per unit', 0.75, 'min'], ['Fixed', null, null],
+    ]);
+    const orig = (await api('get', `/api/projects/${pid}`)).body;
+    expect(dup.calculation.pricing.extraHoursCost).toBeCloseTo(orig.calculation.pricing.extraHoursCost, 10);
+    const exp = (await api('get', '/api/export')).body;
+    const ep = exp.projects.find(p => p.id === pid);
+    expect(ep.extra_hours.map(h => h.description)).toEqual(['Per unit', 'Fixed']);
+    expect(ep.extra_hours[0].per_unit_value).toBeCloseTo(0.75, 10);
   });
 });
 

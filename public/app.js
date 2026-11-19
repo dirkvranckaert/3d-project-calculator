@@ -883,7 +883,10 @@ function renderExtraHoursSection(p) {
 }
 
 // Read every input row in the panel and PUT the full list. Replace-the-list semantics.
-async function commitExtraHours(projectId) {
+function commitExtraHours(projectId) {
+  return serializeListWrite(`extra-hours-${projectId}`, () => commitExtraHoursNow(projectId));
+}
+async function commitExtraHoursNow(projectId) {
   const panel = document.querySelector(`[data-extra-hours-panel="${projectId}"]`);
   if (!panel) return;
   const rows = panel.querySelectorAll('tbody tr[data-eh-row]');
@@ -933,7 +936,10 @@ function extraHourPayload(e, i) {
   return item;
 }
 
-async function addExtraHourRow(projectId, defaultRate) {
+function addExtraHourRow(projectId, defaultRate) {
+  return serializeListWrite(`extra-hours-${projectId}`, () => addExtraHourRowNow(projectId, defaultRate));
+}
+async function addExtraHourRowNow(projectId, defaultRate) {
   const p = findProject(projectId);
   if (!p) return;
   const existing = (p.extra_hours || []).map(extraHourPayload);
@@ -956,7 +962,10 @@ async function addExtraHourRow(projectId, defaultRate) {
   if (input) { input.focus(); input.select(); }
 }
 
-async function removeExtraHourRow(projectId, idx) {
+function removeExtraHourRow(projectId, idx) {
+  return serializeListWrite(`extra-hours-${projectId}`, () => removeExtraHourRowNow(projectId, idx));
+}
+async function removeExtraHourRowNow(projectId, idx) {
   const p = findProject(projectId);
   if (!p) return;
   const items = (p.extra_hours || []).map(extraHourPayload);
@@ -1414,11 +1423,13 @@ function renderExtrasSection(p) {
     return `<tr>
       <td class="ec-name">${esc(eci.name)}</td>
       <td class="ec-price num">${fmt(eci.price_excl_vat)}</td>
-      <td class="ec-qty"><input type="number" min="1" value="${qty}" onchange="updateExtraQty(${p.id}, ${eci.id}, parseInt(this.value)||0)">
-        <label class="ec-linked" title="Follow the order quantity: Qty becomes the amount per ordered item, and the total quantity is Qty x ${orderQty} (items per set). It adapts automatically when the order quantity changes.">
+      <td class="ec-qty">${linked
+        ? `<input type="text" inputmode="decimal" value="${Number(qty)}" title="Per ordered item. Decimals allowed, comma or point (0,5 = one per two items)." onchange="updateExtraQty(${p.id}, ${eci.id}, this.value)">`
+        : `<input type="number" min="1" value="${qty}" onchange="updateExtraQty(${p.id}, ${eci.id}, this.value)">`}
+        <label class="ec-linked" title="Follow the order quantity: Qty becomes the amount per ordered item, and the total quantity is Qty x ${orderQty} (items per set), rounded up to a whole piece. It adapts automatically when the order quantity changes.">
           <input type="checkbox" ${linked ? 'checked' : ''} onchange="toggleExtraLinked(${p.id}, ${eci.id}, this.checked)"> per ordered item
         </label>
-        ${linked ? `<div class="ec-linked-result">${qty} &times; ${orderQty} = ${effQty(pExtras[eci.id])}</div>` : ''}</td>
+        ${linked ? `<div class="ec-linked-result">${Number(qty)} &times; ${orderQty} = ${effQty(pExtras[eci.id])}</div>` : ''}</td>
       <td class="ec-total num">${fmt(lineTotal)}</td>
       <td class="ec-action"><button class="btn-icon" title="Remove" onclick="updateExtraQty(${p.id}, ${eci.id}, 0)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
@@ -2699,28 +2710,70 @@ async function addExtraFromSelect(projectId) {
   await updateExtraQty(projectId, ecId, 1);
 }
 
-async function updateExtraQty(projectId, extraCostId, quantity) {
-  const p = findProject(projectId);
-  if (!p) return;
-  await putExtras(projectId, p, extraCostId, { quantity });
+// Qty typed in a supplies row. Order-quantity-linked lines take a decimal ratio
+// (comma or point, 0,5 = one per two items); fixed lines stay whole numbers.
+// Garbage -> 0 (= remove, same as the old parseInt(...)||0).
+function parseExtraQtyInput(raw, linked) {
+  if (linked) {
+    const v = parsePerUnitInput(raw);
+    return Number.isFinite(v) ? v : 0;
+  }
+  return parseInt(raw, 10) || 0;
 }
 
-async function toggleExtraLinked(projectId, extraCostId, linked) {
-  const p = findProject(projectId);
-  if (!p) return;
-  await putExtras(projectId, p, extraCostId, { scales_with_order: linked ? 1 : 0 });
-}
-
-// Replace-the-list PUT for supplies. Carries every row's scales_with_order flag:
-// rebuilding rows from quantity alone would silently un-link the other lines.
-async function putExtras(projectId, p, extraCostId, patch) {
+// Full replace-the-list payload for supplies. Carries every row's scales_with_order
+// flag: rebuilding rows from quantity alone would silently un-link the other lines.
+function buildExtrasPayload(extras, extraCostId, patch) {
   const current = {};
-  (p.extras || []).forEach(e => {
+  (extras || []).forEach(e => {
     current[e.extra_cost_id] = { extra_cost_id: e.extra_cost_id, quantity: e.quantity, scales_with_order: e.scales_with_order ? 1 : 0 };
   });
   current[extraCostId] = { extra_cost_id: extraCostId, quantity: 1, scales_with_order: 0, ...(current[extraCostId] || {}), ...patch };
-  await PUT(`/api/projects/${projectId}/extras`, Object.values(current));
-  await reloadSingleProject(projectId);
+  return Object.values(current);
+}
+
+// Replace-the-list writes of one project run strictly one after another, and each
+// rebuilds its payload from the project as it is AFTER the previous write was
+// reloaded. Otherwise Qty-then-checkbox (two quick changes) both start from the same
+// stale snapshot and the last PUT to land silently discards the other edit.
+const _listWriteQueues = new Map();
+function serializeListWrite(key, fn) {
+  const prev = _listWriteQueues.get(key) || Promise.resolve();
+  const next = prev.catch(() => {}).then(fn);
+  _listWriteQueues.set(key, next);
+  return next;
+}
+
+function updateExtraQty(projectId, extraCostId, rawQuantity) {
+  return serializeListWrite(`extras-${projectId}`, async () => {
+    const p = findProject(projectId);
+    if (!p) return;
+    const row = (p.extras || []).find(e => e.extra_cost_id === extraCostId);
+    const quantity = typeof rawQuantity === 'number' ? rawQuantity : parseExtraQtyInput(rawQuantity, !!row?.scales_with_order);
+    await PUT(`/api/projects/${projectId}/extras`, buildExtrasPayload(p.extras, extraCostId, { quantity }));
+    await reloadSingleProject(projectId);
+  });
+}
+
+// Switching a supplies line between "fixed" and "per ordered item" keeps the line's
+// TOTAL unchanged at the current order quantity: ON turns qty into a ratio
+// (50 fixed at order 50 -> 1 per item), OFF turns the ratio back into the whole
+// number of pieces it currently amounts to (rounded up, as calc.js does).
+function toggleLinkedPatch(row, linked, itemsPerSet) {
+  const orderQty = Number(itemsPerSet) > 0 ? Number(itemsPerSet) : 1;
+  const q = Number(row && row.quantity) || 0;
+  if (linked) return { scales_with_order: 1, quantity: q / orderQty };
+  return { scales_with_order: 0, quantity: Math.ceil(Math.round(q * orderQty * 1e9) / 1e9) };
+}
+
+function toggleExtraLinked(projectId, extraCostId, linked) {
+  return serializeListWrite(`extras-${projectId}`, async () => {
+    const p = findProject(projectId);
+    if (!p) return;
+    const row = (p.extras || []).find(e => e.extra_cost_id === extraCostId);
+    await PUT(`/api/projects/${projectId}/extras`, buildExtrasPayload(p.extras, extraCostId, toggleLinkedPatch(row, linked, p.items_per_set)));
+    await reloadSingleProject(projectId);
+  });
 }
 
 /* ================================================================== */
