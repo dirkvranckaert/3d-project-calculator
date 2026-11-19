@@ -148,6 +148,22 @@ function formatHoursMinutes(hours) {
   const m = totalMinutes % 60;
   return `${h}:${String(m).padStart(2, '0')}`;
 }
+
+/**
+ * Parse a "time per unit" number typed by a human: decimal point OR comma
+ * ("0,75" -> 0.75). Empty -> 0; garbage / negative -> NaN (caller clamps).
+ *
+ * @param {string|number} value
+ * @returns {number}
+ */
+function parsePerUnitInput(value) {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : NaN;
+  const s = String(value).trim().replace(',', '.');
+  if (s === '') return 0;
+  if (!/^\d*\.?\d+$|^\d+\.$/.test(s)) return NaN;
+  return Number(s);
+}
 /**
  * Format a plastic weight for display.
  * Below 1000 g -> grams with 2 decimals ("845.30g").
@@ -813,18 +829,37 @@ function renderExtraHoursSection(p) {
     if (ao !== bo) return ao - bo;
     return (a.id || 0) - (b.id || 0);
   });
-  const total = items.reduce((s, e) => s + (Number(e.hours) || 0) * (Number(e.hourly_rate) || 0), 0);
+  // effective_hours comes from the server (resolves "time per unit" rows x order quantity).
+  const effHours = e => { const h = Number(e.effective_hours ?? e.hours); return Number.isFinite(h) ? h : 0; };
+  const total = items.reduce((s, e) => s + effHours(e) * (Number(e.hourly_rate) || 0), 0);
   const defaultRate = Number(settings.extra_uren_default_rate);
   const safeDefault = Number.isFinite(defaultRate) ? defaultRate : 60;
+  const orderQty = Number(p.items_per_set) > 0 ? Number(p.items_per_set) : 1;
 
   const rows = items.map((e, i) => {
-    const decHours = Number(e.hours) || 0;
+    const decHours = effHours(e);
     const subtotal = decHours * (Number(e.hourly_rate) || 0);
-    return `<tr data-eh-row="${i}">
+    const perUnit = e.per_unit_value !== null && e.per_unit_value !== undefined;
+    const unit = e.per_unit_unit || 'min';
+    const hoursCell = perUnit
+      ? `<input type="text" inputmode="decimal" class="eh-input eh-input-perunit num" value="${Number(e.per_unit_value)}"
+          title="Time per unit. Decimals allowed, comma or point (e.g. 0,75)." onchange="commitExtraHours(${p.id})">
+        <select class="eh-input eh-unit" onchange="commitExtraHours(${p.id})">
+          ${['h', 'min', 's'].map(u => `<option value="${u}"${u === unit ? ' selected' : ''}>${u === 'h' ? 'hours' : u === 'min' ? 'minutes' : 'seconds'} / unit</option>`).join('')}
+        </select>
+        <div class="eh-effective" title="Time per unit x order quantity (items per set)">&times; ${orderQty} = ${formatHoursMinutes(decHours)}</div>`
+      : `<input type="text" inputmode="numeric" class="eh-input eh-input-hours num" value="${formatHoursMinutes(decHours)}"
+          title="H:MM (e.g. 0:45). Decimal (0.5) and bare integers (2) also accepted." onchange="commitExtraHours(${p.id})">`;
+    return `<tr data-eh-row="${i}" data-eh-fixed="${Number(e.hours) || 0}">
       <td class="eh-desc"><input type="text" class="eh-input eh-input-desc" value="${esc(e.description || '')}" maxlength="200"
         onchange="commitExtraHours(${p.id})"></td>
-      <td class="eh-hours num"><input type="text" inputmode="numeric" class="eh-input eh-input-hours num" value="${formatHoursMinutes(decHours)}"
-        title="H:MM (e.g. 0:45). Decimal (0.5) and bare integers (2) also accepted." onchange="commitExtraHours(${p.id})"></td>
+      <td class="eh-hours num">
+        <select class="eh-input eh-mode" title="Fixed time, or time per unit multiplied by the order quantity" onchange="commitExtraHours(${p.id})">
+          <option value="fixed"${perUnit ? '' : ' selected'}>Fixed time</option>
+          <option value="unit"${perUnit ? ' selected' : ''}>Time per unit</option>
+        </select>
+        ${hoursCell}
+      </td>
       <td class="eh-rate num"><input type="number" class="eh-input num" min="0" step="0.01" value="${Number(e.hourly_rate) || 0}"
         onchange="commitExtraHours(${p.id})"></td>
       <td class="eh-subtotal num">${fmt(subtotal)}</td>
@@ -856,30 +891,52 @@ async function commitExtraHours(projectId) {
   let order = 0;
   for (const row of rows) {
     const desc = row.querySelector('.eh-input-desc')?.value || '';
-    const hoursStr = row.querySelector('.eh-hours .eh-input')?.value || '0';
     const rateStr = row.querySelector('.eh-rate .eh-input')?.value || '0';
-    // parseHoursMinutes accepts H:MM, bare ints, and decimal. Garbage -> NaN -> clamp 0.
-    const parsedHours = parseHoursMinutes(hoursStr);
-    items.push({
-      description: desc,
-      hours: Number.isFinite(parsedHours) ? parsedHours : 0,
-      hourly_rate: parseFloat(rateStr) || 0,
-      sort_order: order++,
-    });
+    const perUnitMode = row.querySelector('.eh-mode')?.value === 'unit';
+    const item = { description: desc, hours: 0, hourly_rate: parseFloat(rateStr) || 0, sort_order: order++ };
+    if (perUnitMode) {
+      // Time per unit: comma or point decimals. Garbage -> NaN -> clamp 0.
+      const v = parsePerUnitInput(row.querySelector('.eh-input-perunit')?.value);
+      item.per_unit_value = Number.isFinite(v) ? v : 0;
+      item.per_unit_unit = row.querySelector('.eh-unit')?.value || 'min';
+      // Keep the fixed hours the row had, so switching back is lossless.
+      item.hours = Number(row.dataset.ehFixed) || 0;
+    } else {
+      const fixedInput = row.querySelector('.eh-input-hours');
+      if (fixedInput) {
+        // parseHoursMinutes accepts H:MM, bare ints, and decimal. Garbage -> NaN -> clamp 0.
+        const parsedHours = parseHoursMinutes(fixedInput.value || '0');
+        item.hours = Number.isFinite(parsedHours) ? parsedHours : 0;
+      } else {
+        item.hours = Number(row.dataset.ehFixed) || 0;   // just switched from per-unit
+      }
+    }
+    items.push(item);
   }
   await PUT(`/api/projects/${projectId}/extra-hours`, items);
   await reloadSingleProject(projectId);
 }
 
-async function addExtraHourRow(projectId, defaultRate) {
-  const p = findProject(projectId);
-  if (!p) return;
-  const existing = (p.extra_hours || []).map((e, i) => ({
+// Replace-the-list PUT payload for one stored row. Carries the per-unit fields:
+// dropping them here would silently turn a "time per unit" row back into fixed hours.
+function extraHourPayload(e, i) {
+  const item = {
     description: e.description,
     hours: Number(e.hours) || 0,
     hourly_rate: Number(e.hourly_rate) || 0,
     sort_order: e.sort_order ?? i,
-  }));
+  };
+  if (e.per_unit_value !== null && e.per_unit_value !== undefined) {
+    item.per_unit_value = Number(e.per_unit_value) || 0;
+    item.per_unit_unit = e.per_unit_unit || 'min';
+  }
+  return item;
+}
+
+async function addExtraHourRow(projectId, defaultRate) {
+  const p = findProject(projectId);
+  if (!p) return;
+  const existing = (p.extra_hours || []).map(extraHourPayload);
   // Append a placeholder row. Server drops empty-description rows on PUT, so
   // we keep the new row purely client-side until the operator types something.
   // Default 1 hour (renders as "1:00") so the user sees a usable starting value.
@@ -902,12 +959,7 @@ async function addExtraHourRow(projectId, defaultRate) {
 async function removeExtraHourRow(projectId, idx) {
   const p = findProject(projectId);
   if (!p) return;
-  const items = (p.extra_hours || []).map((e, i) => ({
-    description: e.description,
-    hours: Number(e.hours) || 0,
-    hourly_rate: Number(e.hourly_rate) || 0,
-    sort_order: e.sort_order ?? i,
-  }));
+  const items = (p.extra_hours || []).map(extraHourPayload);
   if (idx < 0 || idx >= items.length) return;
   items.splice(idx, 1);
   // Re-pack sort_order so the next add starts clean.
@@ -1350,15 +1402,23 @@ function renderExtrasSection(p) {
   (p.extras || []).forEach(e => { pExtras[e.extra_cost_id] = e; });
   const activeItems = allItems.filter(eci => pExtras[eci.id]?.quantity > 0);
   const availableItems = allItems.filter(eci => !pExtras[eci.id] || pExtras[eci.id].quantity === 0);
-  const total = activeItems.reduce((s, eci) => s + eci.price_excl_vat * (pExtras[eci.id]?.quantity || 0), 0);
+  // effective_quantity comes from the server (resolves order-quantity-linked lines).
+  const effQty = e => Number(e?.effective_quantity ?? e?.quantity) || 0;
+  const orderQty = Number(p.items_per_set) > 0 ? Number(p.items_per_set) : 1;
+  const total = activeItems.reduce((s, eci) => s + eci.price_excl_vat * effQty(pExtras[eci.id]), 0);
 
   const rows = activeItems.map(eci => {
     const qty = pExtras[eci.id]?.quantity || 0;
-    const lineTotal = eci.price_excl_vat * qty;
+    const linked = !!pExtras[eci.id]?.scales_with_order;
+    const lineTotal = eci.price_excl_vat * effQty(pExtras[eci.id]);
     return `<tr>
       <td class="ec-name">${esc(eci.name)}</td>
       <td class="ec-price num">${fmt(eci.price_excl_vat)}</td>
-      <td class="ec-qty"><input type="number" min="1" value="${qty}" onchange="updateExtraQty(${p.id}, ${eci.id}, parseInt(this.value)||0)"></td>
+      <td class="ec-qty"><input type="number" min="1" value="${qty}" onchange="updateExtraQty(${p.id}, ${eci.id}, parseInt(this.value)||0)">
+        <label class="ec-linked" title="Follow the order quantity: Qty becomes the amount per ordered item, and the total quantity is Qty x ${orderQty} (items per set). It adapts automatically when the order quantity changes.">
+          <input type="checkbox" ${linked ? 'checked' : ''} onchange="toggleExtraLinked(${p.id}, ${eci.id}, this.checked)"> per ordered item
+        </label>
+        ${linked ? `<div class="ec-linked-result">${qty} &times; ${orderQty} = ${effQty(pExtras[eci.id])}</div>` : ''}</td>
       <td class="ec-total num">${fmt(lineTotal)}</td>
       <td class="ec-action"><button class="btn-icon" title="Remove" onclick="updateExtraQty(${p.id}, ${eci.id}, 0)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
@@ -2642,11 +2702,24 @@ async function addExtraFromSelect(projectId) {
 async function updateExtraQty(projectId, extraCostId, quantity) {
   const p = findProject(projectId);
   if (!p) return;
-  const currentExtras = {};
-  (p.extras || []).forEach(e => { currentExtras[e.extra_cost_id] = e.quantity; });
-  currentExtras[extraCostId] = quantity;
-  const items = Object.entries(currentExtras).map(([id, qty]) => ({ extra_cost_id: parseInt(id), quantity: qty }));
-  await PUT(`/api/projects/${projectId}/extras`, items);
+  await putExtras(projectId, p, extraCostId, { quantity });
+}
+
+async function toggleExtraLinked(projectId, extraCostId, linked) {
+  const p = findProject(projectId);
+  if (!p) return;
+  await putExtras(projectId, p, extraCostId, { scales_with_order: linked ? 1 : 0 });
+}
+
+// Replace-the-list PUT for supplies. Carries every row's scales_with_order flag:
+// rebuilding rows from quantity alone would silently un-link the other lines.
+async function putExtras(projectId, p, extraCostId, patch) {
+  const current = {};
+  (p.extras || []).forEach(e => {
+    current[e.extra_cost_id] = { extra_cost_id: e.extra_cost_id, quantity: e.quantity, scales_with_order: e.scales_with_order ? 1 : 0 };
+  });
+  current[extraCostId] = { extra_cost_id: extraCostId, quantity: 1, scales_with_order: 0, ...(current[extraCostId] || {}), ...patch };
+  await PUT(`/api/projects/${projectId}/extras`, Object.values(current));
   await reloadSingleProject(projectId);
 }
 

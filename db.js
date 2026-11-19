@@ -212,6 +212,11 @@ function migrate(db) {
   // Design cost enhancements (2026-06-03)
   addCol('projects', 'design_notes', 'TEXT');
   addCol('project_extra_hours', 'actual_hours', 'TEXT');
+  // Lines that follow the order quantity (#3927/#3928). Default/NULL = old fixed
+  // behaviour, so no existing row changes meaning and no data migration is needed.
+  addCol('project_extra_costs', 'scales_with_order', 'INTEGER NOT NULL DEFAULT 0');
+  addCol('project_extra_hours', 'per_unit_value', 'REAL');
+  addCol('project_extra_hours', 'per_unit_unit', 'TEXT');
   addCol('project_plates', 'test_print_id', 'INTEGER');
   // Sliced-vs-model 3MF distinction (NULL = unknown/not a 3MF, 0 = model file, 1 = sliced)
   addCol('project_files', 'is_sliced', 'INTEGER');
