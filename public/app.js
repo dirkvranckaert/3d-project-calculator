@@ -843,11 +843,11 @@ function renderExtraHoursSection(p) {
     const perUnit = e.per_unit_value !== null && e.per_unit_value !== undefined;
     const unit = e.per_unit_unit || 'min';
     const hoursCell = perUnit
-      ? `<span class="inline-edit" onfocusout="inlineEditFocusOut(event)" onkeydown="inlineEditKey(event)">
+      ? `<span class="inline-edit" onfocusout="inlineEditFocusOut(event, () => commitExtraHours(${p.id}))" onkeydown="inlineEditKey(event)">
           <button type="button" class="ie-view" onclick="inlineEditOpen(this)" title="Time per unit &times; order quantity (${orderQty} items per set). Click to edit.">${Number(e.per_unit_value)} ${unit}/unit &times; ${orderQty} = ${formatHoursMinutes(decHours)}</button>
           <span class="ie-edit"><input type="text" inputmode="decimal" class="eh-input eh-input-perunit num" value="${Number(e.per_unit_value)}"
-            title="Time per unit. Decimals allowed, comma or point (e.g. 0,75)." aria-label="Time per unit" onchange="commitExtraHours(${p.id})">
-          <select class="eh-input eh-unit" title="Unit of the time per item" aria-label="Unit" onchange="commitExtraHours(${p.id})">
+            title="Time per unit. Decimals allowed, comma or point (e.g. 0,75). Enter saves, Esc cancels." aria-label="Time per unit">
+          <select class="eh-input eh-unit" title="Unit of the time per item" aria-label="Unit">
             ${['s', 'min', 'h'].map(u => `<option value="${u}"${u === unit ? ' selected' : ''}>${u}</option>`).join('')}
           </select></span>
         </span>`
@@ -895,13 +895,23 @@ function inlineEditOpen(btn) {
   const input = wrap.querySelector('.ie-edit input');
   if (input) { input.focus(); input.select(); }
 }
-// Leaving the edit area (focus moves outside it) closes it; the inputs' onchange already saved.
-function inlineEditFocusOut(ev) {
+function inlineEditChanged(wrap) {
+  const inputs = Array.from(wrap.querySelectorAll('.ie-edit input'));
+  if (inputs.some(i => i.value !== i.defaultValue)) return true;
+  return Array.from(wrap.querySelectorAll('.ie-edit select')).some(sel => {
+    const o = sel.querySelector('option[selected]');
+    return !!o && sel.value !== o.value;
+  });
+}
+// Leaving the edit area (focus moves outside it) closes it and saves, but only when something
+// changed. The inputs deliberately have no onchange: a commit on change could not be cancelled by Esc.
+function inlineEditFocusOut(ev, commit) {
   const wrap = ev.currentTarget;
   if (wrap.contains(ev.relatedTarget)) return;
   wrap.classList.remove('editing');
+  if (commit && inlineEditChanged(wrap)) commit(wrap);
 }
-// Enter = save (blur fires change), Esc = restore the rendered values and cancel.
+// Enter = save (blur triggers the commit), Esc = restore the rendered values and cancel (nothing saved).
 function inlineEditKey(ev) {
   const wrap = ev.currentTarget;
   if (ev.key === 'Enter') {
@@ -1486,9 +1496,9 @@ function renderExtrasSection(p) {
       <td class="ec-name">${esc(eci.name)}</td>
       <td class="ec-price num">${fmt(eci.price_excl_vat)}</td>
       <td class="ec-qty"><div class="ec-qty-line">${linked
-        ? `<span class="inline-edit" onfocusout="inlineEditFocusOut(event)" onkeydown="inlineEditKey(event)">
+        ? `<span class="inline-edit" onfocusout="inlineEditFocusOut(event, w => updateExtraQty(${p.id}, ${eci.id}, w.querySelector('.ie-edit input').value))" onkeydown="inlineEditKey(event)">
             <button type="button" class="ie-view" onclick="inlineEditOpen(this)" title="Ratio: ${Number(qty)} per ordered item &times; ${orderQty} items per set = ${effQty(pExtras[eci.id])} pcs (rounded up). Click to edit.">Ratio ${Number(qty)} &rarr; ${effQty(pExtras[eci.id])}</button>
-            <span class="ie-edit"><input type="text" inputmode="decimal" class="ec-qty-input" value="${Number(qty)}" aria-label="Quantity per ordered item" title="Per ordered item. Decimals allowed, comma or point (0,5 = one per two items)." onchange="updateExtraQty(${p.id}, ${eci.id}, this.value)"></span>
+            <span class="ie-edit"><input type="text" inputmode="decimal" class="ec-qty-input" value="${Number(qty)}" aria-label="Quantity per ordered item" title="Per ordered item. Decimals allowed, comma or point (0,5 = one per two items). Enter saves, Esc cancels."></span>
           </span>`
         : `<input type="number" min="1" class="ec-qty-input" value="${qty}" onchange="updateExtraQty(${p.id}, ${eci.id}, this.value)">`}
         <label class="ec-linked" title="Follow the order quantity: Qty becomes the amount per ordered item, and the total quantity is Qty x ${orderQty} (items per set), rounded up to a whole piece. It adapts automatically when the order quantity changes.">

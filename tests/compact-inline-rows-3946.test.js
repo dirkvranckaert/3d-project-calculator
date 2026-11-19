@@ -27,7 +27,7 @@ const ctx = {
 };
 vm.createContext(ctx);
 vm.runInContext(
-  ['formatHoursMinutes', 'renderExtraHoursSection', 'renderExtrasSection', 'inlineEditOpen', 'inlineEditFocusOut', 'inlineEditKey', 'setExtraHoursMode', 'commitExtraHours'].map(extractFn).join('\n'),
+  ['formatHoursMinutes', 'renderExtraHoursSection', 'renderExtrasSection', 'inlineEditOpen', 'inlineEditChanged', 'inlineEditFocusOut', 'inlineEditKey', 'setExtraHoursMode', 'commitExtraHours'].map(extractFn).join('\n'),
   ctx
 );
 
@@ -59,9 +59,12 @@ describe('supplies Qty cell (#3946)', () => {
     expect(fixedHtml).not.toContain('ie-view');
   });
 
-  test('the chip saves through the same updateExtraQty handler', () => {
-    expect(linkedHtml).toContain('onchange="updateExtraQty(9, 5, this.value)"');
+  test('the chip saves through the same updateExtraQty handler, on focus-out only (so Esc can cancel)', () => {
+    expect(linkedHtml).toMatch(/inlineEditFocusOut\(event, w => updateExtraQty\(9, 5, w\.querySelector\('\.ie-edit input'\)\.value\)\)/);
     expect(linkedHtml).toContain('onclick="inlineEditOpen(this)"');
+    const edit = linkedHtml.slice(linkedHtml.indexOf('class="ie-edit"'), linkedHtml.indexOf('</span>', linkedHtml.indexOf('class="ie-edit"')));
+    expect(edit).toContain('class="ec-qty-input"');
+    expect(edit).not.toContain('onchange=');
   });
 
   test('chip tooltip spells out the ratio meaning', () => {
@@ -97,6 +100,12 @@ describe('extra hours HOURS cell (#3946)', () => {
     expect(rUnit).toMatch(/seg-btn active" aria-pressed="true"[^>]*>Per unit</);
     expect(rFixed).toMatch(/seg-btn active" aria-pressed="true"[^>]*>Fixed</);
     expect(rFixed).toContain("setExtraHoursMode(9, 1, 'unit')");
+  });
+
+  test('per-unit inputs and unit select have no onchange commit (Codex R1: Esc could not cancel a unit change)', () => {
+    const edit = rUnit.slice(rUnit.indexOf('class="ie-edit"'), rUnit.indexOf('</select>'));
+    expect(edit).not.toMatch(/onchange=/);
+    expect(rUnit).toContain('inlineEditFocusOut(event, () => commitExtraHours(9))');
   });
 
   test('whole hours cell is one flex line wrapper', () => {
@@ -144,13 +153,40 @@ describe('inline-edit behaviour', () => {
     expect(view.focus).toHaveBeenCalled();
   });
 
-  test('focus leaving the edit area closes; focus moving between value and unit keeps it open', () => {
+  test('focus moving between value and unit keeps it open and saves nothing', () => {
     const { wrap, cls, input } = mkWrap();
+    const commit = jest.fn();
     cls.add('editing');
-    ctx.inlineEditFocusOut({ currentTarget: wrap, relatedTarget: input });
+    ctx.inlineEditFocusOut({ currentTarget: wrap, relatedTarget: input }, commit);
     expect(cls.has('editing')).toBe(true);
-    ctx.inlineEditFocusOut({ currentTarget: wrap, relatedTarget: {} });
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  test('focus leaving with a changed value closes and saves once; unchanged saves nothing', () => {
+    const { wrap, cls, input } = mkWrap();   // input.value 99 differs from defaultValue 45
+    const commit = jest.fn();
+    cls.add('editing');
+    ctx.inlineEditFocusOut({ currentTarget: wrap, relatedTarget: {} }, commit);
     expect(cls.has('editing')).toBe(false);
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(commit).toHaveBeenCalledWith(wrap);
+
+    const b = mkWrap();
+    b.input.value = b.input.defaultValue;
+    b.sel.value = 's';
+    const commit2 = jest.fn();
+    ctx.inlineEditFocusOut({ currentTarget: b.wrap, relatedTarget: null }, commit2);
+    expect(commit2).not.toHaveBeenCalled();
+  });
+
+  test('a changed unit select alone counts as a change; Esc then focus-out saves nothing', () => {
+    const { wrap, input, sel } = mkWrap();
+    input.value = input.defaultValue;          // only the unit changed (h instead of s)
+    const commit = jest.fn();
+    ctx.inlineEditKey({ key: 'Escape', currentTarget: wrap, target: sel, preventDefault: jest.fn() });
+    expect(sel.value).toBe('s');
+    ctx.inlineEditFocusOut({ currentTarget: wrap, relatedTarget: null }, commit);
+    expect(commit).not.toHaveBeenCalled();
   });
 
   test('mode toggle flips the hidden mode, saves via commitExtraHours, opens the value editor for Per unit', async () => {
