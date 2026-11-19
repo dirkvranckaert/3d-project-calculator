@@ -784,6 +784,7 @@ body {
 .inline-edit.editing .ie-edit { display: inline-flex; }
 .inline-edit.editing .ie-view { display: none; }
 .eh-hours .eh-input-perunit { width: 64px; }
+.eh-hours .eh-input-hours { width: 84px; }
 .eh-hours .eh-unit { width: auto; font-size: 12px; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; flex: none; }
 .seg-btn {
