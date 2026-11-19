@@ -441,6 +441,7 @@ function render() {
       return;
     }
     el.innerHTML = renderDetailView(p);
+    applyListWriteLocks();
   } else {
     currentView = 'list';
     currentProjectId = null;
@@ -2755,27 +2756,67 @@ const _listWriteQueues = new Map();
 // first one's reload re-renders the panel could be applied on top of a changed list
 // (removing the wrong row, resurrecting a removed one). Inert = no overlapping edits;
 // the re-render after the reload replaces the panel with a fresh, editable one.
+//
+// The lock tracks FRESHNESS, not just pending promises: a task that fails (e.g. the
+// PUT committed but the reload GET failed) marks the key stale, and the panel stays
+// inert until a reload succeeded (recoverStaleList retries it). render() re-applies
+// the locks, so an unrelated re-render cannot swap in an unlocked panel.
 const _listWritePending = new Map();
+const _listWriteStale = new Map();      // key -> refresh fn (rendered list may be stale)
+const _listWriteRecovering = new Set();
+let _listRecoveryDelayMs = 3000;
 function setListPanelInert(key, on) {
   if (typeof document === 'undefined' || !document.querySelectorAll) return;
   const m = /^(extras|extra-hours)-(.+)$/.exec(key);
   if (!m) return;
   document.querySelectorAll(`[data-${m[1]}-panel="${m[2]}"]`).forEach(el => { el.inert = on; });
 }
+function isListWriteLocked(key) {
+  return (_listWritePending.get(key) || 0) > 0 || _listWriteStale.has(key);
+}
+// Called at the end of render(): freshly rendered panels are editable by default.
+function applyListWriteLocks() {
+  const keys = new Set([..._listWritePending.keys(), ..._listWriteStale.keys()]);
+  keys.forEach(key => { if (isListWriteLocked(key)) setListPanelInert(key, true); });
+}
+// Stale and idle: reload until it succeeds, then unlock. Stays inert while it fails.
+async function recoverStaleList(key) {
+  if (_listWriteRecovering.has(key) || (_listWritePending.get(key) || 0) > 0) return;
+  const refresh = _listWriteStale.get(key);
+  if (!refresh) return;
+  _listWriteRecovering.add(key);
+  try {
+    await refresh();
+    _listWriteStale.delete(key);
+    _listWriteRecovering.delete(key);
+    if (!isListWriteLocked(key)) setListPanelInert(key, false);
+  } catch (e) {
+    _listWriteRecovering.delete(key);
+    setTimeout(() => recoverStaleList(key), _listRecoveryDelayMs);
+  }
+}
 function serializeListWrite(key, fn, refresh) {
   const prev = _listWriteQueues.get(key) || Promise.resolve();
   _listWritePending.set(key, (_listWritePending.get(key) || 0) + 1);
   setListPanelInert(key, true);
   const next = prev.then(() => false, () => true).then(async prevFailed => {
-    if (prevFailed && refresh) await refresh();
+    if (prevFailed && refresh) {
+      await refresh();
+      _listWriteStale.delete(key);
+    }
     return fn();
   });
-  const settle = () => {
+  const settle = (failed) => {
     const n = (_listWritePending.get(key) || 1) - 1;
     _listWritePending.set(key, n);
-    if (n === 0) setListPanelInert(key, false);
+    if (failed && refresh) _listWriteStale.set(key, refresh);
+    else if (!failed) _listWriteStale.delete(key);
+    if (n === 0) {
+      if (isListWriteLocked(key)) recoverStaleList(key);
+      else setListPanelInert(key, false);
+    }
   };
-  next.then(settle, settle);
+  next.then(() => settle(false), () => settle(true));
   _listWriteQueues.set(key, next);
   return next;
 }

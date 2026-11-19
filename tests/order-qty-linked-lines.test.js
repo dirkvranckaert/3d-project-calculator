@@ -27,14 +27,14 @@ afterAll(() => new Promise((resolve) => app.close(resolve)));
 
 const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
 function extractFn(name) {
-  const m = APP_JS.match(new RegExp('function ' + name + '\\s*\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}', 'm'));
+  const m = APP_JS.match(new RegExp('(?:async )?function ' + name + '\\s*\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}', 'm'));
   if (!m) throw new Error('Could not locate function ' + name);
   return m[0];
 }
-const ctx = {};
+const ctx = { setTimeout };
 vm.createContext(ctx);
 vm.runInContext(
-  'const _listWriteQueues = new Map();\nconst _listWritePending = new Map();\n' + ['parsePerUnitInput', 'parseHoursMinutes', 'formatHoursMinutes', 'extraHourPayload', 'parseExtraQtyInput', 'buildExtrasPayload', 'toggleLinkedPatch', 'setListPanelInert', 'serializeListWrite', 'collectExtraHoursItems', 'commitExtraHours'].map(extractFn).join('\n'),
+  'const _listWriteQueues = new Map();\nconst _listWritePending = new Map();\nconst _listWriteStale = new Map();\nconst _listWriteRecovering = new Set();\nvar _listRecoveryDelayMs = 3000;\n' + ['parsePerUnitInput', 'parseHoursMinutes', 'formatHoursMinutes', 'extraHourPayload', 'parseExtraQtyInput', 'buildExtrasPayload', 'toggleLinkedPatch', 'setListPanelInert', 'isListWriteLocked', 'applyListWriteLocks', 'recoverStaleList', 'serializeListWrite', 'collectExtraHoursItems', 'commitExtraHours'].map(extractFn).join('\n'),
   ctx
 );
 
@@ -282,7 +282,7 @@ describe('list write queue: stale recovery and edit snapshot (Codex R2)', () => 
     await expect(failing).rejects.toThrow();
     const ok = ctx.serializeListWrite('r1', async () => { log.push('ran'); }, async () => { log.push('refresh'); });
     await ok;
-    expect(log).toEqual(['refresh', 'ran']);
+    expect(log).toEqual(['refresh0', 'refresh', 'ran']);   // refresh0 = automatic stale recovery after the failure
   });
 
   test('if the refresh itself fails the next task does not write', async () => {
@@ -316,6 +316,64 @@ describe('list write queue: stale recovery and edit snapshot (Codex R2)', () => 
     await new Promise(r => setTimeout(r, 1));
     expect(els['extra-hours-9'].inert).toBe(false);  // unlocked after failure too
     ctx.document = saved;
+  });
+
+  test('write committed but reload failed: panel stays inert until a refresh succeeds, retried automatically', async () => {
+    const el = { inert: false };
+    const saved = ctx.document;
+    ctx.document = { querySelectorAll: (sel) => (/data-extra-hours-panel="7"/.test(sel) ? [el] : []) };
+    ctx._listRecoveryDelayMs = 5;
+    let refreshCalls = 0;
+    const refresh = async () => { refreshCalls++; if (refreshCalls < 3) throw new Error('GET failed'); };
+    await expect(ctx.serializeListWrite('extra-hours-7', () => Promise.reject(new Error('reload failed')), refresh)).rejects.toThrow();
+    await new Promise(r => setTimeout(r, 1));
+    expect(el.inert).toBe(true);                  // queue drained but list stale: stay locked
+    expect(refreshCalls).toBe(1);                 // recovery attempt 1 failed
+    await new Promise(r => setTimeout(r, 40));
+    expect(refreshCalls).toBe(3);                 // retried until it succeeded
+    expect(el.inert).toBe(false);                 // fresh state: unlocked
+    ctx.document = saved;
+  });
+
+  test('a successful retry write after a failed one clears the stale lock', async () => {
+    const el = { inert: false };
+    const saved = ctx.document;
+    ctx.document = { querySelectorAll: (sel) => (/data-extras-panel="8"/.test(sel) ? [el] : []) };
+    ctx._listRecoveryDelayMs = 100000;
+    const refresh = async () => {};
+    await expect(ctx.serializeListWrite('extras-8', () => Promise.reject(new Error('x')), async () => { throw new Error('still down'); })).rejects.toThrow();
+    await new Promise(r => setTimeout(r, 1));
+    expect(el.inert).toBe(true);
+    await ctx.serializeListWrite('extras-8', async () => {}, refresh);
+    await new Promise(r => setTimeout(r, 1));
+    expect(el.inert).toBe(false);
+    ctx._listRecoveryDelayMs = 3000;
+    ctx.document = saved;
+  });
+
+  test('render path re-applies pending/stale locks to a freshly rendered (unlocked) panel', async () => {
+    const el = { inert: false };
+    const saved = ctx.document;
+    ctx.document = { querySelectorAll: (sel) => (/data-extra-hours-panel="5"/.test(sel) ? [el] : []) };
+    let release;
+    const w = ctx.serializeListWrite('extra-hours-5', () => new Promise(r => { release = r; }));
+    expect(el.inert).toBe(true);
+    await new Promise(r => setTimeout(r, 1));
+    el.inert = false;                              // unrelated render swapped in a new panel
+    ctx.applyListWriteLocks();
+    expect(el.inert).toBe(true);                   // lock re-applied while write pending
+    release();
+    await w;
+    await new Promise(r => setTimeout(r, 1));
+    expect(el.inert).toBe(false);
+    el.inert = false;
+    ctx.applyListWriteLocks();
+    expect(el.inert).toBe(false);                  // idle + fresh: render leaves it editable
+    ctx.document = saved;
+  });
+
+  test('app.js render() calls applyListWriteLocks after building the detail view', () => {
+    expect(extractFn('render')).toMatch(/el\.innerHTML = renderDetailView\(p\);\s*applyListWriteLocks\(\);/);
   });
 
   test('no failure, no refresh', async () => {
