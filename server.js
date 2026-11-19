@@ -1151,15 +1151,28 @@ app.delete('/api/projects/:projectId/plates/:plateId', (req, res) => {
 app.put('/api/projects/:projectId/extras', (req, res) => {
   const db = getDb();
   const pid = req.params.projectId;
-  const items = req.body; // Array of { extra_cost_id, quantity }
+  const items = req.body; // Array of { extra_cost_id, quantity, scales_with_order }
+  if (!db.prepare('SELECT id FROM projects WHERE id = ?').get(pid)) return res.status(404).json({ error: 'Not found' });
+  if (!Array.isArray(items)) return res.status(400).json({ error: 'Expected an array' });
+
+  // Validate every row BEFORE the destructive replace, so a 400 leaves the list untouched.
+  // Linked rows: finite ratio (decimals ok). Fixed rows: whole pieces only.
+  const rows = [];
+  for (const item of items) {
+    const quantity = Number(item && item.quantity);
+    if (!item || !Number.isInteger(Number(item.extra_cost_id)) || !Number.isFinite(quantity)) {
+      return res.status(400).json({ error: 'Invalid supplies row' });
+    }
+    const linked = item.scales_with_order ? 1 : 0;
+    if (!linked && !Number.isInteger(quantity)) {
+      return res.status(400).json({ error: 'Fixed supplies quantity must be a whole number' });
+    }
+    if (quantity > 0) rows.push([Number(item.extra_cost_id), quantity, linked]);
+  }
 
   db.prepare('DELETE FROM project_extra_costs WHERE project_id = ?').run(pid);
   const ins = db.prepare('INSERT INTO project_extra_costs (project_id, extra_cost_id, quantity, scales_with_order) VALUES (?,?,?,?)');
-  for (const item of items) {
-    if (item.quantity > 0) {
-      ins.run(pid, item.extra_cost_id, item.quantity, item.scales_with_order ? 1 : 0);
-    }
-  }
+  for (const [ecId, quantity, linked] of rows) ins.run(pid, ecId, quantity, linked);
 
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);

@@ -883,12 +883,21 @@ function renderExtraHoursSection(p) {
 }
 
 // Read every input row in the panel and PUT the full list. Replace-the-list semantics.
+// The DOM is read NOW (when the edit happens), not when the queued write finally runs:
+// an earlier write's reload re-renders the panel from server state and would
+// otherwise wipe this edit before it is read. The snapshot holds every row as shown,
+// so a later snapshot always includes the earlier edits too.
 function commitExtraHours(projectId) {
-  return serializeListWrite(`extra-hours-${projectId}`, () => commitExtraHoursNow(projectId));
+  const items = collectExtraHoursItems(projectId);
+  if (!items) return Promise.resolve();
+  return serializeListWrite(`extra-hours-${projectId}`, async () => {
+    await PUT(`/api/projects/${projectId}/extra-hours`, items);
+    await reloadSingleProject(projectId);
+  }, () => reloadSingleProject(projectId));
 }
-async function commitExtraHoursNow(projectId) {
+function collectExtraHoursItems(projectId) {
   const panel = document.querySelector(`[data-extra-hours-panel="${projectId}"]`);
-  if (!panel) return;
+  if (!panel) return null;
   const rows = panel.querySelectorAll('tbody tr[data-eh-row]');
   const items = [];
   let order = 0;
@@ -916,8 +925,7 @@ async function commitExtraHoursNow(projectId) {
     }
     items.push(item);
   }
-  await PUT(`/api/projects/${projectId}/extra-hours`, items);
-  await reloadSingleProject(projectId);
+  return items;
 }
 
 // Replace-the-list PUT payload for one stored row. Carries the per-unit fields:
@@ -937,7 +945,7 @@ function extraHourPayload(e, i) {
 }
 
 function addExtraHourRow(projectId, defaultRate) {
-  return serializeListWrite(`extra-hours-${projectId}`, () => addExtraHourRowNow(projectId, defaultRate));
+  return serializeListWrite(`extra-hours-${projectId}`, () => addExtraHourRowNow(projectId, defaultRate), () => reloadSingleProject(projectId));
 }
 async function addExtraHourRowNow(projectId, defaultRate) {
   const p = findProject(projectId);
@@ -963,7 +971,7 @@ async function addExtraHourRowNow(projectId, defaultRate) {
 }
 
 function removeExtraHourRow(projectId, idx) {
-  return serializeListWrite(`extra-hours-${projectId}`, () => removeExtraHourRowNow(projectId, idx));
+  return serializeListWrite(`extra-hours-${projectId}`, () => removeExtraHourRowNow(projectId, idx), () => reloadSingleProject(projectId));
 }
 async function removeExtraHourRowNow(projectId, idx) {
   const p = findProject(projectId);
@@ -2737,9 +2745,16 @@ function buildExtrasPayload(extras, extraCostId, patch) {
 // reloaded. Otherwise Qty-then-checkbox (two quick changes) both start from the same
 // stale snapshot and the last PUT to land silently discards the other edit.
 const _listWriteQueues = new Map();
-function serializeListWrite(key, fn) {
+// A task can reject AFTER its PUT committed (the reload GET failed), leaving the
+// in-memory project stale. So when the previous task failed, `refresh` (a reload)
+// must succeed before the next task builds a full replacement; if it fails too the
+// next task fails without writing.
+function serializeListWrite(key, fn, refresh) {
   const prev = _listWriteQueues.get(key) || Promise.resolve();
-  const next = prev.catch(() => {}).then(fn);
+  const next = prev.then(() => false, () => true).then(async prevFailed => {
+    if (prevFailed && refresh) await refresh();
+    return fn();
+  });
   _listWriteQueues.set(key, next);
   return next;
 }
@@ -2752,7 +2767,7 @@ function updateExtraQty(projectId, extraCostId, rawQuantity) {
     const quantity = typeof rawQuantity === 'number' ? rawQuantity : parseExtraQtyInput(rawQuantity, !!row?.scales_with_order);
     await PUT(`/api/projects/${projectId}/extras`, buildExtrasPayload(p.extras, extraCostId, { quantity }));
     await reloadSingleProject(projectId);
-  });
+  }, () => reloadSingleProject(projectId));
 }
 
 // Switching a supplies line between "fixed" and "per ordered item" keeps the line's
@@ -2773,7 +2788,7 @@ function toggleExtraLinked(projectId, extraCostId, linked) {
     const row = (p.extras || []).find(e => e.extra_cost_id === extraCostId);
     await PUT(`/api/projects/${projectId}/extras`, buildExtrasPayload(p.extras, extraCostId, toggleLinkedPatch(row, linked, p.items_per_set)));
     await reloadSingleProject(projectId);
-  });
+  }, () => reloadSingleProject(projectId));
 }
 
 /* ================================================================== */

@@ -34,7 +34,7 @@ function extractFn(name) {
 const ctx = {};
 vm.createContext(ctx);
 vm.runInContext(
-  'const _listWriteQueues = new Map();\n' + ['parsePerUnitInput', 'parseHoursMinutes', 'formatHoursMinutes', 'extraHourPayload', 'parseExtraQtyInput', 'buildExtrasPayload', 'toggleLinkedPatch', 'serializeListWrite'].map(extractFn).join('\n'),
+  'const _listWriteQueues = new Map();\n' + ['parsePerUnitInput', 'parseHoursMinutes', 'formatHoursMinutes', 'extraHourPayload', 'parseExtraQtyInput', 'buildExtrasPayload', 'toggleLinkedPatch', 'serializeListWrite', 'collectExtraHoursItems', 'commitExtraHours'].map(extractFn).join('\n'),
   ctx
 );
 
@@ -272,6 +272,97 @@ describe('decimal per-item ratio, rounded up (#3927, Dirk)', () => {
     await expect(p1).rejects.toThrow('boom');
     await p2;
     expect(log).toEqual(['ran']);
+  });
+});
+
+describe('list write queue: stale recovery and edit snapshot (Codex R2)', () => {
+  test('after a failed task the next one runs only once refresh succeeded', async () => {
+    const log = [];
+    const failing = ctx.serializeListWrite('r1', () => Promise.reject(new Error('reload failed')), async () => log.push('refresh0'));
+    await expect(failing).rejects.toThrow();
+    const ok = ctx.serializeListWrite('r1', async () => { log.push('ran'); }, async () => { log.push('refresh'); });
+    await ok;
+    expect(log).toEqual(['refresh', 'ran']);
+  });
+
+  test('if the refresh itself fails the next task does not write', async () => {
+    const log = [];
+    await expect(ctx.serializeListWrite('r2', () => Promise.reject(new Error('x')))).rejects.toThrow();
+    const next = ctx.serializeListWrite('r2', async () => { log.push('ran'); }, () => Promise.reject(new Error('still down')));
+    await expect(next).rejects.toThrow('still down');
+    expect(log).toEqual([]);
+    // and the one after that tries to refresh again before writing
+    await ctx.serializeListWrite('r2', async () => { log.push('ran2'); }, async () => { log.push('refresh'); });
+    expect(log).toEqual(['refresh', 'ran2']);
+  });
+
+  test('no failure, no refresh', async () => {
+    const log = [];
+    await ctx.serializeListWrite('r3', async () => { log.push('a'); }, async () => { log.push('refresh'); });
+    await ctx.serializeListWrite('r3', async () => { log.push('b'); }, async () => { log.push('refresh'); });
+    expect(log).toEqual(['a', 'b']);
+  });
+
+  test('commitExtraHours reads the DOM at edit time, so a later re-render cannot wipe a queued edit', async () => {
+    const mkRow = (desc, hours) => ({
+      dataset: { ehFixed: '0' },
+      querySelector: (sel) => ({
+        '.eh-input-desc': { value: desc },
+        '.eh-rate .eh-input': { value: '60' },
+        '.eh-mode': { value: 'fixed' },
+        '.eh-input-hours': { value: hours },
+      })[sel] || null,
+    });
+    let rows = [mkRow('A', '1:00'), mkRow('B', '2:00')];
+    ctx.document = { querySelector: () => ({ querySelectorAll: () => rows }) };
+    const puts = [];
+    let release;
+    ctx.PUT = (url, body) => { puts.push(body.map(i => i.hours)); return puts.length === 1 ? new Promise(r => { release = r; }) : Promise.resolve(); };
+    ctx.reloadSingleProject = async () => { rows = [mkRow('A', '1:00'), mkRow('B', '2:00')]; }; // re-render from stale server state
+    const first = ctx.commitExtraHours(7);                 // edit A (row A unchanged here)
+    rows = [mkRow('A', '1:00'), mkRow('B', '3:00')];       // user edits B while the first PUT is in flight
+    const second = ctx.commitExtraHours(7);
+    await new Promise(r => setTimeout(r, 5));              // let the first PUT start
+    release();
+    await first; await second;
+    expect(puts).toEqual([[1, 2], [1, 3]]);
+  });
+});
+
+describe('API: supplies payload validation (Codex R2)', () => {
+  let cookie;
+  const api = (method, url, body) => {
+    const r = request(app)[method](url).set('Cookie', cookie);
+    return body === undefined ? r : r.send(body);
+  };
+  beforeAll(async () => {
+    const login = await request(app).post('/login').send({ username: 'testadmin', password: 'testpass' });
+    cookie = login.headers['set-cookie'][0].split(';')[0];
+  });
+
+  test('fixed line with a fraction is rejected and the stored list is untouched', async () => {
+    const ec = (await api('post', '/api/extra-costs', { name: 'Val box', price_excl_vat: 1, default_included: 0, default_quantity: 1 })).body.id;
+    const pid = (await api('post', '/api/projects', { name: 'Val', items_per_set: 10 })).body.id;
+    await api('put', `/api/projects/${pid}/extras`, [{ extra_cost_id: ec, quantity: 3, scales_with_order: 0 }]);
+    const bad = await api('put', `/api/projects/${pid}/extras`, [{ extra_cost_id: ec, quantity: 2.5, scales_with_order: 0 }]);
+    expect(bad.status).toBe(400);
+    const after = (await api('get', `/api/projects/${pid}`)).body.extras;
+    expect(after.map(e => e.quantity)).toEqual([3]);
+  });
+
+  test('non-finite quantity, bad row and non-array body are rejected; linked decimal is fine', async () => {
+    const ec = (await api('post', '/api/extra-costs', { name: 'Val ring', price_excl_vat: 1, default_included: 0, default_quantity: 1 })).body.id;
+    const pid = (await api('post', '/api/projects', { name: 'Val2', items_per_set: 10 })).body.id;
+    expect((await api('put', `/api/projects/${pid}/extras`, [{ extra_cost_id: ec, quantity: 'abc', scales_with_order: 1 }])).status).toBe(400);
+    expect((await api('put', `/api/projects/${pid}/extras`, [{ quantity: 1 }])).status).toBe(400);
+    expect((await api('put', `/api/projects/${pid}/extras`, { nope: 1 })).status).toBe(400);
+    const ok = await api('put', `/api/projects/${pid}/extras`, [{ extra_cost_id: ec, quantity: 0.25, scales_with_order: 1 }]);
+    expect(ok.status).toBe(200);
+    expect(ok.body.extras[0].effective_quantity).toBe(3);
+  });
+
+  test('unknown project is 404 and nothing is deleted first', async () => {
+    expect((await api('put', '/api/projects/999999/extras', [])).status).toBe(404);
   });
 });
 
