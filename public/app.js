@@ -843,24 +843,27 @@ function renderExtraHoursSection(p) {
     const perUnit = e.per_unit_value !== null && e.per_unit_value !== undefined;
     const unit = e.per_unit_unit || 'min';
     const hoursCell = perUnit
-      ? `<input type="text" inputmode="decimal" class="eh-input eh-input-perunit num" value="${Number(e.per_unit_value)}"
-          title="Time per unit. Decimals allowed, comma or point (e.g. 0,75)." onchange="commitExtraHours(${p.id})">
-        <select class="eh-input eh-unit" onchange="commitExtraHours(${p.id})">
-          ${['h', 'min', 's'].map(u => `<option value="${u}"${u === unit ? ' selected' : ''}>${u === 'h' ? 'hours' : u === 'min' ? 'minutes' : 'seconds'} / unit</option>`).join('')}
-        </select>
-        <div class="eh-effective" title="Time per unit x order quantity (items per set)">&times; ${orderQty} = ${formatHoursMinutes(decHours)}</div>`
+      ? `<span class="inline-edit" onfocusout="inlineEditFocusOut(event)" onkeydown="inlineEditKey(event)">
+          <button type="button" class="ie-view" onclick="inlineEditOpen(this)" title="Time per unit &times; order quantity (${orderQty} items per set). Click to edit.">${Number(e.per_unit_value)} ${unit}/unit &times; ${orderQty} = ${formatHoursMinutes(decHours)}</button>
+          <span class="ie-edit"><input type="text" inputmode="decimal" class="eh-input eh-input-perunit num" value="${Number(e.per_unit_value)}"
+            title="Time per unit. Decimals allowed, comma or point (e.g. 0,75)." aria-label="Time per unit" onchange="commitExtraHours(${p.id})">
+          <select class="eh-input eh-unit" title="Unit of the time per item" aria-label="Unit" onchange="commitExtraHours(${p.id})">
+            ${['s', 'min', 'h'].map(u => `<option value="${u}"${u === unit ? ' selected' : ''}>${u}</option>`).join('')}
+          </select></span>
+        </span>`
       : `<input type="text" inputmode="numeric" class="eh-input eh-input-hours num" value="${formatHoursMinutes(decHours)}"
           title="H:MM (e.g. 0:45). Decimal (0.5) and bare integers (2) also accepted." onchange="commitExtraHours(${p.id})">`;
     return `<tr data-eh-row="${i}" data-eh-fixed="${Number(e.hours) || 0}">
       <td class="eh-desc"><input type="text" class="eh-input eh-input-desc" value="${esc(e.description || '')}" maxlength="200"
         onchange="commitExtraHours(${p.id})"></td>
-      <td class="eh-hours num">
-        <select class="eh-input eh-mode" title="Fixed time, or time per unit multiplied by the order quantity" onchange="commitExtraHours(${p.id})">
-          <option value="fixed"${perUnit ? '' : ' selected'}>Fixed time</option>
-          <option value="unit"${perUnit ? ' selected' : ''}>Time per unit</option>
-        </select>
+      <td class="eh-hours num"><div class="eh-line">
+        <input type="hidden" class="eh-mode" value="${perUnit ? 'unit' : 'fixed'}">
+        <span class="seg" role="group" aria-label="Time mode">
+          <button type="button" class="seg-btn${perUnit ? '' : ' active'}" aria-pressed="${perUnit ? 'false' : 'true'}" title="Fixed time" onclick="setExtraHoursMode(${p.id}, ${i}, 'fixed')">Fixed</button>
+          <button type="button" class="seg-btn${perUnit ? ' active' : ''}" aria-pressed="${perUnit ? 'true' : 'false'}" title="Time per unit, multiplied by the order quantity" onclick="setExtraHoursMode(${p.id}, ${i}, 'unit')">Per unit</button>
+        </span>
         ${hoursCell}
-      </td>
+      </div></td>
       <td class="eh-rate num"><input type="number" class="eh-input num" min="0" step="0.01" value="${Number(e.hourly_rate) || 0}"
         onchange="commitExtraHours(${p.id})"></td>
       <td class="eh-subtotal num">${fmt(subtotal)}</td>
@@ -881,6 +884,53 @@ function renderExtraHoursSection(p) {
       <button class="btn btn-sm btn-primary" onclick="addExtraHourRow(${p.id}, ${safeDefault})">+ Add row</button>
     </div>
   </div>`;
+}
+
+// Inline edit (#3946): a clickable summary that swaps to its inputs in place.
+// The inputs stay in the DOM while closed, so collectExtraHoursItems still reads them.
+function inlineEditOpen(btn) {
+  const wrap = btn.closest('.inline-edit');
+  if (!wrap) return;
+  wrap.classList.add('editing');
+  const input = wrap.querySelector('.ie-edit input');
+  if (input) { input.focus(); input.select(); }
+}
+// Leaving the edit area (focus moves outside it) closes it; the inputs' onchange already saved.
+function inlineEditFocusOut(ev) {
+  const wrap = ev.currentTarget;
+  if (wrap.contains(ev.relatedTarget)) return;
+  wrap.classList.remove('editing');
+}
+// Enter = save (blur fires change), Esc = restore the rendered values and cancel.
+function inlineEditKey(ev) {
+  const wrap = ev.currentTarget;
+  if (ev.key === 'Enter') {
+    ev.preventDefault();
+    if (ev.target.blur) ev.target.blur();
+  } else if (ev.key === 'Escape') {
+    ev.preventDefault();
+    wrap.querySelectorAll('.ie-edit input').forEach(i => { i.value = i.defaultValue; });
+    wrap.querySelectorAll('.ie-edit select').forEach(sel => {
+      const o = sel.querySelector('option[selected]');
+      if (o) sel.value = o.value;
+    });
+    const view = wrap.querySelector('.ie-view');
+    wrap.classList.remove('editing');
+    if (view) view.focus();
+  }
+}
+
+// Fixed | Per unit toggle on an extra-hours row. Switching to per unit opens the value for editing.
+async function setExtraHoursMode(projectId, idx, mode) {
+  const panel = document.querySelector(`[data-extra-hours-panel="${projectId}"]`);
+  const row = panel && panel.querySelector(`tbody tr[data-eh-row="${idx}"]`);
+  const modeInput = row && row.querySelector('.eh-mode');
+  if (!modeInput || modeInput.value === mode) return;
+  modeInput.value = mode;
+  await commitExtraHours(projectId);
+  if (mode !== 'unit') return;
+  const view = document.querySelector(`[data-extra-hours-panel="${projectId}"] tbody tr[data-eh-row="${idx}"] .ie-view`);
+  if (view) inlineEditOpen(view);
 }
 
 // Read every input row in the panel and PUT the full list. Replace-the-list semantics.
@@ -1435,13 +1485,15 @@ function renderExtrasSection(p) {
     return `<tr>
       <td class="ec-name">${esc(eci.name)}</td>
       <td class="ec-price num">${fmt(eci.price_excl_vat)}</td>
-      <td class="ec-qty">${linked
-        ? `<input type="text" inputmode="decimal" value="${Number(qty)}" title="Per ordered item. Decimals allowed, comma or point (0,5 = one per two items)." onchange="updateExtraQty(${p.id}, ${eci.id}, this.value)">`
-        : `<input type="number" min="1" value="${qty}" onchange="updateExtraQty(${p.id}, ${eci.id}, this.value)">`}
+      <td class="ec-qty"><div class="ec-qty-line">${linked
+        ? `<span class="inline-edit" onfocusout="inlineEditFocusOut(event)" onkeydown="inlineEditKey(event)">
+            <button type="button" class="ie-view" onclick="inlineEditOpen(this)" title="Ratio: ${Number(qty)} per ordered item &times; ${orderQty} items per set = ${effQty(pExtras[eci.id])} pcs (rounded up). Click to edit.">Ratio ${Number(qty)} &rarr; ${effQty(pExtras[eci.id])}</button>
+            <span class="ie-edit"><input type="text" inputmode="decimal" class="ec-qty-input" value="${Number(qty)}" aria-label="Quantity per ordered item" title="Per ordered item. Decimals allowed, comma or point (0,5 = one per two items)." onchange="updateExtraQty(${p.id}, ${eci.id}, this.value)"></span>
+          </span>`
+        : `<input type="number" min="1" class="ec-qty-input" value="${qty}" onchange="updateExtraQty(${p.id}, ${eci.id}, this.value)">`}
         <label class="ec-linked" title="Follow the order quantity: Qty becomes the amount per ordered item, and the total quantity is Qty x ${orderQty} (items per set), rounded up to a whole piece. It adapts automatically when the order quantity changes.">
-          <input type="checkbox" ${linked ? 'checked' : ''} onchange="toggleExtraLinked(${p.id}, ${eci.id}, this.checked)"> per ordered item
-        </label>
-        ${linked ? `<div class="ec-linked-result">${Number(qty)} &times; ${orderQty} = ${effQty(pExtras[eci.id])}</div>` : ''}</td>
+          <input type="checkbox" ${linked ? 'checked' : ''} onchange="toggleExtraLinked(${p.id}, ${eci.id}, this.checked)"> per item
+        </label></div></td>
       <td class="ec-total num">${fmt(lineTotal)}</td>
       <td class="ec-action"><button class="btn-icon" title="Remove" onclick="updateExtraQty(${p.id}, ${eci.id}, 0)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>

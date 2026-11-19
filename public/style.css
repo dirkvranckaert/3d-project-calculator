@@ -765,14 +765,35 @@ body {
   color: var(--text);
 }
 .ec-qty input:focus { border-color: var(--primary); outline: none; box-shadow: 0 0 0 2px rgba(15,118,110,.15); }
-/* Order-quantity link (#3927): checkbox under the qty input + resulting quantity. */
-.ec-qty .ec-linked { display: flex; align-items: center; gap: 4px; margin-top: 4px; font-size: 12px; color: var(--text-muted); cursor: pointer; white-space: nowrap; }
+/* Single-line rows (#3946): narrow qty input + inline "per item" checkbox (#3927),
+   inline-edit chips, Fixed | Per unit toggle (#3928). */
+.ec-qty .ec-qty-line, .eh-hours .eh-line { display: flex; align-items: center; gap: 8px; }
+.eh-hours .eh-line { justify-content: flex-end; white-space: nowrap; }
+.ec-qty .ec-qty-input { width: 76px; }
+.ec-qty .ec-linked { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-muted); cursor: pointer; white-space: nowrap; }
 .ec-qty .ec-linked input { width: auto; padding: 0; margin: 0; box-shadow: none; }
-.ec-qty .ec-linked-result { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-/* Time per unit (#3928): mode select, per-unit input + unit, effective h:mm line. */
-.eh-hours .eh-mode, .eh-hours .eh-unit { display: block; margin: 0 0 4px auto; font-size: 12px; }
-.eh-hours .eh-input-perunit { width: 72px; }
-.eh-hours .eh-effective { margin-top: 4px; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.inline-edit { display: inline-flex; align-items: center; gap: 4px; }
+.inline-edit .ie-view {
+  font: inherit; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap;
+  color: var(--text); background: none; border: none; border-bottom: 1px dashed var(--text-muted);
+  padding: 2px 0; margin: 0; cursor: pointer; border-radius: 0;
+}
+.inline-edit .ie-view:hover { color: var(--primary); border-bottom-color: var(--primary); }
+.inline-edit .ie-view:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.inline-edit .ie-edit { display: none; align-items: center; gap: 4px; }
+.inline-edit.editing .ie-edit { display: inline-flex; }
+.inline-edit.editing .ie-view { display: none; }
+.eh-hours .eh-input-perunit { width: 64px; }
+.eh-hours .eh-unit { width: auto; font-size: 12px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; flex: none; }
+.seg-btn {
+  font: inherit; font-size: 11px; font-weight: 600; padding: 3px 8px; cursor: pointer; white-space: nowrap;
+  color: var(--text-muted); background: var(--surface); border: none; border-radius: 0;
+}
+.seg-btn + .seg-btn { border-left: 1px solid var(--border); }
+.seg-btn:hover { background: var(--surface-hover); }
+.seg-btn.active { background: var(--primary-tint2); color: var(--primary); }
+.seg-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .ec-action { width: 36px; text-align: center; }
 .ec-total-badge { color: var(--text-muted); font-size: 13px; font-weight: 600; }
 .ec-add-row {
@@ -1662,7 +1683,7 @@ select.inline-input { width: auto !important; max-width: 160px; text-align: left
   .ec-name { flex: 1 1 100%; font-size: 14px; }
   .ec-price { flex: 1; }
   .ec-qty { flex: 0; }
-  .ec-qty input { width: 56px; padding: 8px 4px; }
+  .ec-qty .ec-qty-input { width: 56px; padding: 8px 4px; }
   .ec-total { flex: 1; text-align: right; font-weight: 600; }
   .ec-action { flex: 0; }
   .ec-table tfoot { display: none; }
