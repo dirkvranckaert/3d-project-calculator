@@ -945,8 +945,17 @@ function extraHourPayload(e, i) {
   return item;
 }
 
-function addExtraHourRow(projectId, defaultRate) {
-  return serializeListWrite(`extra-hours-${projectId}`, () => addExtraHourRowNow(projectId, defaultRate), () => reloadSingleProject(projectId));
+async function addExtraHourRow(projectId, defaultRate) {
+  await serializeListWrite(`extra-hours-${projectId}`, () => addExtraHourRowNow(projectId, defaultRate), () => reloadSingleProject(projectId));
+  // The panel is inert while the write is pending; focus only once the lock settled.
+  focusNewExtraHourRow(projectId);
+}
+function focusNewExtraHourRow(projectId) {
+  const panel = document.querySelector(`[data-extra-hours-panel="${projectId}"]`);
+  const rows = panel?.querySelectorAll('tbody tr[data-eh-row]') || [];
+  const last = rows[rows.length - 1];
+  const input = last?.querySelector('.eh-input-desc');
+  if (input) { input.focus(); input.select(); }
 }
 async function addExtraHourRowNow(projectId, defaultRate) {
   const p = findProject(projectId);
@@ -963,12 +972,6 @@ async function addExtraHourRowNow(projectId, defaultRate) {
   });
   await PUT(`/api/projects/${projectId}/extra-hours`, existing);
   await reloadSingleProject(projectId);
-  // Focus the description of the newly added row for fast typing.
-  const panel = document.querySelector(`[data-extra-hours-panel="${projectId}"]`);
-  const rows = panel?.querySelectorAll('tbody tr[data-eh-row]') || [];
-  const last = rows[rows.length - 1];
-  const input = last?.querySelector('.eh-input-desc');
-  if (input) { input.focus(); input.select(); }
 }
 
 function removeExtraHourRow(projectId, idx) {
@@ -2758,18 +2761,40 @@ const _listWriteQueues = new Map();
 // the re-render after the reload replaces the panel with a fresh, editable one.
 //
 // The lock tracks FRESHNESS, not just pending promises: a task that fails (e.g. the
-// PUT committed but the reload GET failed) marks the key stale, and the panel stays
-// inert until a reload succeeded (recoverStaleList retries it). render() re-applies
-// the locks, so an unrelated re-render cannot swap in an unlocked panel.
+// PUT committed but the reload GET failed) marks the key stale. There is NO automatic
+// retry: the panel stays inert and shows "Save state unknown, reload the page" with a
+// reload button. A later queued task (already enqueued) still refreshes first and, if
+// that succeeds, clears the stale mark. render() re-applies the lock + banner, so an
+// unrelated re-render cannot swap in an unlocked panel.
 const _listWritePending = new Map();
 const _listWriteStale = new Map();      // key -> refresh fn (rendered list may be stale)
-const _listWriteRecovering = new Set();
-let _listRecoveryDelayMs = 3000;
+function listPanelMatch(key) {
+  return /^(extras|extra-hours)-(.+)$/.exec(key);
+}
 function setListPanelInert(key, on) {
   if (typeof document === 'undefined' || !document.querySelectorAll) return;
-  const m = /^(extras|extra-hours)-(.+)$/.exec(key);
+  const m = listPanelMatch(key);
   if (!m) return;
   document.querySelectorAll(`[data-${m[1]}-panel="${m[2]}"]`).forEach(el => { el.inert = on; });
+}
+// The banner sits OUTSIDE the inert panel (just before it) so its button stays clickable.
+function syncListStaleBanner(key) {
+  if (typeof document === 'undefined' || !document.querySelectorAll) return;
+  const m = listPanelMatch(key);
+  if (!m) return;
+  const attr = `[data-list-stale-banner="${key}"]`;
+  const stale = _listWriteStale.has(key);
+  if (!stale) {
+    document.querySelectorAll(attr).forEach(b => { if (b.remove) b.remove(); });
+    return;
+  }
+  document.querySelectorAll(`[data-${m[1]}-panel="${m[2]}"]`).forEach(el => {
+    const prev = el.previousElementSibling;
+    if (prev && prev.matches && prev.matches(attr)) return;
+    if (el.insertAdjacentHTML) {
+      el.insertAdjacentHTML('beforebegin', `<div class="list-stale-banner" data-list-stale-banner="${key}" role="alert"><strong>Save state unknown.</strong> Reload the page to see the saved data. <button type="button" class="btn btn-primary" onclick="location.reload()">Reload page</button></div>`);
+    }
+  });
 }
 function isListWriteLocked(key) {
   return (_listWritePending.get(key) || 0) > 0 || _listWriteStale.has(key);
@@ -2777,30 +2802,17 @@ function isListWriteLocked(key) {
 // Called at the end of render(): freshly rendered panels are editable by default.
 function applyListWriteLocks() {
   const keys = new Set([..._listWritePending.keys(), ..._listWriteStale.keys()]);
-  keys.forEach(key => { if (isListWriteLocked(key)) setListPanelInert(key, true); });
-}
-// Stale and idle: reload until it succeeds, then unlock. Stays inert while it fails.
-async function recoverStaleList(key) {
-  if (_listWriteRecovering.has(key) || (_listWritePending.get(key) || 0) > 0) return;
-  const refresh = _listWriteStale.get(key);
-  if (!refresh) return;
-  _listWriteRecovering.add(key);
-  try {
-    await refresh();
-    _listWriteStale.delete(key);
-    _listWriteRecovering.delete(key);
-    if (!isListWriteLocked(key)) setListPanelInert(key, false);
-  } catch (e) {
-    _listWriteRecovering.delete(key);
-    setTimeout(() => recoverStaleList(key), _listRecoveryDelayMs);
-  }
+  keys.forEach(key => {
+    if (isListWriteLocked(key)) setListPanelInert(key, true);
+    syncListStaleBanner(key);
+  });
 }
 function serializeListWrite(key, fn, refresh) {
   const prev = _listWriteQueues.get(key) || Promise.resolve();
   _listWritePending.set(key, (_listWritePending.get(key) || 0) + 1);
   setListPanelInert(key, true);
-  const next = prev.then(() => false, () => true).then(async prevFailed => {
-    if (prevFailed && refresh) {
+  const next = prev.then(() => {}, () => {}).then(async () => {
+    if (refresh && _listWriteStale.has(key)) {
       await refresh();
       _listWriteStale.delete(key);
     }
@@ -2811,10 +2823,8 @@ function serializeListWrite(key, fn, refresh) {
     _listWritePending.set(key, n);
     if (failed && refresh) _listWriteStale.set(key, refresh);
     else if (!failed) _listWriteStale.delete(key);
-    if (n === 0) {
-      if (isListWriteLocked(key)) recoverStaleList(key);
-      else setListPanelInert(key, false);
-    }
+    if (n === 0 && !isListWriteLocked(key)) setListPanelInert(key, false);
+    syncListStaleBanner(key);
   };
   next.then(() => settle(false), () => settle(true));
   _listWriteQueues.set(key, next);
