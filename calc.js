@@ -158,13 +158,38 @@ function applyProfitMargins(perItemCosts, margins) {
 /* ------------------------------------------------------------------ */
 
 /**
- * @param {Array<{price_excl_vat: number, quantity: number}>} extras
+ * Order quantity a project line can follow: the project's items-per-set
+ * (the "Items per set" field that drives the whole quote). Falsy/invalid -> 1,
+ * same fallback as effectiveRunInputs.
+ */
+function orderQuantity(itemsPerSet) {
+  const n = Number(itemsPerSet);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+/**
+ * Effective quantity of a supplies line. A line with `scales_with_order`
+ * truthy treats `quantity` as a per-ordered-item RATIO (decimals allowed,
+ * 0.5 = one per two items) and multiplies by the order quantity (#3927). The
+ * total is ROUNDED UP to a whole piece (you cannot buy half a keyring); the
+ * 1e-9 pre-round stops float noise (0.1 x 30 = 3.0000000000000004) adding one.
+ * Any other line keeps its fixed quantity.
+ */
+function effectiveExtraQuantity(extra, itemsPerSet = 1) {
+  const q = Number(extra && extra.quantity) || 0;
+  if (!(extra && extra.scales_with_order)) return q;
+  return Math.ceil(Math.round(q * orderQuantity(itemsPerSet) * 1e9) / 1e9);
+}
+
+/**
+ * @param {Array<{price_excl_vat: number, quantity: number, scales_with_order?: number}>} extras
+ * @param {number} [itemsPerSet] order quantity, only used by lines that scale with it
  * @returns {number} total extra cost excl. VAT
  */
-function calculateExtraCosts(extras) {
+function calculateExtraCosts(extras, itemsPerSet = 1) {
   let total = 0;
   for (const e of extras) {
-    total += (e.price_excl_vat || 0) * (e.quantity || 0);
+    total += (e.price_excl_vat || 0) * effectiveExtraQuantity(e, itemsPerSet);
   }
   return total;
 }
@@ -173,19 +198,39 @@ function calculateExtraCosts(extras) {
 /*  Extra hours (project-level human-time, NO margin)                  */
 /* ------------------------------------------------------------------ */
 
+const PER_UNIT_TO_HOURS = { h: 1, min: 1 / 60, s: 1 / 3600 };
+
+/**
+ * Effective hours of an extra-hours row (#3928). A row with a non-null
+ * `per_unit_value` is in "time per unit" mode: value (in `per_unit_unit`,
+ * h|min|s, default min) x order quantity. Any other row is a fixed `hours` row.
+ * Not rounded: the h:mm display rounds, the money uses the exact figure.
+ */
+function effectiveExtraHours(extra, itemsPerSet = 1) {
+  const raw = extra ? extra.per_unit_value : null;
+  if (raw !== null && raw !== undefined && raw !== '') {
+    const v = Number(raw);
+    const f = PER_UNIT_TO_HOURS[extra.per_unit_unit || 'min'];
+    if (!Number.isFinite(v) || f === undefined) return NaN;
+    return v * f * orderQuantity(itemsPerSet);
+  }
+  return Number(extra && extra.hours);
+}
+
 /**
  * Project-level extra hours (design, consultation, hand-finishing).
- * Each row contributes `hours * hourly_rate` to the project total.
- * Per-project flat — does NOT scale by items_per_set.
- * No profit margin is applied — billed at cost.
+ * Each row contributes `effective hours * hourly_rate` to the project total.
+ * Fixed rows are per-project flat; "time per unit" rows scale with the order
+ * quantity (items_per_set). No profit margin is applied — billed at cost.
  *
- * @param {Array<{hours: number, hourly_rate: number}>} extraHours
+ * @param {Array<{hours: number, hourly_rate: number, per_unit_value?: number|null, per_unit_unit?: string}>} extraHours
+ * @param {number} [itemsPerSet] order quantity, only used by per-unit rows
  * @returns {number} total extra-hours cost in EUR
  */
-function calculateExtraHoursCost(extraHours) {
+function calculateExtraHoursCost(extraHours, itemsPerSet = 1) {
   let total = 0;
   for (const e of extraHours || []) {
-    const h = Number(e.hours);
+    const h = effectiveExtraHours(e, itemsPerSet);
     const r = Number(e.hourly_rate);
     if (!Number.isFinite(h) || !Number.isFinite(r)) continue;
     total += h * r;
@@ -1055,10 +1100,10 @@ function calculateProject(opts) {
     .reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
 
   // Extra costs
-  const extraCostsTotal = calculateExtraCosts(extras) + customLinesTotal;
+  const extraCostsTotal = calculateExtraCosts(extras, itemsPerSet) + customLinesTotal;
 
   // Extra hours (project-level human-time, no margin)
-  const extraHoursCost = calculateExtraHoursCost(extraHours);
+  const extraHoursCost = calculateExtraHoursCost(extraHours, itemsPerSet);
 
   // Design costs (only for custom projects). Never added to `productionCost`,
   // so never part of the production-basis target-margin base; they enter the
@@ -1335,6 +1380,9 @@ module.exports = {
   roundToCents,
   calculateQuantityCheck,
   applyProfitMargins,
+  orderQuantity,
+  effectiveExtraQuantity,
+  effectiveExtraHours,
   calculateExtraCosts,
   calculateExtraHoursCost,
   calculateDesignCosts,

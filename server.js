@@ -564,8 +564,10 @@ function enrichProject(db, project) {
   return {
     ...project,
     plates,
-    extras,
-    extra_hours: extraHours,
+    // effective_* = what the totals use (order-quantity-linked lines resolved), so
+    // the UI never re-derives it and cannot drift from calc.js.
+    extras: extras.map(e => ({ ...e, effective_quantity: calc.effectiveExtraQuantity(e, project.items_per_set) })),
+    extra_hours: extraHours.map(e => ({ ...e, effective_hours: calc.effectiveExtraHours(e, project.items_per_set) })),
     design_hours: designHours,
     design_extras: designExtras,
     custom_lines: customLines,
@@ -674,6 +676,9 @@ function enrichProjectLite(db, project) {
       description: e.description,
       hours: e.hours,
       hourly_rate: e.hourly_rate,
+      per_unit_value: e.per_unit_value,
+      per_unit_unit: e.per_unit_unit,
+      effective_hours: calc.effectiveExtraHours(e, project.items_per_set),
     })),
     design_hours: designHours,
     design_extras: designExtras,
@@ -883,9 +888,18 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
     }
 
     // Copy extras
-    const extras = db.prepare('SELECT extra_cost_id, quantity FROM project_extra_costs WHERE project_id = ?').all(src.id);
-    const insEC = db.prepare('INSERT INTO project_extra_costs (project_id, extra_cost_id, quantity) VALUES (?,?,?)');
-    for (const e of extras) insEC.run(newId, e.extra_cost_id, e.quantity);
+    const extras = db.prepare('SELECT extra_cost_id, quantity, scales_with_order FROM project_extra_costs WHERE project_id = ?').all(src.id);
+    const insEC = db.prepare('INSERT INTO project_extra_costs (project_id, extra_cost_id, quantity, scales_with_order) VALUES (?,?,?,?)');
+    for (const e of extras) insEC.run(newId, e.extra_cost_id, e.quantity, e.scales_with_order);
+
+    // Copy production extra hours (is_design_cost=0), incl. time-per-unit rows (#3928)
+    const prodHours = db.prepare('SELECT * FROM project_extra_hours WHERE project_id = ? AND is_design_cost = 0 ORDER BY sort_order, id').all(src.id);
+    const insProdHour = db.prepare(
+      'INSERT INTO project_extra_hours (project_id, description, hours, hourly_rate, sort_order, is_design_cost, per_unit_value, per_unit_unit) VALUES (?,?,?,?,?,0,?,?)'
+    );
+    for (const h of prodHours) {
+      insProdHour.run(newId, h.description, h.hours, h.hourly_rate, h.sort_order, h.per_unit_value ?? null, h.per_unit_unit ?? null);
+    }
 
     // Copy design hours (is_design_cost=1)
     const designHours = db.prepare('SELECT * FROM project_extra_hours WHERE project_id = ? AND is_design_cost = 1 ORDER BY sort_order, id').all(src.id);
@@ -1137,15 +1151,39 @@ app.delete('/api/projects/:projectId/plates/:plateId', (req, res) => {
 app.put('/api/projects/:projectId/extras', (req, res) => {
   const db = getDb();
   const pid = req.params.projectId;
-  const items = req.body; // Array of { extra_cost_id, quantity }
+  const items = req.body; // Array of { extra_cost_id, quantity, scales_with_order }
+  if (!db.prepare('SELECT id FROM projects WHERE id = ?').get(pid)) return res.status(404).json({ error: 'Not found' });
+  if (!Array.isArray(items)) return res.status(400).json({ error: 'Expected an array' });
 
-  db.prepare('DELETE FROM project_extra_costs WHERE project_id = ?').run(pid);
-  const ins = db.prepare('INSERT INTO project_extra_costs (project_id, extra_cost_id, quantity) VALUES (?,?,?)');
+  // Validate every row BEFORE the destructive replace, so a 400 leaves the list untouched.
+  // Linked rows: finite ratio (decimals ok). Fixed rows: whole pieces only.
+  const rows = [];
   for (const item of items) {
-    if (item.quantity > 0) {
-      ins.run(pid, item.extra_cost_id, item.quantity);
+    const quantity = Number(item && item.quantity);
+    if (!item || !Number.isInteger(Number(item.extra_cost_id)) || !Number.isFinite(quantity)) {
+      return res.status(400).json({ error: 'Invalid supplies row' });
     }
+    const linked = item.scales_with_order ? 1 : 0;
+    if (!linked && !Number.isInteger(quantity)) {
+      return res.status(400).json({ error: 'Fixed supplies quantity must be a whole number' });
+    }
+    if (quantity > 0) rows.push([Number(item.extra_cost_id), quantity, linked]);
   }
+  // Relational constraints too (FK + UNIQUE(project, extra_cost)), still before any write.
+  const seen = new Set();
+  const exists = db.prepare('SELECT 1 FROM extra_cost_items WHERE id = ?');
+  for (const [ecId] of rows) {
+    if (seen.has(ecId)) return res.status(400).json({ error: 'Duplicate supplies row' });
+    seen.add(ecId);
+    if (!exists.get(ecId)) return res.status(400).json({ error: 'Unknown supplies item' });
+  }
+
+  // One transaction: whatever happens, the old list is either kept or fully replaced.
+  const ins = db.prepare('INSERT INTO project_extra_costs (project_id, extra_cost_id, quantity, scales_with_order) VALUES (?,?,?,?)');
+  db.transaction(() => {
+    db.prepare('DELETE FROM project_extra_costs WHERE project_id = ?').run(pid);
+    for (const [ecId, quantity, linked] of rows) ins.run(pid, ecId, quantity, linked);
+  })();
 
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
@@ -1164,11 +1202,8 @@ app.put('/api/projects/:projectId/extra-hours', (req, res) => {
 
   const items = Array.isArray(req.body) ? req.body : [];
 
-  // Only touch production extra-hours (is_design_cost=0); leave design-cost rows intact
-  db.prepare('DELETE FROM project_extra_hours WHERE project_id = ? AND is_design_cost = 0').run(pid);
-  const ins = db.prepare(
-    'INSERT INTO project_extra_hours (project_id, description, hours, hourly_rate, sort_order, is_design_cost) VALUES (?,?,?,?,?,0)'
-  );
+  // Validate every row BEFORE touching the table, so a 400 never leaves a half-replaced list.
+  const rows = [];
   let order = 0;
   for (const it of items) {
     const desc = String(it.description || '').trim();
@@ -1176,10 +1211,30 @@ app.put('/api/projects/:projectId/extra-hours', (req, res) => {
     const hours = Math.max(0, Number(it.hours) || 0);
     const rate  = Math.max(0, Number(it.hourly_rate) || 0);
     if (!Number.isFinite(hours) || !Number.isFinite(rate)) continue;
+    // "Time per unit" mode (#3928): per_unit_value null/absent = fixed hours row.
+    let perUnitValue = null;
+    let perUnitUnit = null;
+    if (it.per_unit_value !== null && it.per_unit_value !== undefined && it.per_unit_value !== '') {
+      perUnitValue = Number(it.per_unit_value);
+      perUnitUnit = it.per_unit_unit || 'min';
+      if (!Number.isFinite(perUnitValue) || perUnitValue < 0) {
+        return res.status(400).json({ error: 'per_unit_value must be a number >= 0' });
+      }
+      if (!['h', 'min', 's'].includes(perUnitUnit)) {
+        return res.status(400).json({ error: "per_unit_unit must be 'h', 'min' or 's'" });
+      }
+    }
     const sortOrder = Number.isFinite(Number(it.sort_order)) ? Number(it.sort_order) : order;
-    ins.run(pid, desc.slice(0, 200), hours, rate, sortOrder);
+    rows.push([desc.slice(0, 200), hours, rate, sortOrder, perUnitValue, perUnitUnit]);
     order++;
   }
+
+  // Only touch production extra-hours (is_design_cost=0); leave design-cost rows intact
+  db.prepare('DELETE FROM project_extra_hours WHERE project_id = ? AND is_design_cost = 0').run(pid);
+  const ins = db.prepare(
+    'INSERT INTO project_extra_hours (project_id, description, hours, hourly_rate, sort_order, is_design_cost, per_unit_value, per_unit_unit) VALUES (?,?,?,?,?,0,?,?)'
+  );
+  for (const r of rows) ins.run(pid, ...r);
 
   db.prepare("UPDATE projects SET updated_at=datetime('now') WHERE id=?").run(pid);
   const fullProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
@@ -1961,7 +2016,8 @@ app.get('/api/export', (_req, res) => {
     projects: db.prepare('SELECT * FROM projects').all().map(p => ({
       ...p,
       plates: db.prepare('SELECT * FROM project_plates WHERE project_id = ?').all(p.id),
-      extras: db.prepare('SELECT extra_cost_id, quantity FROM project_extra_costs WHERE project_id = ?').all(p.id),
+      extras: db.prepare('SELECT extra_cost_id, quantity, scales_with_order FROM project_extra_costs WHERE project_id = ?').all(p.id),
+      extra_hours: db.prepare('SELECT * FROM project_extra_hours WHERE project_id = ? ORDER BY sort_order, id').all(p.id),
     })),
     exported_at: new Date().toISOString(),
   };

@@ -148,6 +148,22 @@ function formatHoursMinutes(hours) {
   const m = totalMinutes % 60;
   return `${h}:${String(m).padStart(2, '0')}`;
 }
+
+/**
+ * Parse a "time per unit" number typed by a human: decimal point OR comma
+ * ("0,75" -> 0.75). Empty -> 0; garbage / negative -> NaN (caller clamps).
+ *
+ * @param {string|number} value
+ * @returns {number}
+ */
+function parsePerUnitInput(value) {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : NaN;
+  const s = String(value).trim().replace(',', '.');
+  if (s === '') return 0;
+  if (!/^\d*\.?\d+$|^\d+\.$/.test(s)) return NaN;
+  return Number(s);
+}
 /**
  * Format a plastic weight for display.
  * Below 1000 g -> grams with 2 decimals ("845.30g").
@@ -425,6 +441,7 @@ function render() {
       return;
     }
     el.innerHTML = renderDetailView(p);
+    applyListWriteLocks();
   } else {
     currentView = 'list';
     currentProjectId = null;
@@ -813,18 +830,37 @@ function renderExtraHoursSection(p) {
     if (ao !== bo) return ao - bo;
     return (a.id || 0) - (b.id || 0);
   });
-  const total = items.reduce((s, e) => s + (Number(e.hours) || 0) * (Number(e.hourly_rate) || 0), 0);
+  // effective_hours comes from the server (resolves "time per unit" rows x order quantity).
+  const effHours = e => { const h = Number(e.effective_hours ?? e.hours); return Number.isFinite(h) ? h : 0; };
+  const total = items.reduce((s, e) => s + effHours(e) * (Number(e.hourly_rate) || 0), 0);
   const defaultRate = Number(settings.extra_uren_default_rate);
   const safeDefault = Number.isFinite(defaultRate) ? defaultRate : 60;
+  const orderQty = Number(p.items_per_set) > 0 ? Number(p.items_per_set) : 1;
 
   const rows = items.map((e, i) => {
-    const decHours = Number(e.hours) || 0;
+    const decHours = effHours(e);
     const subtotal = decHours * (Number(e.hourly_rate) || 0);
-    return `<tr data-eh-row="${i}">
+    const perUnit = e.per_unit_value !== null && e.per_unit_value !== undefined;
+    const unit = e.per_unit_unit || 'min';
+    const hoursCell = perUnit
+      ? `<input type="text" inputmode="decimal" class="eh-input eh-input-perunit num" value="${Number(e.per_unit_value)}"
+          title="Time per unit. Decimals allowed, comma or point (e.g. 0,75)." onchange="commitExtraHours(${p.id})">
+        <select class="eh-input eh-unit" onchange="commitExtraHours(${p.id})">
+          ${['h', 'min', 's'].map(u => `<option value="${u}"${u === unit ? ' selected' : ''}>${u === 'h' ? 'hours' : u === 'min' ? 'minutes' : 'seconds'} / unit</option>`).join('')}
+        </select>
+        <div class="eh-effective" title="Time per unit x order quantity (items per set)">&times; ${orderQty} = ${formatHoursMinutes(decHours)}</div>`
+      : `<input type="text" inputmode="numeric" class="eh-input eh-input-hours num" value="${formatHoursMinutes(decHours)}"
+          title="H:MM (e.g. 0:45). Decimal (0.5) and bare integers (2) also accepted." onchange="commitExtraHours(${p.id})">`;
+    return `<tr data-eh-row="${i}" data-eh-fixed="${Number(e.hours) || 0}">
       <td class="eh-desc"><input type="text" class="eh-input eh-input-desc" value="${esc(e.description || '')}" maxlength="200"
         onchange="commitExtraHours(${p.id})"></td>
-      <td class="eh-hours num"><input type="text" inputmode="numeric" class="eh-input eh-input-hours num" value="${formatHoursMinutes(decHours)}"
-        title="H:MM (e.g. 0:45). Decimal (0.5) and bare integers (2) also accepted." onchange="commitExtraHours(${p.id})"></td>
+      <td class="eh-hours num">
+        <select class="eh-input eh-mode" title="Fixed time, or time per unit multiplied by the order quantity" onchange="commitExtraHours(${p.id})">
+          <option value="fixed"${perUnit ? '' : ' selected'}>Fixed time</option>
+          <option value="unit"${perUnit ? ' selected' : ''}>Time per unit</option>
+        </select>
+        ${hoursCell}
+      </td>
       <td class="eh-rate num"><input type="number" class="eh-input num" min="0" step="0.01" value="${Number(e.hourly_rate) || 0}"
         onchange="commitExtraHours(${p.id})"></td>
       <td class="eh-subtotal num">${fmt(subtotal)}</td>
@@ -848,38 +884,83 @@ function renderExtraHoursSection(p) {
 }
 
 // Read every input row in the panel and PUT the full list. Replace-the-list semantics.
-async function commitExtraHours(projectId) {
+// The DOM is read NOW (when the edit happens), not when the queued write finally runs:
+// an earlier write's reload re-renders the panel from server state and would
+// otherwise wipe this edit before it is read. The snapshot holds every row as shown,
+// so a later snapshot always includes the earlier edits too.
+function commitExtraHours(projectId) {
+  const items = collectExtraHoursItems(projectId);
+  if (!items) return Promise.resolve();
+  return serializeListWrite(`extra-hours-${projectId}`, async () => {
+    await PUT(`/api/projects/${projectId}/extra-hours`, items);
+    await reloadSingleProject(projectId);
+  }, () => reloadSingleProject(projectId));
+}
+function collectExtraHoursItems(projectId) {
   const panel = document.querySelector(`[data-extra-hours-panel="${projectId}"]`);
-  if (!panel) return;
+  if (!panel) return null;
   const rows = panel.querySelectorAll('tbody tr[data-eh-row]');
   const items = [];
   let order = 0;
   for (const row of rows) {
     const desc = row.querySelector('.eh-input-desc')?.value || '';
-    const hoursStr = row.querySelector('.eh-hours .eh-input')?.value || '0';
     const rateStr = row.querySelector('.eh-rate .eh-input')?.value || '0';
-    // parseHoursMinutes accepts H:MM, bare ints, and decimal. Garbage -> NaN -> clamp 0.
-    const parsedHours = parseHoursMinutes(hoursStr);
-    items.push({
-      description: desc,
-      hours: Number.isFinite(parsedHours) ? parsedHours : 0,
-      hourly_rate: parseFloat(rateStr) || 0,
-      sort_order: order++,
-    });
+    const perUnitMode = row.querySelector('.eh-mode')?.value === 'unit';
+    const item = { description: desc, hours: 0, hourly_rate: parseFloat(rateStr) || 0, sort_order: order++ };
+    if (perUnitMode) {
+      // Time per unit: comma or point decimals. Garbage -> NaN -> clamp 0.
+      const v = parsePerUnitInput(row.querySelector('.eh-input-perunit')?.value);
+      item.per_unit_value = Number.isFinite(v) ? v : 0;
+      item.per_unit_unit = row.querySelector('.eh-unit')?.value || 'min';
+      // Keep the fixed hours the row had, so switching back is lossless.
+      item.hours = Number(row.dataset.ehFixed) || 0;
+    } else {
+      const fixedInput = row.querySelector('.eh-input-hours');
+      if (fixedInput) {
+        // parseHoursMinutes accepts H:MM, bare ints, and decimal. Garbage -> NaN -> clamp 0.
+        const parsedHours = parseHoursMinutes(fixedInput.value || '0');
+        item.hours = Number.isFinite(parsedHours) ? parsedHours : 0;
+      } else {
+        item.hours = Number(row.dataset.ehFixed) || 0;   // just switched from per-unit
+      }
+    }
+    items.push(item);
   }
-  await PUT(`/api/projects/${projectId}/extra-hours`, items);
-  await reloadSingleProject(projectId);
+  return items;
 }
 
-async function addExtraHourRow(projectId, defaultRate) {
-  const p = findProject(projectId);
-  if (!p) return;
-  const existing = (p.extra_hours || []).map((e, i) => ({
+// Replace-the-list PUT payload for one stored row. Carries the per-unit fields:
+// dropping them here would silently turn a "time per unit" row back into fixed hours.
+function extraHourPayload(e, i) {
+  const item = {
     description: e.description,
     hours: Number(e.hours) || 0,
     hourly_rate: Number(e.hourly_rate) || 0,
     sort_order: e.sort_order ?? i,
-  }));
+  };
+  if (e.per_unit_value !== null && e.per_unit_value !== undefined) {
+    item.per_unit_value = Number(e.per_unit_value) || 0;
+    item.per_unit_unit = e.per_unit_unit || 'min';
+  }
+  return item;
+}
+
+async function addExtraHourRow(projectId, defaultRate) {
+  await serializeListWrite(`extra-hours-${projectId}`, () => addExtraHourRowNow(projectId, defaultRate), () => reloadSingleProject(projectId));
+  // The panel is inert while the write is pending; focus only once the lock settled.
+  focusNewExtraHourRow(projectId);
+}
+function focusNewExtraHourRow(projectId) {
+  const panel = document.querySelector(`[data-extra-hours-panel="${projectId}"]`);
+  const rows = panel?.querySelectorAll('tbody tr[data-eh-row]') || [];
+  const last = rows[rows.length - 1];
+  const input = last?.querySelector('.eh-input-desc');
+  if (input) { input.focus(); input.select(); }
+}
+async function addExtraHourRowNow(projectId, defaultRate) {
+  const p = findProject(projectId);
+  if (!p) return;
+  const existing = (p.extra_hours || []).map(extraHourPayload);
   // Append a placeholder row. Server drops empty-description rows on PUT, so
   // we keep the new row purely client-side until the operator types something.
   // Default 1 hour (renders as "1:00") so the user sees a usable starting value.
@@ -891,23 +972,15 @@ async function addExtraHourRow(projectId, defaultRate) {
   });
   await PUT(`/api/projects/${projectId}/extra-hours`, existing);
   await reloadSingleProject(projectId);
-  // Focus the description of the newly added row for fast typing.
-  const panel = document.querySelector(`[data-extra-hours-panel="${projectId}"]`);
-  const rows = panel?.querySelectorAll('tbody tr[data-eh-row]') || [];
-  const last = rows[rows.length - 1];
-  const input = last?.querySelector('.eh-input-desc');
-  if (input) { input.focus(); input.select(); }
 }
 
-async function removeExtraHourRow(projectId, idx) {
+function removeExtraHourRow(projectId, idx) {
+  return serializeListWrite(`extra-hours-${projectId}`, () => removeExtraHourRowNow(projectId, idx), () => reloadSingleProject(projectId));
+}
+async function removeExtraHourRowNow(projectId, idx) {
   const p = findProject(projectId);
   if (!p) return;
-  const items = (p.extra_hours || []).map((e, i) => ({
-    description: e.description,
-    hours: Number(e.hours) || 0,
-    hourly_rate: Number(e.hourly_rate) || 0,
-    sort_order: e.sort_order ?? i,
-  }));
+  const items = (p.extra_hours || []).map(extraHourPayload);
   if (idx < 0 || idx >= items.length) return;
   items.splice(idx, 1);
   // Re-pack sort_order so the next add starts clean.
@@ -1350,15 +1423,25 @@ function renderExtrasSection(p) {
   (p.extras || []).forEach(e => { pExtras[e.extra_cost_id] = e; });
   const activeItems = allItems.filter(eci => pExtras[eci.id]?.quantity > 0);
   const availableItems = allItems.filter(eci => !pExtras[eci.id] || pExtras[eci.id].quantity === 0);
-  const total = activeItems.reduce((s, eci) => s + eci.price_excl_vat * (pExtras[eci.id]?.quantity || 0), 0);
+  // effective_quantity comes from the server (resolves order-quantity-linked lines).
+  const effQty = e => Number(e?.effective_quantity ?? e?.quantity) || 0;
+  const orderQty = Number(p.items_per_set) > 0 ? Number(p.items_per_set) : 1;
+  const total = activeItems.reduce((s, eci) => s + eci.price_excl_vat * effQty(pExtras[eci.id]), 0);
 
   const rows = activeItems.map(eci => {
     const qty = pExtras[eci.id]?.quantity || 0;
-    const lineTotal = eci.price_excl_vat * qty;
+    const linked = !!pExtras[eci.id]?.scales_with_order;
+    const lineTotal = eci.price_excl_vat * effQty(pExtras[eci.id]);
     return `<tr>
       <td class="ec-name">${esc(eci.name)}</td>
       <td class="ec-price num">${fmt(eci.price_excl_vat)}</td>
-      <td class="ec-qty"><input type="number" min="1" value="${qty}" onchange="updateExtraQty(${p.id}, ${eci.id}, parseInt(this.value)||0)"></td>
+      <td class="ec-qty">${linked
+        ? `<input type="text" inputmode="decimal" value="${Number(qty)}" title="Per ordered item. Decimals allowed, comma or point (0,5 = one per two items)." onchange="updateExtraQty(${p.id}, ${eci.id}, this.value)">`
+        : `<input type="number" min="1" value="${qty}" onchange="updateExtraQty(${p.id}, ${eci.id}, this.value)">`}
+        <label class="ec-linked" title="Follow the order quantity: Qty becomes the amount per ordered item, and the total quantity is Qty x ${orderQty} (items per set), rounded up to a whole piece. It adapts automatically when the order quantity changes.">
+          <input type="checkbox" ${linked ? 'checked' : ''} onchange="toggleExtraLinked(${p.id}, ${eci.id}, this.checked)"> per ordered item
+        </label>
+        ${linked ? `<div class="ec-linked-result">${Number(qty)} &times; ${orderQty} = ${effQty(pExtras[eci.id])}</div>` : ''}</td>
       <td class="ec-total num">${fmt(lineTotal)}</td>
       <td class="ec-action"><button class="btn-icon" title="Remove" onclick="updateExtraQty(${p.id}, ${eci.id}, 0)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
@@ -1384,7 +1467,7 @@ function renderExtrasSection(p) {
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
     </button></td></tr>`).join('');
 
-  return `<div class="extras-section">
+  return `<div class="extras-section" data-extras-panel="${p.id}">
     <div class="extras-section-header"><h3>Supplies &amp; Packaging</h3><span class="ec-total-badge">Total (excl. VAT): ${fmt(total)}</span></div>
     ${activeItems.length > 0 ? `<div class="plates-table-wrap"><table class="ec-table">
       <thead><tr><th>Item</th><th>Unit Price (excl. VAT)</th><th>Qty</th><th>Total</th><th></th></tr></thead>
@@ -2639,15 +2722,145 @@ async function addExtraFromSelect(projectId) {
   await updateExtraQty(projectId, ecId, 1);
 }
 
-async function updateExtraQty(projectId, extraCostId, quantity) {
-  const p = findProject(projectId);
-  if (!p) return;
-  const currentExtras = {};
-  (p.extras || []).forEach(e => { currentExtras[e.extra_cost_id] = e.quantity; });
-  currentExtras[extraCostId] = quantity;
-  const items = Object.entries(currentExtras).map(([id, qty]) => ({ extra_cost_id: parseInt(id), quantity: qty }));
-  await PUT(`/api/projects/${projectId}/extras`, items);
-  await reloadSingleProject(projectId);
+// Qty typed in a supplies row. Order-quantity-linked lines take a decimal ratio
+// (comma or point, 0,5 = one per two items); fixed lines stay whole numbers.
+// Garbage -> 0 (= remove, same as the old parseInt(...)||0).
+function parseExtraQtyInput(raw, linked) {
+  if (linked) {
+    const v = parsePerUnitInput(raw);
+    return Number.isFinite(v) ? v : 0;
+  }
+  return parseInt(raw, 10) || 0;
+}
+
+// Full replace-the-list payload for supplies. Carries every row's scales_with_order
+// flag: rebuilding rows from quantity alone would silently un-link the other lines.
+function buildExtrasPayload(extras, extraCostId, patch) {
+  const current = {};
+  (extras || []).forEach(e => {
+    current[e.extra_cost_id] = { extra_cost_id: e.extra_cost_id, quantity: e.quantity, scales_with_order: e.scales_with_order ? 1 : 0 };
+  });
+  current[extraCostId] = { extra_cost_id: extraCostId, quantity: 1, scales_with_order: 0, ...(current[extraCostId] || {}), ...patch };
+  return Object.values(current);
+}
+
+// Replace-the-list writes of one project run strictly one after another, and each
+// rebuilds its payload from the project as it is AFTER the previous write was
+// reloaded. Otherwise Qty-then-checkbox (two quick changes) both start from the same
+// stale snapshot and the last PUT to land silently discards the other edit.
+const _listWriteQueues = new Map();
+// A task can reject AFTER its PUT committed (the reload GET failed), leaving the
+// in-memory project stale. So when the previous task failed, `refresh` (a reload)
+// must succeed before the next task builds a full replacement; if it fails too the
+// next task fails without writing.
+//
+// While a list write is pending its panel is made inert. Queued writes carry state
+// captured earlier (a DOM snapshot, a row index), so a second edit made before the
+// first one's reload re-renders the panel could be applied on top of a changed list
+// (removing the wrong row, resurrecting a removed one). Inert = no overlapping edits;
+// the re-render after the reload replaces the panel with a fresh, editable one.
+//
+// The lock tracks FRESHNESS, not just pending promises: a task that fails (e.g. the
+// PUT committed but the reload GET failed) marks the key stale. There is NO automatic
+// retry: the panel stays inert and shows "Save state unknown, reload the page" with a
+// reload button. A later queued task (already enqueued) still refreshes first and, if
+// that succeeds, clears the stale mark. render() re-applies the lock + banner, so an
+// unrelated re-render cannot swap in an unlocked panel.
+const _listWritePending = new Map();
+const _listWriteStale = new Map();      // key -> refresh fn (rendered list may be stale)
+function listPanelMatch(key) {
+  return /^(extras|extra-hours)-(.+)$/.exec(key);
+}
+function setListPanelInert(key, on) {
+  if (typeof document === 'undefined' || !document.querySelectorAll) return;
+  const m = listPanelMatch(key);
+  if (!m) return;
+  document.querySelectorAll(`[data-${m[1]}-panel="${m[2]}"]`).forEach(el => { el.inert = on; });
+}
+// The banner sits OUTSIDE the inert panel (just before it) so its button stays clickable.
+function syncListStaleBanner(key) {
+  if (typeof document === 'undefined' || !document.querySelectorAll) return;
+  const m = listPanelMatch(key);
+  if (!m) return;
+  const attr = `[data-list-stale-banner="${key}"]`;
+  const stale = _listWriteStale.has(key);
+  if (!stale) {
+    document.querySelectorAll(attr).forEach(b => { if (b.remove) b.remove(); });
+    return;
+  }
+  document.querySelectorAll(`[data-${m[1]}-panel="${m[2]}"]`).forEach(el => {
+    const prev = el.previousElementSibling;
+    if (prev && prev.matches && prev.matches(attr)) return;
+    if (el.insertAdjacentHTML) {
+      el.insertAdjacentHTML('beforebegin', `<div class="list-stale-banner" data-list-stale-banner="${key}" role="alert"><strong>Save state unknown.</strong> Reload the page to see the saved data. <button type="button" class="btn btn-primary" onclick="location.reload()">Reload page</button></div>`);
+    }
+  });
+}
+function isListWriteLocked(key) {
+  return (_listWritePending.get(key) || 0) > 0 || _listWriteStale.has(key);
+}
+// Called at the end of render(): freshly rendered panels are editable by default.
+function applyListWriteLocks() {
+  const keys = new Set([..._listWritePending.keys(), ..._listWriteStale.keys()]);
+  keys.forEach(key => {
+    if (isListWriteLocked(key)) setListPanelInert(key, true);
+    syncListStaleBanner(key);
+  });
+}
+function serializeListWrite(key, fn, refresh) {
+  const prev = _listWriteQueues.get(key) || Promise.resolve();
+  _listWritePending.set(key, (_listWritePending.get(key) || 0) + 1);
+  setListPanelInert(key, true);
+  const next = prev.then(() => {}, () => {}).then(async () => {
+    if (refresh && _listWriteStale.has(key)) {
+      await refresh();
+      _listWriteStale.delete(key);
+    }
+    return fn();
+  });
+  const settle = (failed) => {
+    const n = (_listWritePending.get(key) || 1) - 1;
+    _listWritePending.set(key, n);
+    if (failed && refresh) _listWriteStale.set(key, refresh);
+    else if (!failed) _listWriteStale.delete(key);
+    if (n === 0 && !isListWriteLocked(key)) setListPanelInert(key, false);
+    syncListStaleBanner(key);
+  };
+  next.then(() => settle(false), () => settle(true));
+  _listWriteQueues.set(key, next);
+  return next;
+}
+
+function updateExtraQty(projectId, extraCostId, rawQuantity) {
+  return serializeListWrite(`extras-${projectId}`, async () => {
+    const p = findProject(projectId);
+    if (!p) return;
+    const row = (p.extras || []).find(e => e.extra_cost_id === extraCostId);
+    const quantity = typeof rawQuantity === 'number' ? rawQuantity : parseExtraQtyInput(rawQuantity, !!row?.scales_with_order);
+    await PUT(`/api/projects/${projectId}/extras`, buildExtrasPayload(p.extras, extraCostId, { quantity }));
+    await reloadSingleProject(projectId);
+  }, () => reloadSingleProject(projectId));
+}
+
+// Switching a supplies line between "fixed" and "per ordered item" keeps the line's
+// TOTAL unchanged at the current order quantity: ON turns qty into a ratio
+// (50 fixed at order 50 -> 1 per item), OFF turns the ratio back into the whole
+// number of pieces it currently amounts to (rounded up, as calc.js does).
+function toggleLinkedPatch(row, linked, itemsPerSet) {
+  const orderQty = Number(itemsPerSet) > 0 ? Number(itemsPerSet) : 1;
+  const q = Number(row && row.quantity) || 0;
+  if (linked) return { scales_with_order: 1, quantity: q / orderQty };
+  return { scales_with_order: 0, quantity: Math.ceil(Math.round(q * orderQty * 1e9) / 1e9) };
+}
+
+function toggleExtraLinked(projectId, extraCostId, linked) {
+  return serializeListWrite(`extras-${projectId}`, async () => {
+    const p = findProject(projectId);
+    if (!p) return;
+    const row = (p.extras || []).find(e => e.extra_cost_id === extraCostId);
+    await PUT(`/api/projects/${projectId}/extras`, buildExtrasPayload(p.extras, extraCostId, toggleLinkedPatch(row, linked, p.items_per_set)));
+    await reloadSingleProject(projectId);
+  }, () => reloadSingleProject(projectId));
 }
 
 /* ================================================================== */
