@@ -3146,7 +3146,7 @@ function renderThemeSettings() {
 function renderPrintersSettings() {
   let html = printers.map(p => `<div class="settings-list-item"><div>
     <div class="name">${esc(p.name)}</div>
-    <div class="meta">${fmt(p.purchase_price)} excl. VAT | ${p.expected_prints} prints | ${p.earn_back_months}mo payback${p.electricity?.map(e => ` | ${e.material_type}: ${e.kwh_per_hour} kWh`).join('') || ''}</div>
+    <div class="meta">${fmt(p.purchase_price)} excl. VAT | ${p.expected_prints} prints | ${p.earn_back_months}mo payback${p.electricity?.map(e => ` | ${esc(e.material_type)}: ${e.kwh_per_hour} kWh per print hour`).join('') || ''}</div>
   </div><div style="display:flex;gap:4px">
     <button class="btn btn-sm" onclick="editPrinter(${p.id})">Edit</button>
     <button class="btn btn-sm btn-danger" onclick="deletePrinterItem(${p.id},event)">Del</button>
@@ -3154,22 +3154,31 @@ function renderPrintersSettings() {
   html += `<div style="margin-top:12px"><button class="btn btn-sm btn-primary" onclick="editPrinter(null)">+ Add Printer</button></div>`;
   return html;
 }
+function kwhToWattsText(v) {
+  const n = parseFloat(v);
+  return Number.isFinite(n) && n >= 0 ? `≈ ${Math.round(n * 1000)} W` : '';
+}
+function elecRowHtml(material, kwh) {
+  return `<div class="elec-profile-row"><input type="text" value="${escAttr(material)}" placeholder="Material type"><input type="number" value="${kwh}" step="0.01" min="0" placeholder="kWh/h" title="kWh per print hour" oninput="this.parentElement.querySelector('.elec-watts').textContent=kwhToWattsText(this.value)"><span class="elec-unit">kWh/h</span><span class="elec-watts">${kwhToWattsText(kwh)}</span><button class="btn-icon" onclick="this.parentElement.remove()" title="Remove">&times;</button></div>`;
+}
 window.editPrinter = function(id) {
   const p = id ? printers.find(x => x.id === id) : null;
   const elecRows = (p?.electricity || [{ material_type: 'PLA', kwh_per_hour: 0.11 }])
-    .map((e) => `<div class="elec-profile-row"><input type="text" value="${e.material_type}" placeholder="Material type"><input type="number" value="${e.kwh_per_hour}" step="0.01" placeholder="kWh/h"><button class="btn-icon" onclick="this.parentElement.remove()" title="Remove">&times;</button></div>`).join('');
+    .map((e) => elecRowHtml(e.material_type, e.kwh_per_hour)).join('');
   document.getElementById('edit-dialog-title').textContent = p ? 'Edit Printer' : 'Add Printer';
   document.getElementById('edit-dialog-body').innerHTML = `<div class="form-grid">
     <div class="form-group"><label>Name</label><input type="text" id="pe-name" value="${esc(p?.name || '')}"></div>
     <div class="form-group"><label>Purchase Price (excl. VAT)</label><input type="number" id="pe-price" step="0.01" value="${p?.purchase_price || 0}"></div>
     <div class="form-group"><label>Expected Prints</label><input type="number" id="pe-prints" value="${p?.expected_prints || 5000}"></div>
     <div class="form-group"><label>Payback Months</label><input type="number" id="pe-months" value="${p?.earn_back_months || 24}"></div>
-  </div><label style="margin-top:12px">Electricity Profiles</label><div id="pe-elec">${elecRows}</div>
+  </div><label style="margin-top:12px">Electricity Profiles</label>
+  <div class="elec-help">Per material: <strong>kWh per print hour</strong> (= average power in kW, e.g. 0.20 = 200 W). Use the average draw over a whole print, including heat-up and AMS, not the printer's rated maximum. Measure with an energy plug: kWh used &divide; print hours. Materials not listed fall back to the PLA row, so keep a PLA row.</div>
+  <div id="pe-elec">${elecRows}</div>
   <button class="btn btn-sm" style="margin-top:4px" onclick="addElecRow()">+ Profile</button>`;
   document.getElementById('btn-edit-dialog-save').onclick = () => savePrinter(id);
   openModal('edit-dialog');
 };
-window.addElecRow = function() { const d = document.createElement('div'); d.className='elec-profile-row'; d.innerHTML=`<input type="text" value="PLA" placeholder="Material type"><input type="number" value="0.11" step="0.01" placeholder="kWh/h"><button class="btn-icon" onclick="this.parentElement.remove()" title="Remove">&times;</button>`; document.getElementById('pe-elec').appendChild(d); };
+window.addElecRow = function() { const t = document.createElement('template'); t.innerHTML = elecRowHtml('PLA', 0.11); document.getElementById('pe-elec').appendChild(t.content); };
 window.savePrinter = async function(id) {
   const electricity = []; document.querySelectorAll('#pe-elec .elec-profile-row').forEach(row => { const inputs = row.querySelectorAll('input'); electricity.push({ material_type: inputs[0].value, kwh_per_hour: parseFloat(inputs[1].value) || 0 }); });
   const data = { name: document.getElementById('pe-name').value.trim(), purchase_price: parseFloat(document.getElementById('pe-price').value)||0, expected_prints: parseInt(document.getElementById('pe-prints').value)||5000, earn_back_months: parseInt(document.getElementById('pe-months').value)||24, electricity };

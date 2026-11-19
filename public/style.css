@@ -1137,6 +1137,9 @@ input:focus, select:focus, textarea:focus {
 .elec-profile-row input,
 .elec-profile-row select { width: auto; flex: 1; font-size: 13px; padding: 5px 8px; }
 .elec-profile-row .btn-icon { flex-shrink: 0; }
+.elec-help { font-size: 12px; color: var(--text-muted); margin: 2px 0 8px; line-height: 1.4; }
+.elec-unit, .elec-watts { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.elec-watts { min-width: 52px; }
 
 /* ================================================================== */
 /*  Extras modal items                                                 */
