@@ -10,7 +10,7 @@ Dirk (primary), potentially other Printseed users running a 3D printing business
 
 ## Tech stack
 
-- **Node 20+**, Express 5, better-sqlite3 (WAL mode), pm2 (fork, single instance)
+- **Node 22** (pinned: `.nvmrc`, `engines`; prod app3-node = Node 22.22.1 / ABI 127, npm 9.2), Express 5, better-sqlite3 (WAL mode), pm2 (fork, single instance)
 - **Auth:** session cookie (`pc_session`) with 7-day TTL + shared JWT for cross-app SSO
 - **Image processing:** `sharp` for thumbnail extraction from .3mf files
 - **Frontend:** vanilla HTML/JS/CSS, service worker, no build step
