@@ -3189,12 +3189,12 @@ async function confirm3mfImport() {
     saveBtn.textContent = 'Creating plates...';
     await POST(`/api/projects/${import3mfProjectId}/import-3mf`, { plates: platesToImport });
 
+    // ---- Plates are committed from here on. Nothing below may reach the outer
+    // catch ("Import failed" + retryable modal would duplicate every plate).
+    let uploadError = null;
     // Also upload the 3MF as a project file (with images extraction)
     if (import3mfFile?.buffer) {
       saveBtn.textContent = 'Uploading 3MF file & extracting images...';
-      // Plates are already committed: a failure here must NOT leave the modal
-      // retryable (a retry would re-run /import-3mf and duplicate every plate).
-      let uploadError = null;
       try {
         const upRes = await fetch(`/api/projects/${import3mfProjectId}/files`, {
           method: 'POST',
@@ -3206,16 +3206,17 @@ async function confirm3mfImport() {
         uploadError = e.message || 'network error';
       }
       import3mfFile = null;
-      if (uploadError) {
-        closeModal('edit-dialog');
-        await reloadSingleProject(import3mfProjectId);
-        await showAlert({ title: 'Plates imported, file not stored', message: 'The plates were created, but storing the 3MF file failed (' + uploadError + '). Attach the file separately; do not import again.' });
-        return;
-      }
     }
 
     closeModal('edit-dialog');
-    await reloadSingleProject(import3mfProjectId);
+    let reloadError = null;
+    try { await reloadSingleProject(import3mfProjectId); } catch (e) { reloadError = e.message || 'reload failed'; }
+    if (uploadError || reloadError) {
+      const parts = [];
+      if (uploadError) parts.push('storing the 3MF file failed (' + uploadError + ')');
+      if (reloadError) parts.push('refreshing the project failed (' + reloadError + '); reload the page to see the plates');
+      await showAlert({ title: 'Plates imported, with problems', message: 'The plates were created, but ' + parts.join(' and ') + '. Do not import again.' + (uploadError ? ' Attach the file separately.' : '') });
+    }
   } catch (err) {
     await showAlert({ title: 'Import failed', message: err.message });
   } finally {

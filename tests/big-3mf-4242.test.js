@@ -90,7 +90,17 @@ describe('streamToFile over-cap (round 1 finding 1)', () => {
       catch (e) { res.statusCode = e.status || 500; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ error: e.message })); }
     }).listen(0);
     try {
-      const res = await request(srv).post('/').set('Content-Type', 'application/octet-stream').send(Buffer.alloc(8 * 1024 * 1024));
+      // Raw client: the server may close after replying while we still write
+      // (EPIPE on the write side is fine as long as the JSON reply arrived).
+      const res = await new Promise((resolve, reject) => {
+        const r = http.request({ port: srv.address().port, method: 'POST', path: '/', headers: { 'Content-Type': 'application/octet-stream' } }, (resp) => {
+          let b = '';
+          resp.on('data', (c) => { b += c; });
+          resp.on('end', () => resolve({ status: resp.statusCode, body: JSON.parse(b) }));
+        });
+        r.on('error', (e) => { if (e.code !== 'EPIPE') reject(e); });
+        r.end(Buffer.alloc(8 * 1024 * 1024));
+      });
       expect(res.status).toBe(413);
       expect(res.body.error).toMatch(/exceeds/);
       expect(fs.existsSync(dest)).toBe(false);
