@@ -23,7 +23,7 @@ function extractFile(zipPath, innerPath) {
   try {
     return execSync(
       `unzip -p "${zipPath}" "${innerPath}" 2>/dev/null`,
-      { encoding: 'utf-8', timeout: 10000 }
+      { encoding: 'utf-8', timeout: 30000, maxBuffer: 64 * 1024 * 1024 }
     );
   } catch { return null; }
 }
@@ -35,7 +35,7 @@ function extractBinary(zipPath, innerPath) {
   try {
     return execSync(
       `unzip -p "${zipPath}" "${innerPath}" 2>/dev/null`,
-      { timeout: 10000 }
+      { timeout: 30000, maxBuffer: 64 * 1024 * 1024 }
     );
   } catch { return null; }
 }

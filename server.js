@@ -3,7 +3,9 @@
 require('dotenv').config();
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { streamToFile } = require('./lib/stream-upload');
 const express = require('express');
 const { getDb, getSetting, setSetting, getAllSettings } = require('./db');
 const calc = require('./calc');
@@ -1520,7 +1522,7 @@ app.post('/api/projects/:projectId/test-prints/:tpId/attach', express.raw({ type
 /* ------------------------------------------------------------------ */
 /*  File uploads                                                       */
 /* ------------------------------------------------------------------ */
-app.post('/api/projects/:projectId/files', express.raw({ type: 'application/octet-stream', limit: '500mb' }), (req, res) => {
+app.post('/api/projects/:projectId/files', async (req, res) => {
   const db = getDb();
   const pid = req.params.projectId;
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
@@ -1536,10 +1538,18 @@ app.post('/api/projects/:projectId/files', express.raw({ type: 'application/octe
   const fileId = crypto.randomBytes(8).toString('hex');
   const storedName = `${fileId}${ext}`;
   const filepath = path.join(UPLOADS_DIR, storedName);
-  fs.writeFileSync(filepath, req.body);
+  let size;
+  try {
+    size = await streamToFile(req, filepath, MAX_3MF_BYTES);
+  } catch (err) {
+    console.error('File upload error:', err.message);
+    if (res.headersSent) return;
+    return res.status(err.status || 400).json({ error: err.message });
+  }
+  if (!size) { fs.rmSync(filepath, { force: true }); return res.status(400).json({ error: 'Empty body — no file received' }); }
 
   const r = db.prepare('INSERT INTO project_files (project_id, plate_id, filename, filepath, size_bytes) VALUES (?,?,?,?,?)')
-    .run(pid, plateId, filename, storedName, req.body.length);
+    .run(pid, plateId, filename, storedName, size);
 
   // Detect whether the 3MF is sliced (has plate/slice data) or just a model file
   if (ext === '.3mf') {
@@ -1553,7 +1563,7 @@ app.post('/api/projects/:projectId/files', express.raw({ type: 'application/octe
   // Auto-extract thumbnails from 3MF files
   if (ext === '.3mf') {
     try {
-      const thumbs = extractThumbnails(req.body);
+      const thumbs = extractThumbnails(filepath);
       if (thumbs.length > 0) {
         const hasImages = db.prepare('SELECT COUNT(*) as c FROM project_images WHERE project_id = ?').get(pid).c;
         const insImg = db.prepare('INSERT INTO project_images (project_id, filename, filepath, is_primary, sort_order) VALUES (?,?,?,?,?)');
@@ -1744,14 +1754,19 @@ app.get('/api/files/:fileId/parse-3mf', (req, res) => {
   }
 });
 
-app.post('/api/parse-3mf', express.raw({ type: '*/*', limit: '500mb' }), (req, res) => {
+// Streams the upload to a temp file (a sliced .gcode.3mf is ~300 MB; buffering
+// it in RAM exceeded PM2 max_memory_restart and killed the process mid-request).
+// parse3mf/extractThumbnails then read only the small Metadata entries via
+// `unzip -p`, never the huge plate gcode.
+const MAX_3MF_BYTES = 500 * 1024 * 1024;
+app.post('/api/parse-3mf', async (req, res) => {
+  const tmp = path.join(os.tmpdir(), `parse3mf_${crypto.randomBytes(8).toString('hex')}.3mf`);
   try {
-    if (!req.body || !req.body.length) {
-      return res.status(400).json({ error: 'Empty body — no file received' });
-    }
-    const result = parse3mf(req.body);
+    const size = await streamToFile(req, tmp, MAX_3MF_BYTES);
+    if (!size) return res.status(400).json({ error: 'Empty body — no file received' });
+    const result = parse3mf(tmp);
     // Also extract thumbnails as base64 for preview
-    const thumbs = extractThumbnails(req.body);
+    const thumbs = extractThumbnails(tmp);
     result.thumbnails = {};
     for (const t of thumbs) {
       result.thumbnails[t.plateIndex] = 'data:image/png;base64,' + t.buffer.toString('base64');
@@ -1759,7 +1774,11 @@ app.post('/api/parse-3mf', express.raw({ type: '*/*', limit: '500mb' }), (req, r
     res.json(result);
   } catch (err) {
     console.error('3MF parse error:', err.message);
+    if (res.headersSent) return;
+    if (err.status === 413) return res.status(413).json({ error: err.message });
     res.status(400).json({ error: 'Failed to parse 3MF: ' + err.message });
+  } finally {
+    fs.rmSync(tmp, { force: true });
   }
 });
 
