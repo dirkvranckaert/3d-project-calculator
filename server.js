@@ -31,6 +31,18 @@ function parseCookie(req) {
   return match ? match.split('=')[1] : null;
 }
 
+// DB health probe (no auth, no session; registered before requireAuth). Runs
+// SELECT 1 on the real DB connection, so a broken native module (better-sqlite3
+// built for another Node) shows up here. Never leaks error details.
+app.get('/health', (_req, res) => {
+  try {
+    getDb().prepare('SELECT 1').get();
+    res.json({ ok: true });
+  } catch (_e) {
+    res.status(503).json({ ok: false, error: 'db' });
+  }
+});
+
 function requireAuth(req, res, next) {
   // Public paths
   const pub = ['/login', '/favicon.svg', '/favicon.ico', '/manifest.json', '/sw.js', '/apple-touch-icon.png', '/api/config'];
