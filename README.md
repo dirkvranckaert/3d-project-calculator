@@ -47,7 +47,7 @@ Depends on the project's `plate_mode`:
 
 ## Prerequisites
 
-- **Node.js** >= 18
+- **Node.js 22** (see `.nvmrc`; `nvm use` / `fnm use`). Production runs Node 22 (ABI 127); native addons (better-sqlite3, sharp) must be installed under the same major.
 - **npm**
 
 ## Quick Start
