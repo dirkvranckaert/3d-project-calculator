@@ -2994,6 +2994,12 @@ let import3mfProjectId = null;
 let import3mfData = null;
 let import3mfFile = null; // { name, buffer }
 
+// Real error for a non-JSON reply (proxy 413/502/504 HTML page, empty body).
+function describeNonJsonResponse(status, statusText, body) {
+  const text = String(body || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+  return `Server returned HTTP ${status}${statusText ? ' ' + statusText : ''}` + (text ? `: ${text}` : ' (empty response)');
+}
+
 let import3mfBusy = false;
 function import3mf(projectId, input) {
   const file = input.files?.[0];
@@ -3032,13 +3038,13 @@ function import3mf(projectId, input) {
     document.getElementById('btn-edit-dialog-save').style.display = '';
     if (xhr.status === 401) { import3mfBusy = false; window.location.replace('/login'); return; }
     let parsed;
-    try { parsed = JSON.parse(xhr.responseText); } catch { import3mfBusy = false; closeModal('edit-dialog'); showAlert({ title: 'Parse failed', message: 'Failed to parse server response.' }); return; }
+    try { parsed = JSON.parse(xhr.responseText); } catch { import3mfBusy = false; closeModal('edit-dialog'); showAlert({ title: 'Parse failed', message: describeNonJsonResponse(xhr.status, xhr.statusText, xhr.responseText) }); return; }
     if (xhr.status >= 400) { import3mfBusy = false; closeModal('edit-dialog'); showAlert({ title: 'Parse failed', message: 'Failed to parse 3MF: ' + (parsed.error || '') }); return; }
     if (!parsed.plates?.length) { import3mfBusy = false; closeModal('edit-dialog'); showAlert({ title: 'Import 3MF', message: 'No plates found in this 3MF file.' }); return; }
     if (!parsed.sliced) { import3mfBusy = false; closeModal('edit-dialog'); showAlert({ title: 'Import 3MF', message: 'This 3MF is not sliced. Please slice it first.' }); return; }
 
     // Store raw buffer for later file upload
-    import3mfFile.buffer = await file.arrayBuffer();
+    import3mfFile.buffer = file; // File blob: streamed from disk on upload, never copied into JS memory
     import3mfBusy = false;
     import3mfProjectId = projectId;
     import3mfData = parsed;
@@ -3183,19 +3189,34 @@ async function confirm3mfImport() {
     saveBtn.textContent = 'Creating plates...';
     await POST(`/api/projects/${import3mfProjectId}/import-3mf`, { plates: platesToImport });
 
+    // ---- Plates are committed from here on. Nothing below may reach the outer
+    // catch ("Import failed" + retryable modal would duplicate every plate).
+    let uploadError = null;
     // Also upload the 3MF as a project file (with images extraction)
     if (import3mfFile?.buffer) {
       saveBtn.textContent = 'Uploading 3MF file & extracting images...';
-      await fetch(`/api/projects/${import3mfProjectId}/files`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': import3mfFile.name },
-        body: import3mfFile.buffer,
-      });
+      try {
+        const upRes = await fetch(`/api/projects/${import3mfProjectId}/files`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': import3mfFile.name },
+          body: import3mfFile.buffer,
+        });
+        if (!upRes.ok) uploadError = describeNonJsonResponse(upRes.status, upRes.statusText, await upRes.text());
+      } catch (e) {
+        uploadError = e.message || 'network error';
+      }
       import3mfFile = null;
     }
 
     closeModal('edit-dialog');
-    await reloadSingleProject(import3mfProjectId);
+    let reloadError = null;
+    try { await reloadSingleProject(import3mfProjectId); } catch (e) { reloadError = e.message || 'reload failed'; }
+    if (uploadError || reloadError) {
+      const parts = [];
+      if (uploadError) parts.push('storing the 3MF file failed (' + uploadError + ')');
+      if (reloadError) parts.push('refreshing the project failed (' + reloadError + '); reload the page to see the plates');
+      await showAlert({ title: 'Plates imported, with problems', message: 'The plates were created, but ' + parts.join(' and ') + '. Do not import again.' + (uploadError ? ' Attach the file separately.' : '') });
+    }
   } catch (err) {
     await showAlert({ title: 'Import failed', message: err.message });
   } finally {
