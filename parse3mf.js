@@ -31,13 +31,33 @@ function extractFile(zipPath, innerPath) {
 /**
  * Extract a binary file from a ZIP archive. Returns Buffer or null.
  */
-function extractBinary(zipPath, innerPath) {
+function extractBinary(zipPath, innerPath, maxBuffer = MAX_THUMB_BYTES) {
   try {
     return execSync(
       `unzip -p "${zipPath}" "${innerPath}" 2>/dev/null`,
-      { timeout: 30000, maxBuffer: 64 * 1024 * 1024 }
+      { timeout: 30000, maxBuffer }
     );
   } catch { return null; }
+}
+
+// Thumbnail memory budget: each PNG is held, then base64-expanded (x1.33) by the
+// route, all inside PM2's 256M limit.
+const MAX_THUMB_BYTES = 8 * 1024 * 1024;
+const MAX_THUMBS_TOTAL_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Map of entry name -> uncompressed size from `unzip -l`.
+ */
+function listEntrySizes(zipPath) {
+  const sizes = {};
+  try {
+    const out = execSync(`unzip -l "${zipPath}" 2>/dev/null`, { encoding: 'utf-8', timeout: 30000, maxBuffer: 64 * 1024 * 1024 });
+    for (const line of out.split('\n')) {
+      const m = line.match(/^\s*(\d+)\s+\S+\s+\S+\s+(\S.*)$/);
+      if (m) sizes[m[2].trim()] = parseInt(m[1], 10);
+    }
+  } catch { /* unreadable zip: no thumbnails */ }
+  return sizes;
 }
 
 /**
@@ -55,10 +75,18 @@ function extractThumbnails(input) {
     filePath = input;
   }
   try {
+    // Uncompressed sizes from the zip listing, checked BEFORE extracting, so a
+    // crafted/huge plate_N.png can never be pulled into memory.
+    const sizes = listEntrySizes(filePath);
     const thumbnails = [];
+    let total = 0;
     for (let i = 1; i <= 20; i++) {
-      const buf = extractBinary(filePath, `Metadata/plate_${i}.png`);
+      const size = sizes[`Metadata/plate_${i}.png`];
+      if (size === undefined || size < 100) break;
+      if (size > MAX_THUMB_BYTES || total + size > MAX_THUMBS_TOTAL_BYTES) continue; // skip oversized
+      const buf = extractBinary(filePath, `Metadata/plate_${i}.png`, size + 1024);
       if (!buf || buf.length < 100) break;
+      total += buf.length;
       thumbnails.push({ plateIndex: i, buffer: buf, filename: `plate_${i}.png` });
     }
     return thumbnails;

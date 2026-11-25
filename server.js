@@ -1742,9 +1742,9 @@ app.get('/api/files/:fileId/parse-3mf', (req, res) => {
     if (!file) return res.status(404).json({ error: 'File not found' });
     const filepath = path.join(UPLOADS_DIR, file.filepath);
     if (!fs.existsSync(filepath)) return res.status(404).json({ error: 'File missing from disk' });
-    const buf = fs.readFileSync(filepath);
-    const result = parse3mf(buf);
-    const thumbs = extractThumbnails(buf);
+    // Pass the path: both helpers read only small zip entries via `unzip -p`.
+    const result = parse3mf(filepath);
+    const thumbs = extractThumbnails(filepath);
     result.thumbnails = {};
     for (const t of thumbs) result.thumbnails[t.plateIndex] = 'data:image/png;base64,' + t.buffer.toString('base64');
     res.json(result);
@@ -1830,18 +1830,24 @@ app.post('/api/projects/:projectId/import-3mf', (req, res) => {
 // Extract 3MF thumbnails and insert them as project images. Does NOT create
 // a project_files row and does NOT parse plates — this is the "drag a 3MF
 // into the photos strip" shortcut for visual reference.
-app.post('/api/projects/:projectId/images-from-3mf', express.raw({ type: 'application/octet-stream', limit: '500mb' }), async (req, res) => {
+app.post('/api/projects/:projectId/images-from-3mf', async (req, res) => {
   const db = getDb();
   const pid = req.params.projectId;
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
-  if (!project) return res.status(404).json({ error: 'Project not found' });
-  if (!req.body || !req.body.length) return res.status(400).json({ error: 'Empty body — no 3MF received' });
+  if (!project) { req.resume(); return res.status(404).json({ error: 'Project not found' }); }
 
+  // Stream to disk (same OOM class as /api/parse-3mf).
+  const tmp = path.join(os.tmpdir(), `img3mf_${crypto.randomBytes(8).toString('hex')}.3mf`);
   let thumbs;
   try {
-    thumbs = extractThumbnails(req.body);
+    const size = await streamToFile(req, tmp, MAX_3MF_BYTES);
+    if (!size) return res.status(400).json({ error: 'Empty body — no 3MF received' });
+    thumbs = extractThumbnails(tmp);
   } catch (err) {
-    return res.status(400).json({ error: 'Failed to extract thumbnails: ' + err.message });
+    if (res.headersSent) return;
+    return res.status(err.status || 400).json({ error: 'Failed to extract thumbnails: ' + err.message });
+  } finally {
+    fs.rmSync(tmp, { force: true });
   }
   if (!thumbs.length) return res.json({ count: 0 });
 

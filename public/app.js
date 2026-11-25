@@ -3192,16 +3192,26 @@ async function confirm3mfImport() {
     // Also upload the 3MF as a project file (with images extraction)
     if (import3mfFile?.buffer) {
       saveBtn.textContent = 'Uploading 3MF file & extracting images...';
-      const upRes = await fetch(`/api/projects/${import3mfProjectId}/files`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': import3mfFile.name },
-        body: import3mfFile.buffer,
-      });
-      if (!upRes.ok) {
-        const t = await upRes.text();
-        throw new Error('Plates created, but storing the 3MF file failed. ' + describeNonJsonResponse(upRes.status, upRes.statusText, t));
+      // Plates are already committed: a failure here must NOT leave the modal
+      // retryable (a retry would re-run /import-3mf and duplicate every plate).
+      let uploadError = null;
+      try {
+        const upRes = await fetch(`/api/projects/${import3mfProjectId}/files`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': import3mfFile.name },
+          body: import3mfFile.buffer,
+        });
+        if (!upRes.ok) uploadError = describeNonJsonResponse(upRes.status, upRes.statusText, await upRes.text());
+      } catch (e) {
+        uploadError = e.message || 'network error';
       }
       import3mfFile = null;
+      if (uploadError) {
+        closeModal('edit-dialog');
+        await reloadSingleProject(import3mfProjectId);
+        await showAlert({ title: 'Plates imported, file not stored', message: 'The plates were created, but storing the 3MF file failed (' + uploadError + '). Attach the file separately; do not import again.' });
+        return;
+      }
     }
 
     closeModal('edit-dialog');

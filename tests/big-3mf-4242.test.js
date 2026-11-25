@@ -80,6 +80,40 @@ describe('big gcode.3mf import (#4242)', () => {
   }, 120000);
 });
 
+describe('streamToFile over-cap (round 1 finding 1)', () => {
+  const { streamToFile } = require('../lib/stream-upload');
+
+  test('client gets a JSON 413, not a connection reset, and no partial file remains', async () => {
+    const dest = path.join(dir, 'capped.bin');
+    const srv = http.createServer(async (req, res) => {
+      try { await streamToFile(req, dest, 1024 * 1024); res.end('{}'); }
+      catch (e) { res.statusCode = e.status || 500; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ error: e.message })); }
+    }).listen(0);
+    try {
+      const res = await request(srv).post('/').set('Content-Type', 'application/octet-stream').send(Buffer.alloc(8 * 1024 * 1024));
+      expect(res.status).toBe(413);
+      expect(res.body.error).toMatch(/exceeds/);
+      expect(fs.existsSync(dest)).toBe(false);
+    } finally { srv.close(); }
+  });
+});
+
+describe('extractThumbnails memory budget (round 1 finding 2)', () => {
+  const { extractThumbnails } = require('../parse3mf');
+  test('skips oversized plate PNGs, keeps small ones', () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'thumbs-'));
+    const meta = path.join(d, 'Metadata');
+    fs.mkdirSync(meta);
+    fs.writeFileSync(path.join(meta, 'plate_1.png'), Buffer.alloc(9 * 1024 * 1024, 1)); // > 8 MiB cap
+    fs.writeFileSync(path.join(meta, 'plate_2.png'), Buffer.alloc(2000, 2));
+    const z = path.join(d, 't.3mf');
+    execFileSync('zip', ['-0', '-r', '-q', z, 'Metadata'], { cwd: d });
+    const thumbs = extractThumbnails(z);
+    expect(thumbs.map(t => t.plateIndex)).toEqual([2]);
+    fs.rmSync(d, { recursive: true, force: true });
+  });
+});
+
 describe('describeNonJsonResponse (frontend)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
   const m = src.match(/function describeNonJsonResponse\s*\([^)]*\)\s*\{[\s\S]*?\n\}/);
